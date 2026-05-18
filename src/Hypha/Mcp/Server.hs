@@ -24,7 +24,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Vector (toList)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
-import System.IO (hFlush, hIsEOF, stdin, stdout)
+import System.IO (hFlush, hIsEOF, hPutStrLn, stderr, stdin, stdout)
 import System.Process.Typed (proc, readProcess)
 
 -- ---------------------------------------------------------------------------
@@ -108,7 +108,10 @@ instance ToJSON JSONRPCError where
 -- Each line is parsed as a JSON-RPC message.  Notifications are
 -- consumed silently (no response written).
 runMcpStdio :: IO ()
-runMcpStdio = loop
+runMcpStdio = do
+  hPutStrLn stderr "hypha-mcp v0.0.0 — MCP stdio server (Ctrl-D to quit)"
+  hFlush stderr
+  loop
   where
     loop = do
       eof <- hIsEOF stdin
