@@ -1,43 +1,58 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Hypha.Error
-  ( -- * Types
-    HyphaError (..)
-    -- * Conversion
-  , errorToExitCode
-  , errorToMessage
+  ( HyphaError (..)
+  , ExitCode (..)
+  , errorCode
+  , errorMessage
+  , errorExitCode
+  , toOutcomeError
   ) where
 
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Exit (ExitCode (..), exitUserError, exitNotFound, exitNetworkError, exitCacheError, exitEnvironmentError)
-
--- | Sum type representing all possible hypha errors.
+-- | Typed errors produced by hypha.  Each constructor maps to exactly
+-- one 'ExitCode' (totality verified by a property test).
 data HyphaError
-  = CliError !Text
-    -- ^ Bad CLI args, malformed path, conflicting flags.
-  | NotFound !Text
-    -- ^ Symbol/package not in plan (and no @--any@), or absent from Hackage.
-  | NetworkError !Text
-    -- ^ Network failure, including @--offline@ with cache miss.
-  | CacheError !Text
-    -- ^ Cache / parse / on-disk corruption.
-  | EnvironmentError !Text
-    -- ^ No plan.json, missing ghc/haddock, store unreachable, Stack.
+  = UserError     !Text   -- ^ bad CLI args, malformed path, conflicting flags
+  | NotFound      !Text   -- ^ symbol/pkg not in plan (and no --any), or absent from Hackage
+  | NetworkError  !Text   -- ^ --offline with cache miss, 429, 503, etc.
+  | Corruption    !Text   -- ^ cache / parse / on-disk corruption
+  | EnvError      !Text   -- ^ no plan.json, missing ghc/haddock, store unreachable, Stack
   deriving stock (Show, Eq)
 
--- | Map an error to its corresponding exit code.
-errorToExitCode :: HyphaError -> ExitCode
-errorToExitCode (CliError _)          = exitUserError
-errorToExitCode (NotFound _)          = exitNotFound
-errorToExitCode (NetworkError _)      = exitNetworkError
-errorToExitCode (CacheError _)        = exitCacheError
-errorToExitCode (EnvironmentError _)  = exitEnvironmentError
+-- | Typed exit codes.  We never use the raw 'System.Exit.ExitCode'.
+newtype ExitCode = ExitCode { unExitCode :: Int }
+  deriving stock   (Show, Eq, Ord)
+  deriving newtype (Read)
 
--- | Extract a human-readable message from an error.
-errorToMessage :: HyphaError -> Text
-errorToMessage (CliError msg)         = msg
-errorToMessage (NotFound msg)         = msg
-errorToMessage (NetworkError msg)     = msg
-errorToMessage (CacheError msg)       = msg
-errorToMessage (EnvironmentError msg) = msg
+errorCode :: HyphaError -> Text
+errorCode = \case
+  UserError    _ -> Text.pack "USER_ERROR"
+  NotFound     _ -> Text.pack "NOT_FOUND"
+  NetworkError _ -> Text.pack "NETWORK_ERROR"
+  Corruption   _ -> Text.pack "CORRUPTION"
+  EnvError     _ -> Text.pack "ENV_ERROR"
+
+errorMessage :: HyphaError -> Text
+errorMessage = \case
+  UserError    msg -> msg
+  NotFound     msg -> msg
+  NetworkError msg -> msg
+  Corruption   msg -> msg
+  EnvError     msg -> msg
+
+errorExitCode :: HyphaError -> ExitCode
+errorExitCode = \case
+  UserError    _ -> ExitCode 2
+  NotFound     _ -> ExitCode 3
+  NetworkError _ -> ExitCode 4
+  Corruption   _ -> ExitCode 5
+  EnvError     _ -> ExitCode 7
+
+-- | Convert a 'HyphaError' into the wire-format 'OutcomeError' fields.
+toOutcomeError :: HyphaError -> (Text, Text, Int)
+toOutcomeError e = (errorCode e, errorMessage e, unExitCode (errorExitCode e))

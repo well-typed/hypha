@@ -46,26 +46,41 @@ library
     Hypha.BuildEnv.Mock
     Hypha.BuildEnv.Compose
     Hypha.BuildEnv.Nix
+    Hypha.Error
+    Hypha.Output.Outcome
+    Hypha.Output.Actions
+    Hypha.Output.Json
     Hypha.Project.Discovery
     Hypha.Project.Plan
     Hypha.Project.Overrides
-    Hypha.Exit
-    Hypha.Error
+    Hypha.Cache
+    Hypha.Hackage.Types
+    Hypha.Hackage.Cache
+    Hypha.Hackage.Api
+    Hypha.Hoogle.Type
+    Hypha.Hoogle.Database
+    Hypha.Hoogle.Query
     Hypha.Logging
-    Hypha.Output
     Hypha.Cli.Parser
     Hypha.Cli.Run
     Hypha.Command.Search
   build-depends:
-    , aeson                >= 2.2
-    , base                 >= 4.18 && < 5
-    , bytestring           >= 0.11
-    , cabal-plan           >= 0.7
-    , containers           >= 0.6
-    , directory            >= 1.3
-    , filepath             >= 1.4
+    , aeson              >= 2.0
+    , base               >= 4.18 && < 5
+    , bytestring         >= 0.11
+    , cabal-plan         >= 0.7
+    , containers         >= 0.6
+    , cryptohash-sha256  >= 0.11
+    , deepseq            >= 1.4
+    , directory          >= 1.3
+    , filepath           >= 1.4
+    , http-client        >= 0.7
+    , http-client-tls    >= 0.3
+    , http-types         >= 0.12
+    , hoogle             >= 5.0 && < 6
     , optparse-applicative >= 0.18
     , text                 >= 2.0
+    , time                 >= 1.12
 
 executable hypha
   import:           warnings, deps
@@ -80,18 +95,26 @@ test-suite hypha-tests
   main-is:          Main.hs
   other-modules:
     Golden.Search
+    Property.HackageCache
+    Property.OutputJson
     Property.SymbolPath
     Unit.BuildEnv
     Unit.BuildEnvCompose
+    Unit.Hackage
+    Unit.Hoogle
     Unit.Project
   build-depends:
+    , aeson
     , base
     , bytestring
     , containers
+    , directory
     , filepath
     , hypha
     , tasty
     , tasty-golden
     , tasty-hunit
     , falsify
+    , temporary
     , text
+    , time
