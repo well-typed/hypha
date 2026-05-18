@@ -119,6 +119,7 @@ library
     , servant               >= 0.20
     , servant-server        >= 0.20
     , process               >= 1.6
+    , wai                   >= 3.2
     , warp                  >= 3.3
     , prettyprinter-ansi-terminal >= 1.1
     , skylighting           >= 0.14

@@ -2,6 +2,7 @@
 module Hypha.Server.Ui.Layout
   ( shellPage
   , breadcrumbs
+  , helpOverlay
   ) where
 
 import Data.List (intersperse)
@@ -34,6 +35,31 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
       div_ [class_ "main"] $ do
         breadcrumbs crumbs
         body
+    helpOverlay
+
+-- | Help overlay listing every keybinding.  Toggled by the @?@ key
+-- (see "ui/js/keybindings.js").  Hidden by default via CSS.
+helpOverlay :: Html ()
+helpOverlay = div_ [class_ "help-overlay"] $
+  div_ [class_ "help-card"] $ do
+    h2_ "Keyboard shortcuts"
+    table_ $ do
+      row "?"                "Toggle this help"
+      row "/ , s, Ctrl-K"    "Focus search"
+      row "j , \x2193"       "Next result"
+      row "k , \x2191"       "Previous result"
+      row "Enter"            "Open focused result"
+      row "h , \x2190"       "History back"
+      row "l , \x2192"       "History forward"
+      row "g p"              "Go to packages"
+      row "g h"              "Go home"
+      row "Esc"              "Close / blur input"
+    p_ [class_ "hint"] "Press ? again or Esc to close."
+  where
+    row :: Text -> Text -> Html ()
+    row k v = tr_ $ do
+      td_ [class_ "key"] (toHtml k)
+      td_                (toHtml v)
 
 -- | Render a breadcrumb trail. Each entry is a (label, href) pair.
 -- Separators are placed /between/ items, never after the last one.

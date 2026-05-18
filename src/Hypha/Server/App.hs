@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.App
   ( appWith
+  , cspMiddleware
   , ServerConfig (..)
   ) where
 
@@ -10,6 +11,7 @@ import qualified Data.Text as Text
 import Data.Text (Text)
 import qualified Data.Text.Encoding as Text
 import Lucid
+import Network.Wai (Middleware, mapResponseHeaders)
 import Servant
 
 import qualified Hypha.Server.Assets   as Assets
@@ -35,9 +37,22 @@ data ServerConfig = ServerConfig
   , scSourceText   :: !(Text -> Text -> IO (Maybe Text))
   }
 
--- | Build a WAI 'Application' from the given 'ServerConfig'.
+-- | Build a WAI 'Application' from the given 'ServerConfig'.  The CSP
+-- middleware is layered on by default — strict allowlist appropriate for
+-- a local, self-served browser.
 appWith :: ServerConfig -> Application
-appWith cfg = serve api (server cfg)
+appWith cfg = cspMiddleware (serve api (server cfg))
+
+-- | Inject a strict Content-Security-Policy header on every response.
+-- Permits inline styles (htmx targets need them) but forbids inline scripts
+-- and remote origins.
+cspMiddleware :: Middleware
+cspMiddleware = \app req send ->
+  app req $ \resp ->
+    send (mapResponseHeaders (("Content-Security-Policy", cspValue) :) resp)
+  where
+    cspValue =
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
 
 server :: ServerConfig -> Server HyphaApi
 server cfg =
