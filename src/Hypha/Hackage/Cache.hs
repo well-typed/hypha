@@ -13,24 +13,18 @@ import Data.Aeson (FromJSON, ToJSON, encode, eitherDecodeStrict)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
-import Data.Char (intToDigit, digitToInt)
 import Data.Time (UTCTime, NominalDiffTime, diffUTCTime, getCurrentTime)
-import Data.Word (Word8)
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 
 import Hypha.Cache (hackageCacheDir)
-import Hypha.Hackage.Types (CacheKind (..), CachedResponse (..))
+import Hypha.Hackage.Types (CacheKind (..), CachedResponse (..), encodeBytesHex, decodeBytesHex)
 
 -- | SHA-256 hash of the URL, used as the cache key.
 newtype CacheKey = CacheKey { unCacheKey :: String }
   deriving stock (Show, Eq, Ord)
   deriving newtype (FromJSON, ToJSON)
-
--- | Hex-encode a ByteString using lowercase hex characters.
-hexEncode :: BS.ByteString -> String
-hexEncode = concatMap (\b -> [intToDigit (fromIntegral b `div` 16), intToDigit (fromIntegral b `mod` 16)]) . BS.unpack
 
 -- | Compute a cache key from a URL string.
 -- We hash the URL with SHA-256 and hex-encode it.
@@ -38,7 +32,7 @@ mkCacheKey :: String -> IO CacheKey
 mkCacheKey url = do
   let urlBytes = BS8.pack url
   let hashBytes = hash urlBytes
-  pure (CacheKey (hexEncode hashBytes))
+  pure (CacheKey (encodeBytesHex hashBytes))
 
 -- | JSON-serializable wrapper for persisting CachedResponse to disk.
 -- Uses the same structure as CachedResponse with hex-encoded ByteStrings.
@@ -121,7 +115,7 @@ cachedToDisk resp = CacheEntry
   { ceEtag = fmap BS8.unpack (crEtag resp)
   , ceLastModified = fmap showUTCTime (crLastModified resp)
   , ceStoredAt = showUTCTime (crStoredAt resp)
-  , ceBody = hexEncode (crBody resp)
+  , ceBody = encodeBytesHex (crBody resp)
   , ceKind = kindToDisk (crKind resp)
   }
 
@@ -142,26 +136,3 @@ parseUTCTime s = case reads s of
 -- | Format UTCTime as ISO 8601.
 showUTCTime :: UTCTime -> String
 showUTCTime = show
-
--- | Decode a hex string back to a ByteString.
--- Returns Left with an error message on failure.
-decodeBytesHex :: String -> Either String BS.ByteString
-decodeBytesHex s
-  | odd (length s) = Left "hex string has odd length"
-  | otherwise = go s
-  where
-    go [] = Right BS.empty
-    go (a:b:rest) =
-      case (hexDigit a, hexDigit b) of
-        (Just ha, Just hb) -> do
-          let byte = fromIntegral (ha * 16 + hb) :: Word8
-          rest' <- go rest
-          Right (BS.cons byte rest')
-        _ -> Left ("invalid hex character in: " ++ [a, b])
-    go _ = Left "impossible: odd length not caught"
-
-    hexDigit c
-      | c >= '0' && c <= '9' = Just (digitToInt c)
-      | c >= 'a' && c <= 'f' = Just (digitToInt c - digitToInt 'a' + 10)
-      | c >= 'A' && c <= 'F' = Just (digitToInt c - digitToInt 'A' + 10)
-      | otherwise = Nothing

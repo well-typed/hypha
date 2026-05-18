@@ -4,6 +4,8 @@
 module Hypha.Hackage.Types
   ( CacheKind (..)
   , CachedResponse (..)
+  , encodeBytesHex
+  , decodeBytesHex
   ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
