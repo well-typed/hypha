@@ -187,8 +187,17 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                     let info = Extract.extractSymbolInfo src symT
                         sig  = maybe "" id (Extract.siSignature info)
                         hd   = maybe "" unDocText (Extract.siHaddock info)
-                        ln   = maybe 1 id (Extract.siLine info)
-                    pure (Just (sig, hd, Text.pack f, ln))
+                    -- Re-exports define the symbol elsewhere in the same
+                    -- package; locateSymbolDefinitionInDir sweeps the tree
+                    -- ranked by module-path prefix, so the URL points at
+                    -- the file that actually contains the binding.
+                    mLoc <- Locate.locateSymbolDefinitionInDir d modT symT
+                    let (resolvedMod, ln) = case (Extract.siLine info, mLoc) of
+                          (Just n, _)         -> (modT, n)
+                          (Nothing, Just loc) ->
+                            (modulePathFromFile d (Locate.slPath loc), Locate.slLine loc)
+                          (Nothing, Nothing)  -> (modT, 1)
+                    pure (Just (sig, hd, resolvedMod, ln))
     , App.scHaddockHtml  = \pkgVer segments -> do
         let pidM = parsePkgVer pkgVer
         case pidM of
@@ -332,6 +341,29 @@ findHs dir depth = do
       "benchmarks" -> True
       "Setup" -> True
       _ -> False
+
+-- | Recover a module path from an absolute file path resolved inside a
+-- package source tree.  Strips the package root, common @hs-source-dirs@
+-- prefixes ("src", "library", "lib") and the @.hs@ suffix.
+modulePathFromFile :: FilePath -> FilePath -> Text
+modulePathFromFile root path =
+  let rel0  = case Text.stripPrefix (Text.pack root) (Text.pack path) of
+                Just r  -> Text.dropWhile (== '/') r
+                Nothing -> Text.pack path
+      rel   = stripDirPrefix rel0
+      withoutHs = case Text.stripSuffix ".hs" rel of
+                    Just r  -> r
+                    Nothing -> rel
+  in Text.replace "/" "." withoutHs
+  where
+    stripDirPrefix t = case dropPrefix "src/" t of
+      Just r  -> r
+      Nothing -> case dropPrefix "library/" t of
+        Just r  -> r
+        Nothing -> case dropPrefix "lib/" t of
+          Just r  -> r
+          Nothing -> t
+    dropPrefix p = Text.stripPrefix (Text.pack p)
 
 hsToModule :: FilePath -> String
 hsToModule fp =

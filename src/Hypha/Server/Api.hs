@@ -60,7 +60,7 @@ type HyphaApi
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Capture "sym" String :> Get '[HTML] (Html ())
   :<|> "haddock" :> Capture "pkgver" String :> CaptureAll "path" String :> Get '[HTML] (Html ())
-  :<|> "source"  :> Capture "pkg" String :> Capture "mod" String :> Get '[HTML] (Html ())
+  :<|> "source"  :> Capture "pkg" String :> Capture "mod" String :> QueryParam "line" Int :> Get '[HTML] (Html ())
   :<|> "assets" :> "style.css"      :> Get '[CSS] BL.ByteString
   :<|> "assets" :> "htmx.min.js"    :> Get '[JS]  BL.ByteString
   :<|> "assets" :> "keybindings.js" :> Get '[JS]  BL.ByteString

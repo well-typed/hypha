@@ -18,6 +18,95 @@
 .doc .src-link { color: var(--muted); font-size: 0.85rem; margin-top: 1.2rem; }
 .doc .see-also { margin-top: 1.2rem; }
 
+/* Source-view (server /source/:pkg/:mod) */
+.source-view { margin-top: 0.5rem; }
+.source-head {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  background: var(--panel);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+.source-title       { font-family: var(--mono); font-weight: 600; }
+.source-line-hint   { color: var(--muted); font-size: 0.85rem; }
+
+table.source {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 0.86rem;
+}
+table.source tr.src-line              { scroll-margin-top: 4rem; }
+table.source tr.src-line:target,
+table.source tr.src-line.target       { background: rgba(176, 65, 62, 0.12); }
+table.source td.ln {
+  text-align: right;
+  padding: 0 0.6rem;
+  width: 3.4rem;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+  user-select: none;
+  vertical-align: top;
+}
+table.source td.ln a {
+  color: inherit;
+  display: block;
+  padding: 0.05rem 0;
+}
+table.source td.ln a:hover { color: var(--accent); text-decoration: none; }
+table.source td.code {
+  padding: 0 0.8rem;
+  white-space: pre;
+}
+table.source td.code pre {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--code-fg);
+  font: inherit;
+  white-space: pre;
+}
+
+/* Skylighting token classes — small palette tuned for both light + dark. */
+.tok-KeywordTok    { color: var(--accent-2); font-weight: 600; }
+.tok-DataTypeTok,
+.tok-BuiltInTok    { color: #2c6fbb; }
+.tok-StringTok,
+.tok-VerbatimStringTok,
+.tok-SpecialStringTok { color: #057a55; }
+.tok-CharTok       { color: #057a55; }
+.tok-DecValTok,
+.tok-BaseNTok,
+.tok-FloatTok      { color: #b85c00; }
+.tok-CommentTok,
+.tok-DocumentationTok { color: var(--muted); font-style: italic; }
+.tok-OperatorTok   { color: #6e5495; }
+.tok-PragmaTok     { color: #9b59b6; }
+.tok-FunctionTok,
+.tok-VariableTok   { color: var(--code-fg); }
+@media (prefers-color-scheme: dark) {
+  .tok-DataTypeTok,
+  .tok-BuiltInTok    { color: #7fb1ec; }
+  .tok-StringTok,
+  .tok-VerbatimStringTok,
+  .tok-SpecialStringTok { color: #6fc99f; }
+  .tok-DecValTok,
+  .tok-BaseNTok,
+  .tok-FloatTok      { color: #f0b070; }
+  .tok-OperatorTok   { color: #b9a4eb; }
+}
+
 .help-overlay {
   position: fixed;
   inset: 0;

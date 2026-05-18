@@ -31,7 +31,9 @@ data ServerConfig = ServerConfig
   , scHumanSearch  :: !(Text -> IO [(Text, Text, Text, Text)])
       -- ^ Given a query string, return (package, module, name, signature)
   , scSymbolLookup :: !(Text -> Text -> Text -> IO (Maybe (Text, Text, Text, Int)))
-      -- ^ pkg → mod → sym → (signature, haddockHtml, srcPath, srcLine)
+      -- ^ pkg → mod → sym → (signature, haddockHtml, resolvedModule, srcLine).
+      -- @resolvedModule@ is the module that actually defines the symbol
+      -- (re-exports collapse: @Data.Map.Strict.lookup@ → @Data.Map.Internal@).
   , scHaddockHtml  :: !(Text -> [String] -> IO (Maybe BL.ByteString))
       -- ^ \"\<pkg\>-\<ver\>\" + path segments → raw bytes (already rewritten)
   , scSourceText   :: !(Text -> Text -> IO (Maybe Text))
@@ -147,13 +149,21 @@ symPage :: ServerConfig
         -> String -> String -> String
         -> Handler (Html ())
 symPage cfg pkg modPath sym = do
-  m <- liftIO (scSymbolLookup cfg (Text.pack pkg) (Text.pack modPath) (Text.pack sym))
+  let pkgT = Text.pack pkg
+      modT = Text.pack modPath
+      symT = Text.pack sym
+      crumbs =
+        [ (pkgT, "/pkg/" <> pkgT)
+        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
+        , (symT, "/pkg/" <> pkgT <> "/" <> modT <> "/" <> symT)
+        ]
+  m <- liftIO (scSymbolLookup cfg pkgT modT symT)
   case m of
-    Nothing -> pure $ UI.shellPage (Text.pack sym) [] (scPackages cfg) $
-      p_ "not found"
-    Just (sig, hd, srcPath, srcLine) ->
-      pure $ UI.shellPage (Text.pack sym) [] (scPackages cfg)
-                (UIDoc.symbolCard (Text.pack sym) sig hd srcPath srcLine)
+    Nothing -> pure $ UI.shellPage symT crumbs (scPackages cfg) $
+      p_ [class_ "warn"] "Symbol not found."
+    Just (sig, hd, resolvedMod, srcLine) ->
+      pure $ UI.shellPage symT crumbs (scPackages cfg)
+                (UIDoc.symbolCard symT sig hd pkgT resolvedMod srcLine)
 
 -- | Serve rewritten Haddock HTML.
 haddockPage :: ServerConfig -> String -> [String] -> Handler (Html ())
@@ -163,11 +173,20 @@ haddockPage cfg pkgVer path = do
     Nothing -> pure (p_ "not found")
     Just bs -> pure (toHtmlRaw (Text.decodeUtf8 (BL.toStrict bs)))
 
--- | Source code view.
-sourcePage :: ServerConfig -> String -> String -> Handler (Html ())
-sourcePage cfg pkg modPath = do
-  m <- liftIO (scSourceText cfg (Text.pack pkg) (Text.pack modPath))
+-- | Source code view with skylighting-rendered Haskell + optional
+-- @?line=N@ scroll target.
+sourcePage :: ServerConfig -> String -> String -> Maybe Int -> Handler (Html ())
+sourcePage cfg pkg modPath mLine = do
+  let pkgT = Text.pack pkg
+      modT = Text.pack modPath
+      crumbs =
+        [ (pkgT, "/pkg/" <> pkgT)
+        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
+        , ("source", "/source/" <> pkgT <> "/" <> modT)
+        ]
+  m <- liftIO (scSourceText cfg pkgT modT)
   case m of
-    Nothing -> pure (p_ "not found")
-    Just t  -> pure (UI.shellPage (Text.pack modPath) [] (scPackages cfg)
-                       (UISrc.sourceView t))
+    Nothing -> pure $ UI.shellPage modT crumbs (scPackages cfg) $
+      p_ [class_ "warn"] "Source not available for this module."
+    Just t  -> pure $ UI.shellPage modT crumbs (scPackages cfg)
+                       (UISrc.sourceView modT mLine t)
