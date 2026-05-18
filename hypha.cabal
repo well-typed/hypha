@@ -60,6 +60,8 @@ library
     Hypha.Hoogle.Type
     Hypha.Hoogle.Database
     Hypha.Hoogle.Query
+    Hypha.Command.Module
+    Hypha.Source.Locate
   build-depends:
     , aeson              >= 2.0
     , base               >= 4.18 && < 5
@@ -96,6 +98,7 @@ test-suite hypha-tests
     Unit.BuildEnvCompose
     Unit.Hackage
     Unit.Hoogle
+    Unit.Module
     Unit.Project
   build-depends:
     , aeson
