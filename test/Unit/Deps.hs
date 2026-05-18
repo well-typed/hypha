@@ -9,7 +9,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 import qualified Data.Vector as V
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (testCase, (@?=))
+import Test.Tasty.HUnit (testCase, (@?=), assertFailure)
 
 import Hypha.Command.Deps (runDeps)
 import Hypha.Output.Outcome (outcomeResult, outcomeRelated, Related (..))
@@ -48,53 +48,54 @@ mkTestPlan = emptyBuildPlan
       ]
   }
 
+-- | Helper: assert outcome is success and extract the result value.
+assertSuccess :: String -> Maybe a -> IO a
+assertSuccess _label (Just v) = pure v
+assertSuccess label  Nothing  = assertFailure (label <> ": expected success")
+
 tests :: TestTree
 tests = testGroup "Deps"
   [ testCase "forward deps of async" $ do
       oc <- runDeps mkTestPlan (PackageName "async") False Nothing
-      case outcomeResult oc of
-        Nothing -> error "expected success"
-        Just v -> extractDeps v @?=
-          [ ("stm", "2.5.1")
-          , ("hashable", "1.4.4")
-          ]
+      v <- assertSuccess "forward deps" (outcomeResult oc)
+      extractDeps v @?=
+        [ ("stm", "2.5.1")
+        , ("hashable", "1.4.4")
+        ]
 
   , testCase "reverse deps of stm" $ do
       oc <- runDeps mkTestPlan (PackageName "stm") True Nothing
-      case outcomeResult oc of
-        Nothing -> error "expected success"
-        Just v -> extractDeps v @?= [("async", "2.2.5")]
+      v <- assertSuccess "reverse deps" (outcomeResult oc)
+      extractDeps v @?= [("async", "2.2.5")]
 
   , testCase "reverse deps of array" $ do
       oc <- runDeps mkTestPlan (PackageName "array") True Nothing
-      case outcomeResult oc of
-        Nothing -> error "expected success"
-        Just v -> extractDeps v @?= [("stm", "2.5.1")]
+      v <- assertSuccess "reverse deps" (outcomeResult oc)
+      extractDeps v @?= [("stm", "2.5.1")]
 
   , testCase "forward deps of leaf package" $ do
       oc <- runDeps mkTestPlan (PackageName "hashable") False Nothing
-      case outcomeResult oc of
-        Nothing -> error "expected success"
-        Just v -> extractDeps v @?= []
+      v <- assertSuccess "forward deps" (outcomeResult oc)
+      extractDeps v @?= []
 
   , testCase "forward deps with depth bound" $ do
       oc <- runDeps mkTestPlan (PackageName "async") False (Just 1)
-      case outcomeResult oc of
-        Nothing -> error "expected success"
-        Just v -> extractDeps v @?= [("stm", "2.5.1")]
+      v <- assertSuccess "depth bound" (outcomeResult oc)
+      extractDeps v @?= [("stm", "2.5.1")]
 
   , testCase "related links for forward deps" $ do
       oc <- runDeps mkTestPlan (PackageName "async") False Nothing
-      let rels = outcomeRelated oc
-      length rels @?= 2
-      relatedLabel (head rels) @?= "stm"
-      relatedFetch (head rels) @?= "hypha package stm"
+      case outcomeRelated oc of
+        [r1, r2] -> do
+          relatedLabel r1 @?= "stm"
+          relatedFetch r1 @?= "hypha package stm"
+          relatedLabel r2 @?= "hashable"
+        _ -> assertFailure "expected exactly 2 related links"
 
   , testCase "deps of unknown package" $ do
       oc <- runDeps mkTestPlan (PackageName "nonexistent") False Nothing
-      case outcomeResult oc of
-        Nothing -> error "expected success"
-        Just v -> extractDeps v @?= []
+      v <- assertSuccess "unknown pkg" (outcomeResult oc)
+      extractDeps v @?= []
   ]
 
 -- | Extract dependency list from the outcome value.
