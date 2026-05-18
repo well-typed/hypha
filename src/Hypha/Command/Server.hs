@@ -19,9 +19,11 @@ module Hypha.Command.Server
   , buildServerConfig
   ) where
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Exception (SomeException, bracket_, try)
+import qualified Data.IORef as IORef
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
@@ -36,7 +38,7 @@ import System.IO (hPutStrLn, stderr)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Hackage.Api (HackageClient (..))
 import Hypha.Haddock.Generate (ensureHaddockFor, haddockDirFor)
-import Hypha.Hoogle.Type (Hoogle (..), HoogleQuery (..), HoogleHit (..))
+import Hypha.Hoogle.Type (Hoogle)
 import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..) )
 import qualified Hypha.Server.App as App
@@ -142,20 +144,32 @@ buildServerConfig
   -> PackageResolver IO
   -> Hoogle IO
   -> IO App.ServerConfig
-buildServerConfig plan _env _hclient resolver hoogle = do
+buildServerConfig plan _env _hclient resolver _hoogle = do
   let pids      = planPackageIds plan
       packages  = map (unPackageName . pkgName) pids
   slots <- Slots.initialiseSlots pids
+  -- Build a cheap in-memory index from the plan packages' module exports.
+  -- Done once asynchronously after startup so the first request lands fast.
+  -- We deliberately do NOT consult Hoogle for live search: the per-project
+  -- DB generation step fails when no @.txt@ inputs exist and the upstream
+  -- library deadlocks under concurrent retry.
+  indexRef <- IORef.newIORef ([] :: [(Text, Text, Text, Text)])
+  _ <- forkIO $ do
+    r <- try (buildFallbackIndex resolver pids indexRef)
+    case r :: Either SomeException () of
+      Left _  -> pure ()
+      Right _ -> pure ()
   pure App.ServerConfig
     { App.scProjectName  = projectName plan
     , App.scPackages     = packages
     , App.scSlots        = slots
     , App.scHumanSearch  = \q -> do
-        hits <- searchHoogle hoogle (HoogleQuery q)
-        pure
-          [ (hhPackage h, hhModule h, hhName h, hhSig h)
-          | h <- hits
-          ]
+        let q' = Text.toLower (Text.strip q)
+        if Text.null q'
+          then pure []
+          else do
+            idx <- IORef.readIORef indexRef
+            pure (take 50 (filter (matchRow q') idx))
     , App.scSymbolLookup = \pkgT modT symT -> do
         ePid <- resolvePkg resolver (PackageName pkgT)
         case ePid of
@@ -226,6 +240,49 @@ buildServerConfig plan _env _hclient resolver hoogle = do
                   Nothing -> pure []
                   Just f  -> Locate.parseExports <$> TIO.readFile f
     }
+
+-- | Match a query against a fallback-index row.  Currently a case-insensitive
+-- substring across name/module/package — good enough for live filtering.
+matchRow :: Text -> (Text, Text, Text, Text) -> Bool
+matchRow q (pkg, modPath, name, _sig) =
+  let hay = Text.toLower (Text.unwords [pkg, modPath, name])
+  in q `Text.isInfixOf` hay
+
+-- | Populate an in-memory @(pkg, module, name, signature)@ index from the
+-- plan packages' module exports.  Skips any package whose source can't be
+-- resolved — the index is a best-effort fallback.
+buildFallbackIndex
+  :: PackageResolver IO
+  -> [PackageId]
+  -> IORef.IORef [(Text, Text, Text, Text)]
+  -> IO ()
+buildFallbackIndex resolver pids ref = mapM_ indexPkg pids
+  where
+    indexPkg pid = do
+      eDir <- resolveSrc resolver pid
+      case eDir of
+        Left _  -> pure ()
+        Right d -> do
+          mods <- enumModules d
+          mapM_ (indexMod pid d) mods
+
+    indexMod pid d modPath = do
+      mFile <- Locate.findModuleFile d modPath
+      case mFile of
+        Nothing -> pure ()
+        Just f  -> do
+          exps <- Locate.parseExports <$> TIO.readFile f
+          let rows = [ (unPackageName (pkgName pid), modPath, e, "")
+                     | e <- exps
+                     , not (Text.null e)
+                     ]
+          IORef.atomicModifyIORef' ref (\old -> (old ++ rows, ()))
+
+    enumModules d = do
+      let roots = [d, d FP.</> "src", d FP.</> "library", d FP.</> "lib"]
+      existing <- filterExisting roots
+      paths    <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) existing
+      pure (map (Text.pack . hsToModule) paths)
 
 -- | Walk the resolved source tree and list every @.hs@ file as a dotted
 -- module path.  Skips the standard build/test/bench directories so the

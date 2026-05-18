@@ -1,10 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Hypha.Hoogle.Query
   ( mkProjectHoogle
   , mkGlobalHoogle
   , mkHoogleForFlags
   ) where
 
+import Control.Exception (SomeException, try)
 import qualified Data.Text as Text
 import qualified Hoogle
 
@@ -14,21 +16,39 @@ import Hypha.Hoogle.Type     (Hoogle (..), HoogleHit (..), HoogleQuery (..))
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Plan (loadBuildPlan)
 
--- | Create a Hoogle interface backed by the per-project database.
+-- | Create a Hoogle interface backed by the per-project database.  Any
+-- exception (missing DB, failed generate, concurrent access) collapses to
+-- an empty result list so callers can fall back to other indices.
 mkProjectHoogle :: HoogleConfig -> IO (Hoogle IO)
 mkProjectHoogle cfg = pure Hoogle
-  { searchHoogle  = \q -> withProjectDb cfg $ \db ->
-      pure (map toHit (Hoogle.searchDatabase db (Text.unpack (unHoogleQuery q))))
-  , ensureFreshDb = withProjectDb cfg (\_ -> pure ())
+  { searchHoogle  = \q -> safeSearch
+      $ withProjectDb cfg
+      $ \db -> pure (map toHit (Hoogle.searchDatabase db (Text.unpack (unHoogleQuery q))))
+  , ensureFreshDb = safeUnit (withProjectDb cfg (\_ -> pure ()))
   }
 
 -- | Create a Hoogle interface backed by the global database.
 mkGlobalHoogle :: IO (Hoogle IO)
 mkGlobalHoogle = pure Hoogle
-  { searchHoogle  = \q -> withGlobalDb $ \db ->
-      pure (map toHit (Hoogle.searchDatabase db (Text.unpack (unHoogleQuery q))))
-  , ensureFreshDb = withGlobalDb (\_ -> pure ())
+  { searchHoogle  = \q -> safeSearch
+      $ withGlobalDb
+      $ \db -> pure (map toHit (Hoogle.searchDatabase db (Text.unpack (unHoogleQuery q))))
+  , ensureFreshDb = safeUnit (withGlobalDb (\_ -> pure ()))
   }
+
+safeSearch :: IO [HoogleHit] -> IO [HoogleHit]
+safeSearch act = do
+  r <- try act :: IO (Either SomeException [HoogleHit])
+  case r of
+    Left _  -> pure []
+    Right x -> pure x
+
+safeUnit :: IO () -> IO ()
+safeUnit act = do
+  r <- try act :: IO (Either SomeException ())
+  case r of
+    Left _  -> pure ()
+    Right _ -> pure ()
 
 -- | Convert a Hoogle Target to our HoogleHit type.
 toHit :: Hoogle.Target -> HoogleHit
