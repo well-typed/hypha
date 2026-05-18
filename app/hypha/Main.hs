@@ -1,6 +1,9 @@
 module Main (main) where
 
-import qualified Hypha.Prelude as Hypha
+import Hypha.Cli.Parser (parseCli)
+import Hypha.Cli.Run (runCli)
 
 main :: IO ()
-main = putStrLn ("hypha " <> Hypha.version)
+main = do
+  (flags, cmd) <- parseCli
+  runCli flags cmd

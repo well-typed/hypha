@@ -60,6 +60,10 @@ library
     Hypha.Hoogle.Type
     Hypha.Hoogle.Database
     Hypha.Hoogle.Query
+    Hypha.Logging
+    Hypha.Cli.Parser
+    Hypha.Cli.Run
+    Hypha.Command.Search
   build-depends:
     , aeson              >= 2.0
     , base               >= 4.18 && < 5
@@ -74,8 +78,9 @@ library
     , http-client-tls    >= 0.3
     , http-types         >= 0.12
     , hoogle             >= 5.0 && < 6
-    , text               >= 2.0
-    , time               >= 1.12
+    , optparse-applicative >= 0.18
+    , text                 >= 2.0
+    , time                 >= 1.12
 
 executable hypha
   import:           warnings, deps
@@ -89,6 +94,7 @@ test-suite hypha-tests
   hs-source-dirs:   test
   main-is:          Main.hs
   other-modules:
+    Golden.Search
     Property.HackageCache
     Property.OutputJson
     Property.SymbolPath
@@ -106,6 +112,7 @@ test-suite hypha-tests
     , filepath
     , hypha
     , tasty
+    , tasty-golden
     , tasty-hunit
     , falsify
     , temporary
