@@ -46,6 +46,10 @@ library
     Hypha.BuildEnv.Mock
     Hypha.BuildEnv.Compose
     Hypha.BuildEnv.Nix
+    Hypha.Error
+    Hypha.Output.Outcome
+    Hypha.Output.Actions
+    Hypha.Output.Json
     Hypha.Project.Discovery
     Hypha.Project.Plan
     Hypha.Project.Overrides
@@ -80,12 +84,12 @@ test-suite hypha-tests
   hs-source-dirs:   test
   main-is:          Main.hs
   other-modules:
-    Property.SymbolPath
     Property.HackageCache
-    Unit.BuildEnv
+    Property.OutputJson
+    Property.SymbolPath
     Unit.BuildEnvCompose
-    Unit.Project
     Unit.Hackage
+    Unit.Project
   build-depends:
     , aeson
     , base

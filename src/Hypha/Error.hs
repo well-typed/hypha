@@ -1,5 +1,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Hypha.Error
   ( HyphaError (..)
   , ExitCode (..)
@@ -29,11 +31,11 @@ newtype ExitCode = ExitCode { unExitCode :: Int }
 
 errorCode :: HyphaError -> Text
 errorCode = \case
-  UserError    _ -> "USER_ERROR"
-  NotFound     _ -> "NOT_FOUND"
-  NetworkError _ -> "NETWORK_ERROR"
-  Corruption   _ -> "CORRUPTION"
-  EnvError     _ -> "ENV_ERROR"
+  UserError    _ -> Text.pack "USER_ERROR"
+  NotFound     _ -> Text.pack "NOT_FOUND"
+  NetworkError _ -> Text.pack "NETWORK_ERROR"
+  Corruption   _ -> Text.pack "CORRUPTION"
+  EnvError     _ -> Text.pack "ENV_ERROR"
 
 errorMessage :: HyphaError -> Text
 errorMessage = \case
