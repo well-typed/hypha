@@ -53,6 +53,9 @@ library
     Hypha.Hackage.Types
     Hypha.Hackage.Cache
     Hypha.Hackage.Api
+    Hypha.Hoogle.Type
+    Hypha.Hoogle.Database
+    Hypha.Hoogle.Query
   build-depends:
     , aeson              >= 2.0
     , base               >= 4.18 && < 5
@@ -60,11 +63,13 @@ library
     , cabal-plan         >= 0.7
     , containers         >= 0.6
     , cryptohash-sha256  >= 0.11
+    , deepseq            >= 1.4
     , directory          >= 1.3
     , filepath           >= 1.4
     , http-client        >= 0.7
     , http-client-tls    >= 0.3
     , http-types         >= 0.12
+    , hoogle             >= 5.0 && < 6
     , text               >= 2.0
     , time               >= 1.12
 
@@ -86,15 +91,18 @@ test-suite hypha-tests
     Unit.BuildEnvCompose
     Unit.Project
     Unit.Hackage
+    Unit.Hoogle
   build-depends:
     , aeson
     , base
     , bytestring
     , containers
+    , directory
     , filepath
     , hypha
     , tasty
     , tasty-hunit
     , falsify
+    , temporary
     , text
     , time

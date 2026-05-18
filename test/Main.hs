@@ -7,6 +7,7 @@ import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
 import qualified Unit.Project
 import qualified Unit.Hackage
+import qualified Unit.Hoogle
 
 main :: IO ()
 main = defaultMain (testGroup "hypha"
@@ -16,4 +17,5 @@ main = defaultMain (testGroup "hypha"
   , Unit.BuildEnvCompose.tests
   , Unit.Project.tests
   , Unit.Hackage.tests
+  , Unit.Hoogle.tests
   ])
