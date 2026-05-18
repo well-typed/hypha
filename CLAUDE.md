@@ -30,6 +30,9 @@ Never work on an issue without moving it to `in_progress` first.
 4. Implement exactly what the issue says.
 5. Run `cabal build all && cabal test all` before declaring done.
 6. Move the issue to `issues/done/`.
+7. There might be multiple agents working concurrently on the codebase, so pick one
+   unclaimed issue but stop and escalate to the user if you notice that the issue you have
+   picked has a direct dependency on an issue currently "in progress".
 
 ## Hard Conventions (Follow Religiously)
 

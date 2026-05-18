@@ -13,3 +13,4 @@ cabal.project.local
 cabal.project.local~
 .HTF/
 .cache/
+tags
