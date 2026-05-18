@@ -23,7 +23,7 @@ import Hypha.Output.Outcome
   ( Outcome (..), Related (..), OutcomeError (..)
   , failureOutcome
   )
-import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
+import Hypha.Types.BuildPlan (BuildPlan, PlanPackage (..), lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
 -- | Metadata for a single package, as returned by the @package@ command.
@@ -52,7 +52,7 @@ runPackage plan rawArg =
   let (rawName, _mVerHint) = splitVersionHint rawArg
       pkgName              = PackageName rawName
   in case lookupPackage pkgName plan of
-       Just ver -> Right (mkSuccessOutcome rawName ver)
+       Just pp -> Right (mkSuccessOutcome rawName (ppVersion pp) (ppIsLocal pp) (ppDeps pp))
        Nothing  -> Left $ NotFound
          ("package '" <> rawName <> "' not in build plan (use --any to widen)")
 
@@ -75,14 +75,14 @@ splitVersionHint raw =
     (n:_)  -> (n, Nothing)
     []     -> ("", Nothing)
 
-mkSuccessOutcome :: Text -> Version -> Outcome Value
-mkSuccessOutcome rawName ver =
+mkSuccessOutcome :: Text -> Version -> Bool -> Int -> Outcome Value
+mkSuccessOutcome rawName ver isLocal depsCount =
   let result = PackageResult
         { prName      = rawName
         , prVersion   = unVersion ver
         , prInPlan    = True
-        , prIsLocal   = False
-        , prDepsCount = 0
+        , prIsLocal   = isLocal
+        , prDepsCount = depsCount
         }
       body = packageResultToJSON result
       actions = Map.fromList

@@ -22,7 +22,7 @@ import Hypha.Output.Outcome
   ( Outcome (..), Related (..), OutcomeError (..)
   , failureOutcome
   )
-import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
+import Hypha.Types.BuildPlan (BuildPlan, PlanPackage (..), lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
 compactKeys, fullKeys :: Set Text
@@ -39,7 +39,7 @@ runVersions plan pkgName =
   case lookupPackage pkgName plan of
     Nothing -> Left $ NotFound
       ("Package '" <> unPackageName pkgName <> "' not in build plan")
-    Just ver -> Right (mkSuccessOutcome pkgName ver)
+    Just pp -> Right (mkSuccessOutcome pkgName (ppVersion pp))
 
 -- | Total variant: produces a failure 'Outcome' on miss rather than an
 -- 'Either'.  Used by the CLI dispatcher.

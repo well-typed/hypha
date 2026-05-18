@@ -8,12 +8,13 @@ module Hypha.Project.Plan
 
 import Control.Exception (IOException, try)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Data.Text as Text
 
 import qualified Cabal.Plan as CP
 
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), CompilerId (..), ProjectRoot (..) )
+  ( BuildPlan (..), PlanPackage (..), CompilerId (..), ProjectRoot (..) )
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
 -- | Errors that can occur when loading the build plan.
@@ -50,11 +51,35 @@ compilerFromPlan pj =
       verStr = Text.intercalate (Text.pack ".") (map (Text.pack . show) parts)
   in CompilerId (name <> Text.pack "-" <> verStr)
 
--- | Extract the set of non-builtin, non-local packages with their versions.
-packagesFromPlan :: CP.PlanJson -> Map.Map PackageName Version
+-- | Extract all packages from the build plan with metadata (local flag,
+--   library dependency count).  Deduplicates by package name when multiple
+--   units share the same package (e.g. library + executable).
+packagesFromPlan :: CP.PlanJson -> Map.Map PackageName PlanPackage
 packagesFromPlan pj =
-  Map.fromList
-    [ (PackageName pkgText, Version (CP.dispVer ver))
-    | CP.Unit { CP.uPId = CP.PkgId (CP.PkgName pkgText) ver, CP.uType = utype } <- Map.elems (CP.pjUnits pj)
-    , utype /= CP.UnitTypeLocal
+  Map.fromListWith mergePlanPackage
+    [ (PackageName pkgText, PlanPackage
+        { ppVersion  = Version (CP.dispVer ver)
+        , ppIsLocal  = utype == CP.UnitTypeLocal
+        , ppDeps     = libDepCount comps
+        })
+    | CP.Unit { CP.uPId  = CP.PkgId (CP.PkgName pkgText) ver
+              , CP.uType  = utype
+              , CP.uComps = comps
+              } <- Map.elems (CP.pjUnits pj)
     ]
+  where
+    -- | Count library-level dependencies from a component map.
+    libDepCount :: Map.Map CP.CompName CP.CompInfo -> Int
+    libDepCount comps = case Map.lookup CP.CompNameLib comps of
+      Just (CP.CompInfo { CP.ciLibDeps = deps }) -> Set.size deps
+      Nothing                                     -> 0
+
+    -- | Merge two entries for the same package name:
+    --   - local wins if either component is local
+    --   - take the larger deps count
+    mergePlanPackage :: PlanPackage -> PlanPackage -> PlanPackage
+    mergePlanPackage a b = PlanPackage
+      { ppVersion  = ppVersion a
+      , ppIsLocal  = ppIsLocal a || ppIsLocal b
+      , ppDeps     = max (ppDeps a) (ppDeps b)
+      }

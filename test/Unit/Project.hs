@@ -44,9 +44,9 @@ testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $ do
       bpCompiler bp @?= CompilerId "ghc-9.6.7"
       -- Check packages
       let pkgs = bpPackages bp
-      Map.lookup (PackageName "async") pkgs @?= Just (Version "2.2.5")
-      Map.lookup (PackageName "base") pkgs @?= Just (Version "4.18.3.0")
-      Map.lookup (PackageName "text") pkgs @?= Just (Version "2.0.2")
+      ppVersion <$> Map.lookup (PackageName "async") pkgs @?= Just (Version "2.2.5")
+      ppVersion <$> Map.lookup (PackageName "base") pkgs @?= Just (Version "4.18.3.0")
+      ppVersion <$> Map.lookup (PackageName "text") pkgs @?= Just (Version "2.0.2")
       Map.lookup (PackageName "nonexistent") pkgs @?= Nothing
 
 testParseOverride :: TestTree
@@ -69,8 +69,8 @@ testApplyOverrides = testCase "applyOverrides changes pinned version in plan" $ 
       let override = PackageOverride (PackageName "async") (Version "2.2.6")
           bp' = applyOverrides [override] bp
       -- Check that the override took effect
-      Map.lookup (PackageName "async") (bpPackages bp') @?= Just (Version "2.2.6")
+      ppVersion <$> Map.lookup (PackageName "async") (bpPackages bp') @?= Just (Version "2.2.6")
       -- Check that other packages are unchanged
-      Map.lookup (PackageName "base") (bpPackages bp') @?= Just (Version "4.18.3.0")
+      ppVersion <$> Map.lookup (PackageName "base") (bpPackages bp') @?= Just (Version "4.18.3.0")
       -- Check that overrides are recorded
       bpOverrides bp' @?= [override]

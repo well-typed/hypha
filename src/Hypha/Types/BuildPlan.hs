@@ -47,15 +47,18 @@ data PackageOverride = PackageOverride
 
 -- | A single package entry in the build plan.
 data PlanPackage = PlanPackage
-  { ppName    :: !PackageName
-  , ppVersion :: !Version
+  { ppVersion  :: !Version
+  , ppIsLocal  :: !Bool
+    -- ^ Whether the package is a local project package (not a dependency).
+  , ppDeps     :: !Int
+    -- ^ Number of library-level dependencies.
   }
   deriving stock (Show, Eq, Ord)
 
 -- | The resolved build plan: pinned package versions from @plan.json@.
 data BuildPlan = BuildPlan
   { bpCompiler  :: !CompilerId
-  , bpPackages  :: !(Map PackageName Version)
+  , bpPackages  :: !(Map PackageName PlanPackage)
   , bpOverrides :: ![PackageOverride]
   }
   deriving stock (Show)
@@ -68,19 +71,30 @@ emptyBuildPlan = BuildPlan
   , bpOverrides = []
   }
 
--- | Look up a package version in the plan.
-lookupPackage :: PackageName -> BuildPlan -> Maybe Version
+-- | Look up a package in the plan.
+lookupPackage :: PackageName -> BuildPlan -> Maybe PlanPackage
 lookupPackage name = Map.lookup name . bpPackages
 
 -- | All packages in the plan, as a list.
 planPackages :: BuildPlan -> [PlanPackage]
-planPackages bp =
-  [ PlanPackage n v | (n, v) <- Map.toList (bpPackages bp) ]
+planPackages bp = Map.elems (bpPackages bp)
 
 -- | Apply overrides to a build plan.
 --   Each override replaces (or inserts) the pinned version for its package.
+--   The overridden entry keeps its original local/deps metadata if present,
+--   or defaults to non-local with zero deps.
 applyOverrides :: [PackageOverride] -> BuildPlan -> BuildPlan
 applyOverrides overrides bp = bp
-  { bpPackages  = foldr (\(PackageOverride n v) -> Map.insert n v) (bpPackages bp) overrides
+  { bpPackages  = foldr applyOverride (bpPackages bp) overrides
   , bpOverrides = overrides ++ bpOverrides bp
   }
+  where
+    applyOverride :: PackageOverride -> Map PackageName PlanPackage -> Map PackageName PlanPackage
+    applyOverride (PackageOverride n v) m =
+      let existing = Map.lookup n m
+          pp = PlanPackage
+            { ppVersion  = v
+            , ppIsLocal  = maybe False ppIsLocal existing
+            , ppDeps     = maybe 0    ppDeps    existing
+            }
+      in Map.insert n pp m

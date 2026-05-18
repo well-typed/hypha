@@ -12,7 +12,7 @@ import Test.Tasty.Golden (goldenVsString)
 import Hypha.BuildEnv.Mock (MockBuildEnv (..), emptyMock, mkMockBuildEnv)
 import Hypha.Command.Source (runSource)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes)
-import Hypha.Types.BuildPlan (BuildPlan (..), emptyBuildPlan)
+import Hypha.Types.BuildPlan (BuildPlan (..), PlanPackage (..), emptyBuildPlan)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import qualified Data.Map.Strict as Map
 
@@ -39,7 +39,7 @@ runSourceCommand = do
         }
       env = mkMockBuildEnv mock
       plan = emptyBuildPlan
-        { bpPackages = Map.fromList [(PackageName "async", Version "2.2.5")]
+        { bpPackages = Map.fromList [(PackageName "async", PlanPackage (Version "2.2.5") False 0)]
         }
       modPath = "Control.Concurrent.Async" :: Text
       sym = Nothing :: Maybe Text  -- No symbol, just module header
