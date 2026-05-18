@@ -81,6 +81,11 @@ library
     Hypha.Server.Assets
     Hypha.Server.Slots
     Hypha.Server.Haddock.Rewrite
+    Hypha.Server.Ui.Layout
+    Hypha.Server.Ui.Search
+    Hypha.Server.Ui.Tree
+    Hypha.Server.Ui.Doc
+    Hypha.Server.Ui.Source
     Hypha.Source.Extract
     Hypha.Source.Locate
   build-depends:
@@ -101,6 +106,7 @@ library
     , optparse-applicative >= 0.18
     , async                 >= 2.2
     , file-embed            >= 0.0.16
+    , lucid2                >= 0.0.20210901
     , prettyprinter         >= 1.7
     , prettyprinter-ansi-terminal >= 1.1
     , skylighting           >= 0.14
