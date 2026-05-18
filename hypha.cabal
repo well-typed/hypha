@@ -60,6 +60,7 @@ library
     Hypha.Hoogle.Type
     Hypha.Hoogle.Database
     Hypha.Hoogle.Query
+    Hypha.Haddock.Generate
   build-depends:
     , aeson              >= 2.0
     , base               >= 4.18 && < 5
@@ -97,6 +98,7 @@ test-suite hypha-tests
     Unit.Hackage
     Unit.Hoogle
     Unit.Project
+    Unit.Haddock
   build-depends:
     , aeson
     , base
