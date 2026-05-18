@@ -51,6 +51,7 @@ library
     Hypha.Error
     Hypha.Exit
     Hypha.Output.Outcome
+    Hypha.Mcp.Server
     Hypha.Output.Actions
     Hypha.Output.Json
     Hypha.Output.Human
@@ -102,11 +103,18 @@ library
     , text                 >= 2.0
     , time                 >= 1.12
     , transformers         >= 0.6
+    , typed-process        >= 0.2
     , vector               >= 0.13
 
 executable hypha
   import:           warnings, deps
   hs-source-dirs:   app/hypha
+  main-is:          Main.hs
+  build-depends:    hypha
+
+executable hypha-mcp
+  import:           warnings, deps
+  hs-source-dirs:   app/hypha-mcp
   main-is:          Main.hs
   build-depends:    hypha
 
@@ -135,6 +143,7 @@ test-suite hypha-tests
     Unit.Project
     Unit.WhatProvides
     Unit.Haddock
+    Unit.Mcp
   build-depends:
     , aeson
     , base
