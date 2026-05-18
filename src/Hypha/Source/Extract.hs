@@ -31,37 +31,40 @@ data SymbolInfo = SymbolInfo
 -- Post-MVP this should be replaced by a @ghc-lib-parser@ based approach.
 extractSymbolInfo :: Text -> Text -> SymbolInfo
 extractSymbolInfo src sym =
-  let ls       = zip [1 :: Int ..] (Text.lines src)
-      -- Find the signature line: the first line where sym appears followed
-      -- by " ::" (with possible whitespace).
-      mSigLine = listToMaybe
-        [ (i, l)
-        | (i, l) <- ls
-        , isSignatureLine sym l
-        ]
-      -- Find the definition line: first non-comment, non-signature line
-      -- that starts with the symbol name after the signature.
-      mDefLine = case mSigLine of
-        Nothing    -> Nothing
-        Just (i, _) -> listToMaybe
-          [ j
-          | (j, l) <- dropWhile (\(k, _) -> k <= i) ls
-          , not (isCommentLine l)
-          , isDefinitionLine sym l
-          ]
-      -- Extract Haddock from lines immediately preceding the signature.
-      haddock  = case mSigLine of
-        Nothing     -> Nothing
-        Just (i, _) ->
-          let prior = takeWhile (\(k, _) -> k < i) ls
-              block = extractHaddockBlock (reverse prior)
-          in if null block then Nothing
-             else Just (DocText (Text.unlines (reverse block)))
+  let ls       = numberedLines src
+      mSigLine = findSignatureLine sym ls
   in SymbolInfo
        { siSignature = snd <$> mSigLine
-       , siHaddock   = haddock
-       , siLine      = mDefLine
+       , siHaddock   = mSigLine >>= haddockForLine ls
+       , siLine      = mSigLine >>= definitionAfter ls sym
        }
+
+-- | Pair each line with its 1-based index.
+numberedLines :: Text -> [(Int, Text)]
+numberedLines = zip [1 :: Int ..] . Text.lines
+
+-- | The first line that is a type signature for the given symbol.
+findSignatureLine :: Text -> [(Int, Text)] -> Maybe (Int, Text)
+findSignatureLine sym = listToMaybe . filter (isSignatureLine sym . snd)
+
+-- | Find the definition line for a symbol that appears after the given
+-- signature line index.
+definitionAfter :: [(Int, Text)] -> Text -> (Int, Text) -> Maybe Int
+definitionAfter ls sym (sigIdx, _) = listToMaybe
+  [ j
+  | (j, l) <- dropWhile (\(k, _) -> k <= sigIdx) ls
+  , not (isCommentLine l)
+  , isDefinitionLine sym l
+  ]
+
+-- | Extract the Haddock block immediately preceding a given line index.
+haddockForLine :: [(Int, Text)] -> (Int, Text) -> Maybe DocText
+haddockForLine ls (i, _) =
+  let prior      = reverse (takeWhile (\(k, _) -> k < i) ls)
+      block      = extractHaddockBlock prior
+  in if null block
+       then Nothing
+       else Just (DocText (Text.unlines (reverse block)))
 
 -- | Check whether a line is a type signature for the given symbol.
 --
@@ -70,9 +73,8 @@ extractSymbolInfo src sym =
 isSignatureLine :: Text -> Text -> Bool
 isSignatureLine sym l =
   let trimmed = Text.dropWhile (== ' ') l
-      pat1    = sym <> " ::"
-      pat2    = sym <> "::"
-  in pat1 `Text.isPrefixOf` trimmed || pat2 `Text.isPrefixOf` trimmed
+  in  (sym <> " ::") `Text.isPrefixOf` trimmed
+  ||  (sym <> "::")  `Text.isPrefixOf` trimmed
 
 -- | Check whether a line is a definition of the given symbol.
 --
@@ -86,36 +88,27 @@ isDefinitionLine sym l =
      && not (isCommentLine l)
 
 -- | Check whether a line is a comment (Haddock or plain).
+-- We accept any line starting with @--@, not just @-- @, so that bare
+-- Haddock separator lines (e.g. @  --@) are recognised.
 isCommentLine :: Text -> Bool
 isCommentLine l =
   let trimmed = Text.dropWhile (== ' ') l
-  in "-- " `Text.isPrefixOf` trimmed
+  in "--" `Text.isPrefixOf` trimmed
      || "{-" `Text.isPrefixOf` trimmed
      || "-}" `Text.isPrefixOf` trimmed
 
 -- | Extract a contiguous block of Haddock comment lines from a reversed list
--- of preceding lines.
+-- of preceding lines (closest to the signature first).
 --
--- Haddock lines start with @-- |@ or @-- ^@.  We also collect continuation
--- lines (plain @--@ comments) that follow a Haddock starter, stopping at the
--- first non-comment line or a blank line.
+-- We take the leading run of comment lines; if that run contains a Haddock
+-- starter (@-- |@ or @-- ^@) we return the whole run, otherwise '[]'.
 extractHaddockBlock :: [(Int, Text)] -> [Text]
-extractHaddockBlock = go []
-  where
-    go _acc [] = []
-    go acc ((_, l) : rest) =
-      let trimmed = Text.dropWhile (== ' ') l
-      in if isHaddockLine trimmed
-           then go (trimmed : acc) rest
-           else if isContinuationLine trimmed && not (null acc)
-                  then go (trimmed : acc) rest
-                  else acc
+extractHaddockBlock prior =
+  let lines_     = map (Text.dropWhile (== ' ') . snd) prior
+      commentRun = takeWhile isCommentLine lines_
+      hasStarter = any isHaddockStarter commentRun
+  in if hasStarter then commentRun else []
 
-    isHaddockLine t =
-      "-- |" `Text.isPrefixOf` t || "-- ^" `Text.isPrefixOf` t
-
-    isContinuationLine t =
-      "--" `Text.isPrefixOf` t
-      && not ("-- |" `Text.isPrefixOf` t)
-      && not ("-- ^" `Text.isPrefixOf` t)
-      && not (Text.null (Text.drop 2 t))
+-- | A Haddock starter line begins with @-- |@ or @-- ^@.
+isHaddockStarter :: Text -> Bool
+isHaddockStarter t = "-- |" `Text.isPrefixOf` t || "-- ^" `Text.isPrefixOf` t

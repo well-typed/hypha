@@ -91,6 +91,7 @@ library
     , optparse-applicative >= 0.18
     , text                 >= 2.0
     , time                 >= 1.12
+    , transformers         >= 0.6
     , vector               >= 0.13
 
 executable hypha
