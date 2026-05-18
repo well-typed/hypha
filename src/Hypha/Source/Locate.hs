@@ -117,11 +117,11 @@ parseExports src
       Nothing   -> t
 
     splitTopLevel :: Text -> [Text]
-    splitTopLevel = go 0 Text.empty
+    splitTopLevel = go (0 :: Int) Text.empty
       where
         go _depth acc t = case Text.uncons t of
           Nothing                         -> [acc]
-          Just (',', rest) | _depth == 0  -> acc : go 0 Text.empty rest
+          Just (',', rest) | _depth == 0  -> acc : go (0 :: Int) Text.empty rest
           Just ('(', rest)                -> go (_depth + 1) (Text.snoc acc '(') rest
           Just (')', rest) | _depth > 0   -> go (_depth - 1) (Text.snoc acc ')') rest
           Just (c, rest)                  -> go _depth (Text.snoc acc c) rest

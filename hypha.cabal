@@ -42,6 +42,7 @@ library
     Hypha.Types.PackageId
     Hypha.Types.SymbolPath
     Hypha.Types.BuildPlan
+    Hypha.Types.Doc
     Hypha.BuildEnv.Type
     Hypha.BuildEnv.Cabal
     Hypha.BuildEnv.Mock
@@ -67,8 +68,11 @@ library
     Hypha.Command.Module
     Hypha.Command.Package
     Hypha.Command.Search
+    Hypha.Command.Symbol
     Hypha.Command.Versions
+    Hypha.Haddock.Interface
     Hypha.Logging
+    Hypha.Source.Extract
     Hypha.Source.Locate
   build-depends:
     , aeson              >= 2.0
@@ -103,6 +107,7 @@ test-suite hypha-tests
   other-modules:
     Golden.Package
     Golden.Search
+    Golden.Symbol
     Golden.Versions
     Property.HackageCache
     Property.OutputJson
