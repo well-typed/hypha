@@ -73,6 +73,7 @@ library
     Hypha.Command.Source
     Hypha.Command.Symbol
     Hypha.Command.Versions
+    Hypha.Command.WhatProvides
     Hypha.Haddock.Interface
     Hypha.Logging
     Hypha.Source.Extract
@@ -129,6 +130,7 @@ test-suite hypha-tests
     Unit.Module
     Unit.Deps
     Unit.Project
+    Unit.WhatProvides
   build-depends:
     , aeson
     , base
