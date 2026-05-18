@@ -21,6 +21,7 @@ import qualified Unit.Hoogle
 import qualified Unit.Mcp
 import qualified Unit.Module
 import qualified Unit.Project
+import qualified Unit.Server
 import qualified Unit.ServerSlots
 import qualified Unit.WhatProvides
 import qualified Unit.Haddock
@@ -47,6 +48,7 @@ main = defaultMain (testGroup "hypha"
   , Unit.Hoogle.tests
   , Unit.Mcp.tests
   , Unit.Module.tests
+  , Unit.Server.tests
   , Unit.ServerSlots.tests
   , Unit.WhatProvides.tests
   , Unit.Haddock.tests

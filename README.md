@@ -160,6 +160,39 @@ Examples:
 | `server` | `[--port N] [--prebuild]` | Doc-browser HTTP server |
 | `mcp` | — | MCP stdio shim |
 
+## Local Doc Browser (`hypha server`)
+
+Launch a local doc browser bound to loopback only.  Pairs nicely with
+`--prebuild` to warm the Haddock cache before you hit the page:
+
+```bash
+$ hypha server --port 4287
+hypha server listening on http://127.0.0.1:4287
+```
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--port N` | `4287` | Loopback port to bind |
+| `--bind HOST:PORT` | `127.0.0.1:<port>` | Explicit loopback bind (`localhost`, `127.0.0.1`, or `::1`) |
+| `--prebuild` | off | Render Haddocks for every plan package up front |
+| `--prebuild-jobs N` | `4` | Maximum concurrent prebuild workers |
+
+Non-loopback binds (e.g. `0.0.0.0:4287`) are refused with exit code `2`.
+There is no remote-access flag — sharing is out-of-scope on purpose.
+
+Endpoints:
+
+| Path | Returns |
+|------|---------|
+| `/` | HTML shell with sidebar + search |
+| `/search?q=...` | HTMX results fragment |
+| `/pkg/<pkg>` | Package overview |
+| `/pkg/<pkg>/<Mod>` | Module page |
+| `/pkg/<pkg>/<Mod>/<sym>` | Symbol card |
+| `/source/<pkg>/<Mod>` | Highlighted source |
+| `/haddock/<pkg>-<ver>/...` | Rewritten Haddock HTML |
+| `/healthz` | `ok` (plain text) |
+
 ## Mantra
 
 > An LLM doesn't need or care about fancy Haddock HTML pages — it cares about
