@@ -27,7 +27,7 @@ import Hypha.Error (HyphaError (..))
 import Hypha.Output.Outcome (Outcome (..), Related (..), tagOutsidePlan)
 import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
 import Hypha.Source.Extract (SymbolInfo (..), extractSymbolInfo)
-import Hypha.Source.Locate (modulePathToFile)
+import Hypha.Source.Locate (findModuleFile, modulePathToFile)
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import Hypha.Types.SymbolPath
@@ -101,7 +101,7 @@ runSymbolWith
   -> PackageResolver IO
   -> Text
   -> IO (Either HyphaError (Outcome Value))
-runSymbolWith env resolver rawArg = runExceptT $ do
+runSymbolWith _env resolver rawArg = runExceptT $ do
   sp        <- liftParseError rawArg (parseSymbolPath rawArg)
   (modPath, symName) <- requireModuleAndSymbol sp rawArg
   let pkgName = spPackage sp
@@ -110,12 +110,13 @@ runSymbolWith env resolver rawArg = runExceptT $ do
   rp        <- ExceptT $ resolvePkg resolver pkgName
   let pid = rpPkgId rp
       ver = pkgVersion pid
-  d         <- liftMaybe (EnvError ("source directory not found for "
-                              <> unPackageName pkgName <> "-" <> unVersion ver))
-                =<< liftIO (locatePackageSource env pid)
-  let f = d </> modulePathToFile modTxt
-  ok        <- liftIO (doesFileExist f)
-  unless ok (throwE (NotFound ("module file not found: " <> Text.pack f)))
+  d         <- ExceptT (resolveSrc resolver pid)
+  mFile     <- liftIO (findModuleFile d modTxt)
+  f         <- case mFile of
+                 Just p  -> pure p
+                 Nothing -> throwE (NotFound
+                   ("module file not found under " <> Text.pack d
+                     <> " for " <> modTxt))
   src       <- liftIO (TIO.readFile f)
   let info = extractSymbolInfo src sym
       outcome = mkOutcome pkgName ver modTxt sym f info

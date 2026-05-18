@@ -227,15 +227,19 @@ dispatch flags = \case
   ModuleCommand arg ->
     case Text.splitOn "/" arg of
       [pkg, modPath] ->
-        withResolver flags $ \(resolver, env) -> do
+        withResolver flags $ \(resolver, _env) -> do
           let pkgName = PackageName pkg
           result <- resolvePkg resolver pkgName
           case result of
             Left hyErr -> pure (Left hyErr)
             Right rp -> do
               let pid = rpPkgId rp
-              oc <- Module.runModule env pid modPath
-              pure (Right (tagOutsidePlan oc (rpIsOutsidePlan rp)))
+              eDir <- resolveSrc resolver pid
+              case eDir of
+                Left err -> pure (Left err)
+                Right d  -> do
+                  oc <- Module.runModuleFromDir d pid modPath
+                  pure (Right (tagOutsidePlan oc (rpIsOutsidePlan rp)))
       _ -> pure (Left (UserError ("expected PKG/MOD (got: " <> arg <> ")")))
 
   SymbolCommand arg ->

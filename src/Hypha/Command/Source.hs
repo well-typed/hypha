@@ -18,13 +18,12 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TIO
-import System.Directory (doesFileExist)
-import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Error (HyphaError (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
-import Hypha.Source.Locate (SourceLocation (..), locateSymbolDefinition, modulePathToFile)
+import Hypha.Source.Locate
+  ( SourceLocation (..), findModuleFile, locateSymbolDefinitionInDir )
 import Hypha.Types.BuildPlan (BuildPlan (..))
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
@@ -79,16 +78,16 @@ runSourceFromDir
   -> Text       -- ^ Module path (dotted).
   -> Maybe Text -- ^ Optional symbol name.
   -> IO (Either HyphaError (Outcome Value))
-runSourceFromDir env pid srcDir modPath mSym = do
-  let filePath = srcDir </> modulePathToFile modPath
-  exists <- doesFileExist filePath
-  if not exists
-    then pure (Left $ NotFound
-      ("module file not found: " <> Text.pack filePath))
-    else do
+runSourceFromDir _env pid srcDir modPath mSym = do
+  mFile <- findModuleFile srcDir modPath
+  case mFile of
+    Nothing -> pure (Left $ NotFound
+      ("module file not found under " <> Text.pack srcDir
+        <> " for " <> modPath))
+    Just filePath -> do
       mLoc <- case mSym of
         Nothing  -> pure (Just (SourceLocation filePath 1))
-        Just sym -> locateSymbolDefinition env pid modPath sym
+        Just sym -> locateSymbolDefinitionInDir srcDir modPath sym
       case mLoc of
         Nothing -> pure (Left $ NotFound
           ("symbol '" <> fromMaybe "" mSym <> "' not found in " <> modPath))

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Command.Module
   ( runModule
+  , runModuleFromDir
   , mkPid
   , compactKeys
   , fullKeys
@@ -11,10 +12,11 @@ import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
+import qualified Data.Text.IO as TIO
 
 import Hypha.BuildEnv.Type   (BuildEnv)
 import Hypha.Output.Outcome  (Outcome (..), Related (..))
-import Hypha.Source.Locate   (listExportedSymbols)
+import Hypha.Source.Locate   (findModuleFile, listExportedSymbols, parseExports)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version)
 
 compactKeys, fullKeys :: Set Text
@@ -29,8 +31,21 @@ mkPid name ver = PackageId (PackageName name) ver
 runModule :: BuildEnv IO -> PackageId -> Text -> IO (Outcome Value)
 runModule env pid modPath = do
   exps <- listExportedSymbols env pid modPath
+  pure (toOutcome pid modPath exps)
+
+-- | Variant taking a pre-resolved source directory (resolver-driven).
+runModuleFromDir :: FilePath -> PackageId -> Text -> IO (Outcome Value)
+runModuleFromDir srcDir pid modPath = do
+  mFile <- findModuleFile srcDir modPath
+  exps <- case mFile of
+    Nothing -> pure []
+    Just f  -> parseExports <$> TIO.readFile f
+  pure (toOutcome pid modPath exps)
+
+toOutcome :: PackageId -> Text -> [Text] -> Outcome Value
+toOutcome pid modPath exps =
   let pkg = unPackageName (pkgName pid)
-  pure $ OutcomeSuccess
+  in OutcomeSuccess
     (object
       [ "package" .= pkg
       , "module"  .= modPath

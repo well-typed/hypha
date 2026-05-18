@@ -18,6 +18,9 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_)
 import Control.Exception (try, SomeException)
 import Data.Aeson (Value, decode)
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
@@ -183,33 +186,44 @@ fetchPackageJsonOnline manager pkgName = do
       Just v  -> Right v
       Nothing -> Left (DecodeError "failed to decode package JSON")
 
--- | Fetch the @/preferred@ versions file.  Note: this file is mutable on
--- Hackage (a maintainer can change preferred-versions), so we treat it as a
--- TTL-bounded resource, not 'Immutable'.
+-- | Fetch the full list of versions available on Hackage by reading the
+-- package's JSON metadata (the @{name}.json@ endpoint exposes a
+-- @normal@/@deprecated@ map keyed by version).  This is more reliable than
+-- the legacy @/preferred@ text file, which a maintainer may not have set.
 fetchVersionsOnline :: Manager -> PackageName -> IO (Either HackageError [Version])
 fetchVersionsOnline manager pkgName = do
-  let url = preferredVersionsUrl pkgName
-  cacheKey <- Cache.mkCacheKey url
-  cached <- Cache.lookupCache cacheKey
-  case cached of
-    Nothing -> fetchAndCache manager url cacheKey (TtlMutable (secondsToNominalDiffTime 900)) Nothing Nothing
-                 (Right . parseVersions)
-    Just cr -> do
-      fresh <- Cache.isFresh cr
-      if fresh
-        then pure (Right (parseVersions (crBody cr)))
-        else do
-          mRefreshed <- revalidate manager url (crEtag cr) (crLastModified cr)
-          case mRefreshed of
-            Left e             -> pure (Left e)
-            Right StillValid   -> do
-              touchCache cacheKey cr
-              pure (Right (parseVersions (crBody cr)))
-            Right (Refreshed bs et lm) -> do
-              now <- getCurrentTime
-              let cr' = CachedResponse et lm now bs (TtlMutable (secondsToNominalDiffTime 900))
-              Cache.insertCache cacheKey cr'
-              pure (Right (parseVersions bs))
+  result <- fetchPackageJsonOnline manager pkgName
+  pure (fmap extractVersionList result)
+
+-- | Pull every version key out of a package.json response.  Hackage's
+-- @\<pkg\>.json@ is a flat @{ "0.6.7": "normal", "0.7": "deprecated" }@
+-- map.  We return all versions in descending semantic order (newest first).
+extractVersionList :: Value -> [Version]
+extractVersionList = \case
+  Aeson.Object obj ->
+    map Version $ sortDesc [ Key.toText k | k <- KM.keys obj ]
+  _ -> []
+  where
+    sortDesc :: [Text.Text] -> [Text.Text]
+    sortDesc = reverse . foldr insertAsc []
+
+    insertAsc :: Text.Text -> [Text.Text] -> [Text.Text]
+    insertAsc x []     = [x]
+    insertAsc x (y:ys)
+      | compareVersion x y == LT = x : y : ys
+      | otherwise                = y : insertAsc x ys
+
+    compareVersion :: Text.Text -> Text.Text -> Ordering
+    compareVersion a b = compare (parseSegments a) (parseSegments b)
+
+    parseSegments :: Text.Text -> [Int]
+    parseSegments t =
+      [ readInt s | s <- map Text.unpack (Text.splitOn (Text.pack ".") t) ]
+
+    readInt :: String -> Int
+    readInt s = case reads s of
+      [(n, "")] -> n
+      _         -> 0
 
 -- | Outcome of an HTTP conditional GET.
 data RevalResult
@@ -285,17 +299,33 @@ touchCache key cr = do
   now <- getCurrentTime
   Cache.insertCache key (cr { crStoredAt = now })
 
--- | Parse versions from the preferred-versions file.  The real file is a
--- @cabal@-syntax constraint expression, but for alpha we just lift any
--- bare lines that look like version literals.  Lines starting with @--@
--- are comments; anything else is included verbatim.
+-- | Parse versions from the preferred-versions file.  The file is a
+-- @cabal@-syntax constraint expression.  Lines look like
+-- @containers ==0.7.0.0 || >0.6.7@.  We extract every @x.y.z@-style token.
+-- If Hackage returns HTML (e.g. a 404 page for a package without a
+-- preferred file) we get back an empty list because no token matches.
 parseVersions :: BS.ByteString -> [Version]
 parseVersions bs =
-  [ Version (Text.strip (Text.pack (BS8.unpack ln)))
+  [ Version v
   | ln <- BS8.split '\n' bs
   , not (BS.null ln)
   , not ("--" `BS.isPrefixOf` ln)
+  , v <- extractVersions (Text.pack (BS8.unpack ln))
   ]
+  where
+    extractVersions :: Text.Text -> [Text.Text]
+    extractVersions = filter looksLikeVersion . Text.split (not . versionChar)
+
+    versionChar :: Char -> Bool
+    versionChar c = (c >= '0' && c <= '9') || c == '.'
+
+    looksLikeVersion :: Text.Text -> Bool
+    looksLikeVersion t =
+         not (Text.null t)
+      && Text.any (== '.') t
+      && Text.all versionChar t
+      && Text.head t /= '.'
+      && Text.last t /= '.'
 
 -- | Format a 'UTCTime' as an RFC 822 / HTTP-date string (e.g.
 -- @"Wed, 21 Oct 2015 07:28:00 GMT"@).
