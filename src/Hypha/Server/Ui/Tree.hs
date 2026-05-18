@@ -8,5 +8,7 @@ import Lucid
 
 -- | Sidebar package list linking to each package's overview page.
 packageTree :: [Text] -> Html ()
-packageTree pkgs = ul_ [class_ "tree"] $
-  mapM_ (\p -> li_ $ a_ [href_ ("/pkg/" <> p)] (toHtml p)) pkgs
+packageTree = ul_ [class_ "tree"] . mconcat . map packageLink
+  where
+    packageLink :: Text -> Html ()
+    packageLink p = li_ $ a_ [href_ ("/pkg/" <> p)] (toHtml p)

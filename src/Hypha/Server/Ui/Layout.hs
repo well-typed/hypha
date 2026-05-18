@@ -4,6 +4,7 @@ module Hypha.Server.Ui.Layout
   , breadcrumbs
   ) where
 
+import Data.List (intersperse)
 import Data.Text (Text)
 import Lucid
 
@@ -35,10 +36,11 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
         body
 
 -- | Render a breadcrumb trail. Each entry is a (label, href) pair.
+-- Separators are placed /between/ items, never after the last one.
 breadcrumbs :: [(Text, Text)] -> Html ()
 breadcrumbs [] = mempty
 breadcrumbs items = div_ [class_ "crumbs"] $
-  mapM_ (\(label, href) -> do
-    a_ [href_ href] (toHtml label)
-    toHtml (" / " :: Text)
-    ) items
+  mconcat (intersperse (" / " :: Html ()) (map breadcrumbItem items))
+  where
+    breadcrumbItem :: (Text, Text) -> Html ()
+    breadcrumbItem (label, href) = a_ [href_ href] (toHtml label)
