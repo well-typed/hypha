@@ -9,11 +9,11 @@ module Hypha.Hoogle.Database
   , isStale
   ) where
 
-import qualified Data.ByteString as BS
 import Control.DeepSeq (NFData)
+import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
-import System.Directory (doesFileExist, createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 
 import qualified Hoogle
@@ -41,19 +41,23 @@ planHashFile (ProjectRoot r) = r </> ".hypha" </> "plan-hash"
 -- | Open the per-project DB, generating it if missing or stale.
 withProjectDb :: NFData a => HoogleConfig -> (Hoogle.Database -> IO a) -> IO a
 withProjectDb cfg k = do
-  let dotDir = (\(ProjectRoot r) -> r </> ".hypha") (hgcProjectRoot cfg)
+  let root = hgcProjectRoot cfg
+      dotDir = (\(ProjectRoot r) -> r </> ".hypha") root
   createDirectoryIfMissing True dotDir
   stale <- isStale cfg
   if stale
     then do
+      let input = case hgcInputDocs cfg of
+            (p:_) -> p
+            []    -> "."
       Hoogle.hoogle
         [ "generate"
-        , "--database=" <> dbPath (hgcProjectRoot cfg)
-        , "--local=" <> head (hgcInputDocs cfg <> ["."])
+        , "--database=" <> dbPath root
+        , "--local=" <> input
         ]
-      BS.writeFile (planHashFile (hgcProjectRoot cfg)) (TE.encodeUtf8 (hgcPlanHash cfg))
+      BS.writeFile (planHashFile root) (TE.encodeUtf8 (hgcPlanHash cfg))
     else pure ()
-  Hoogle.withDatabase (dbPath (hgcProjectRoot cfg)) k
+  Hoogle.withDatabase (dbPath root) k
 
 -- | Open the global (Stackage-built) Hoogle database.
 withGlobalDb :: NFData a => (Hoogle.Database -> IO a) -> IO a
