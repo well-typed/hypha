@@ -41,6 +41,9 @@ library
     Hypha.Types.PackageId
     Hypha.Types.SymbolPath
     Hypha.Types.BuildPlan
+    Hypha.BuildEnv.Type
+    Hypha.BuildEnv.Compose
+    Hypha.BuildEnv.Nix
     Hypha.Project.Discovery
     Hypha.Project.Plan
     Hypha.Project.Overrides
@@ -66,6 +69,7 @@ test-suite hypha-tests
   main-is:          Main.hs
   other-modules:
     Property.SymbolPath
+    Unit.BuildEnvCompose
     Unit.Project
   build-depends:
     , base
