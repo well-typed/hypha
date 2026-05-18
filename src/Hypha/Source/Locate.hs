@@ -246,13 +246,124 @@ locateSymbolDefinitionInDir :: FilePath -> Text -> Text -> IO (Maybe SourceLocat
 locateSymbolDefinitionInDir d modPath sym = do
   mFile <- findModuleFile d modPath
   case mFile of
-    Nothing -> pure Nothing
+    Nothing -> findInTree d modPath sym
     Just f  -> do
-      ls <- Text.lines <$> TIO.readFile f
-      pure $ case [ i | (i, l) <- zip [1 :: Int ..] ls, startsWith sym l ] of
-               (i:_) -> Just (SourceLocation f i)
-               []    -> Nothing
+      mLoc <- scanFile sym f
+      case mLoc of
+        Just loc -> pure (Just loc)
+        Nothing  -> findInTree d modPath sym
+
+-- | Walk every @.hs@ file under @root@ (skipping build/test dirs) and
+-- return the first hit whose top-level binding or type signature matches
+-- @sym@.  Used as a fallback when the target module re-exports a symbol
+-- defined in another module of the same package (e.g.
+-- @Data.Map.Strict.lookup@ re-exported from @Data.Map.Internal@).
+findInTree :: FilePath -> Text -> Text -> IO (Maybe SourceLocation)
+findInTree root modPath sym = do
+  hsFiles <- enumerateHs root 6
+  let prefix  = Text.unpack (Text.replace "." "/" (modulePrefix modPath))
+      ranked  = sortByPrefix prefix hsFiles
+  go ranked
   where
-    startsWith name l =
-      let trimmed = Text.dropWhile (== ' ') l
-      in name `Text.isPrefixOf` trimmed
+    go []     = pure Nothing
+    go (f:fs) = do
+      m <- scanFile sym f
+      case m of
+        Just loc -> pure (Just loc)
+        Nothing  -> go fs
+
+-- | Drop the last dotted segment of a module path so re-exports prefer
+-- siblings before unrelated trees: e.g. @Data.Map.Strict@ → @Data.Map@,
+-- which scores @Data/Map/Internal.hs@ above @Data/IntMap/Internal.hs@.
+modulePrefix :: Text -> Text
+modulePrefix m = case Text.breakOnEnd "." m of
+  (p, _) | not (Text.null p) -> Text.dropEnd 1 p
+  _                          -> m
+
+-- | Sort file paths by how many leading characters they share with the
+-- supplied prefix (descending).  Stable on ties.
+sortByPrefix :: String -> [FilePath] -> [FilePath]
+sortByPrefix prefix = map snd . sortBy (\(a,_) (b,_) -> compare b a) . map score
+  where
+    score fp = (matchLen prefix fp, fp)
+    matchLen :: String -> FilePath -> Int
+    matchLen p fp =
+      let canonical = dropToPrefix p fp
+      in commonLen p canonical
+    -- Trim the path so it begins at the first occurrence of the prefix's
+    -- leading char; otherwise leading "src/" wrecks the comparison.
+    dropToPrefix :: String -> FilePath -> FilePath
+    dropToPrefix []      fp = fp
+    dropToPrefix (c : _) fp = dropWhile (/= c) fp
+    commonLen :: String -> String -> Int
+    commonLen []     _      = 0
+    commonLen _      []     = 0
+    commonLen (a:as) (b:bs)
+      | a == b    = 1 + commonLen as bs
+      | otherwise = 0
+
+sortBy :: (a -> a -> Ordering) -> [a] -> [a]
+sortBy cmp = foldr insert []
+  where
+    insert x []     = [x]
+    insert x (y:ys) = case cmp x y of
+      GT -> y : insert x ys
+      _  -> x : y : ys
+
+-- | Bounded recursive enumeration of every @.hs@ file under @root@.
+-- Skips hidden directories and conventional non-library trees so the
+-- @findInTree@ fallback stays cheap on real packages.
+enumerateHs :: FilePath -> Int -> IO [FilePath]
+enumerateHs _ depth | depth < 0 = pure []
+enumerateHs dir depth = do
+  entries <- listDirectory dir
+  fmap concat . mapM (visit depth) $ map (dir </>) entries
+  where
+    visit d p = do
+      isDir <- doesDirectoryExist p
+      if isDir
+        then if skipDir (fileName p)
+               then pure []
+               else enumerateHs p (d - 1)
+        else if ".hs" `Text.isSuffixOf` Text.pack p
+               then pure [p]
+               else pure []
+
+    fileName :: FilePath -> String
+    fileName = reverse . takeWhile (/= '/') . reverse
+
+    skipDir n = case n of
+      '.':_           -> True
+      "dist"          -> True
+      "dist-newstyle" -> True
+      "build"         -> True
+      "test"          -> True
+      "tests"         -> True
+      "bench"         -> True
+      "benchmarks"    -> True
+      _               -> False
+
+-- | Find the first line in a file where @sym@ is the leftmost token,
+-- followed by either @ ::@ (signature) or whitespace + @=@ / @\\@ (definition).
+scanFile :: Text -> FilePath -> IO (Maybe SourceLocation)
+scanFile sym f = do
+  ls <- Text.lines <$> TIO.readFile f
+  pure $ case [ i | (i, l) <- zip [1 :: Int ..] ls, isTopBind sym l ] of
+           (i:_) -> Just (SourceLocation f i)
+           []    -> Nothing
+
+-- | Heuristic: line is a top-level binding for @sym@ when it starts at
+-- column 0 with the bare identifier followed by " ::" or whitespace.
+-- Skips comment and import lines.
+isTopBind :: Text -> Text -> Bool
+isTopBind sym l
+  | Text.null l                = False
+  | "--" `Text.isPrefixOf` l   = False
+  | "import" `Text.isPrefixOf` l = False
+  | otherwise                  =
+      case Text.stripPrefix sym l of
+        Nothing   -> False
+        Just rest -> case Text.uncons rest of
+          Just (' ', _) -> True
+          Just ('\t', _) -> True
+          _             -> False
