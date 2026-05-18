@@ -66,6 +66,7 @@ library
     Hypha.Hoogle.Query
     Hypha.Cli.Parser
     Hypha.Cli.Run
+    Hypha.Command.Doctor
     Hypha.Command.Module
     Hypha.Command.Deps
     Hypha.Command.Package
@@ -125,6 +126,7 @@ test-suite hypha-tests
     Property.SymbolPath
     Unit.BuildEnv
     Unit.BuildEnvCompose
+    Unit.Doctor
     Unit.Hackage
     Unit.Hoogle
     Unit.Module

@@ -13,6 +13,7 @@ import qualified Property.SymbolPath
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
 import qualified Unit.Deps
+import qualified Unit.Doctor
 import qualified Unit.Hackage
 import qualified Unit.Hoogle
 import qualified Unit.Module
@@ -33,9 +34,10 @@ main = defaultMain (testGroup "hypha"
   , Unit.BuildEnv.tests
   , Unit.BuildEnvCompose.tests
   , Unit.Deps.tests
+  , Unit.Doctor.tests
+  , Unit.Project.tests
   , Unit.Hackage.tests
   , Unit.Hoogle.tests
   , Unit.Module.tests
-  , Unit.Project.tests
   , Unit.WhatProvides.tests
   ])

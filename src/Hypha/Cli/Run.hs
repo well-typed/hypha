@@ -33,6 +33,7 @@ import qualified System.Exit as System
 
 import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import qualified Hypha.Command.Doctor   as Doctor
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
 import qualified Hypha.Command.Search        as Search
@@ -173,7 +174,7 @@ dispatch flags = \case
       Right o -> pure (Right o)
 
   DoctorCommand ->
-    pure (Left (notImplemented "doctor" "see issues/todo/018-doctor-command.md"))
+    Doctor.runDoctor >>= \outcome -> pure (Right outcome)
 
 notImplemented :: Text -> Text -> HyphaError
 notImplemented name hint =
@@ -265,6 +266,7 @@ fullKeysFor = \case
   "versions"     -> Versions.fullKeys
   "module"       -> Module.fullKeys
   "source"       -> Source.fullKeys
+  "doctor"       -> Doctor.fullKeys
   "symbol"       -> Symbol.fullKeys
   "whatprovides" -> WhatProvides.fullKeys
   _              -> Set.empty
