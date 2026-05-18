@@ -13,6 +13,7 @@ module Hypha.Output.Outcome
   , outcomeOutsidePlan
   , outcomeOverrides
   , outcomeError
+  , tagOutsidePlan
   ) where
 
 import Data.Map.Strict (Map)
@@ -88,3 +89,9 @@ successOutcome a = OutcomeSuccess a False [] mempty []
 -- | Convenience constructor for a failure outcome.
 failureOutcome :: OutcomeError -> Outcome a
 failureOutcome err = OutcomeFailure err mempty
+
+-- | Update the @outside_plan@ flag on a success outcome.
+tagOutsidePlan :: Outcome a -> Bool -> Outcome a
+tagOutsidePlan (OutcomeSuccess r _ o a rel) flag =
+  OutcomeSuccess r flag o a rel
+tagOutsidePlan (OutcomeFailure err a) _ = OutcomeFailure err a

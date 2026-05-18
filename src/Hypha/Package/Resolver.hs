@@ -19,11 +19,6 @@ module Hypha.Package.Resolver
   , PackageResolver (..)
     -- * Construction
   , mkPackageResolver
-  , mkOfflinePackageResolver
-    -- * Operations
-  , resolvePackage
-  , resolvePackageSource
-  , fetchAvailableVersions
   ) where
 
 import Data.Aeson (Value)
@@ -87,27 +82,6 @@ mkPackageResolver env hclient plan = do
         pure (either (Left . hackageErrorToHypha pkgName) Right result)
     }
 
--- | Construct a resolver that never hits the network.
---   Only checks the plan and the store; returns 'NotFound' if both miss.
-mkOfflinePackageResolver :: BuildEnv IO -> BuildPlan -> PackageResolver IO
-mkOfflinePackageResolver env plan = PackageResolver
-  { resolvePkg = resolvePackageOffline env plan
-  , resolveSrc = \_pid -> pure (Left (EnvError "source lookup unavailable in offline mode"))
-  , fetchVrs   = \_pkgName -> pure (Left (NetworkError "version lookup unavailable in offline mode"))
-  }
-
--- | Convenience wrapper: resolve a package using the resolver.
-resolvePackage :: PackageResolver IO -> PackageName -> IO (Either HyphaError ResolvedPackage)
-resolvePackage = resolvePkg
-
--- | Convenience wrapper: resolve source for a package using the resolver.
-resolvePackageSource :: PackageResolver IO -> PackageId -> IO (Either HyphaError FilePath)
-resolvePackageSource = resolveSrc
-
--- | Convenience wrapper: fetch available versions.
-fetchAvailableVersions :: PackageResolver IO -> PackageName -> IO (Either HyphaError [Version])
-fetchAvailableVersions = fetchVrs
-
 -- | Resolve a package name against the full fallback chain.
 resolvePackageWith
   :: BuildEnv IO
@@ -155,40 +129,6 @@ resolvePackageWith env hclient plan name = do
     matchingPid target pid
       | pkgName pid == target = Just pid
       | otherwise             = Nothing
-
--- | Resolve a package name offline (plan + store only).
-resolvePackageOffline
-  :: BuildEnv IO
-  -> BuildPlan
-  -> PackageName
-  -> IO (Either HyphaError ResolvedPackage)
-resolvePackageOffline env plan name = do
-  case lookupUnit name plan of
-    Just pu ->
-      pure (Right ResolvedPackage
-        { rpPkgId        = puId pu
-        , rpIsOutsidePlan = False
-        , rpIsLocal       = puIsLocal pu
-        , rpDepsCount     = length (puDeps pu)
-        })
-    Nothing -> do
-      installed <- discoverInstalledPackages env
-      case mapMaybe (matchingPid name) (Set.toList installed) of
-        (pid : _) ->
-          pure (Right ResolvedPackage
-            { rpPkgId        = pid
-            , rpIsOutsidePlan = True
-            , rpIsLocal       = False
-            , rpDepsCount     = 0
-            })
-        [] ->
-          pure (Left (NotFound
-            ("package '" <> unPackageName name <> "' not in plan or store; try without --offline to reach Hackage")))
-  where
-    matchingPid :: PackageName -> PackageId -> Maybe PackageId
-    matchingPid target pid
-      | pkgName pid == target = Just pid
-      | otherwise              = Nothing
 
 -- | Resolve the source directory for a package, trying local sources first,
 --   then falling back to downloading from Hackage.

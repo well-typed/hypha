@@ -24,7 +24,7 @@ import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Error (HyphaError (..))
-import Hypha.Output.Outcome (Outcome (..), Related (..))
+import Hypha.Output.Outcome (Outcome (..), Related (..), tagOutsidePlan)
 import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
 import Hypha.Source.Extract (SymbolInfo (..), extractSymbolInfo)
 import Hypha.Source.Locate (modulePathToFile)
@@ -119,13 +119,7 @@ runSymbolWith env resolver rawArg = runExceptT $ do
   src       <- liftIO (TIO.readFile f)
   let info = extractSymbolInfo src sym
       outcome = mkOutcome pkgName ver modTxt sym f info
-  pure (tagOutside outcome (rpIsOutsidePlan rp))
-
--- | Tag an Outcome with the outside_plan flag.
-tagOutside :: Outcome Value -> Bool -> Outcome Value
-tagOutside (OutcomeSuccess r _ o a rel) flag =
-  OutcomeSuccess r flag o a rel
-tagOutside (OutcomeFailure err a) _ = OutcomeFailure err a
+  pure (tagOutsidePlan outcome (rpIsOutsidePlan rp))
 
 -- | Convert a 'SymbolPath' parse failure into a 'UserError'.
 liftParseError :: Text -> Either e SymbolPath -> ExceptT HyphaError IO SymbolPath

@@ -47,13 +47,13 @@ import qualified Hypha.Command.WhatProvides  as WhatProvides
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
 import Hypha.Exit (toSystemExitCode)
-import Hypha.Hackage.Api (mkHackageClient, mkOfflineHackageClient)
+import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
 import Hypha.Hoogle.Query (mkHoogleForFlags)
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
 import Hypha.Output.Outcome
   ( Outcome (..), OutcomeError (..)
-  , failureOutcome
+  , failureOutcome, tagOutsidePlan
   )
 import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..), mkPackageResolver)
 import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
@@ -114,6 +114,17 @@ collectOverrides raws =
 
 -- | Build a resolver that can look up packages beyond the plan.
 --   Creates the Hackage client, cabal BuildEnv, and wires them together.
+-- | Create a Hackage client respecting the offline flag.
+mkHackageClientForFlags :: GlobalFlags -> IO (HackageClient IO)
+mkHackageClientForFlags flags =
+  if gfOffline flags
+    then mkOfflineHackageClient
+    else do
+      mgr <- newManager tlsManagerSettings
+      mkHackageClient mgr
+
+-- | Build a resolver that can look up packages beyond the plan.
+--   Creates the Hackage client, cabal BuildEnv, and wires them together.
 withResolver
   :: GlobalFlags
   -> ((PackageResolver IO, BuildEnv IO) -> IO (Either HyphaError a))
@@ -123,59 +134,45 @@ withResolver flags k = do
   case eRoot of
     Left _noProject -> do
       -- No project?  Try a bare resolver with store-only BuildEnv.
-      env <- mkBasicBuildEnv
-      hclient <- if gfOffline flags
-                   then mkOfflineHackageClient
-                   else do
-                     mgr <- newManager tlsManagerSettings
-                     mkHackageClient mgr
-      plan <- mkPlanFromPlanJson
-      resolver <- mkPackageResolver env hclient plan
+      env       <- mkBasicBuildEnv
+      hclient   <- mkHackageClientForFlags flags
+      plan      <- mkPlanFromPlanJson
+      resolver  <- mkPackageResolver env hclient plan
       k (resolver, env)
     Right root -> do
-      env <- mkRootedBuildEnv root
-      hclient <- if gfOffline flags
-                   then mkOfflineHackageClient
-                   else do
-                     mgr <- newManager tlsManagerSettings
-                     mkHackageClient mgr
-      ePlan <- loadBuildPlan root
+      hclient   <- mkHackageClientForFlags flags
+      ePlan     <- loadBuildPlan root
       case ePlan of
         Left _planErr -> do
-          -- Plan missing; use an empty resolver via store + Hackage
+          env       <- mkBasicBuildEnv
           let emptyPlan = emptyBuildPlan
           resolver <- mkPackageResolver env hclient emptyPlan
           k (resolver, env)
         Right rawPlan -> do
           overrides <- collectOverrides (gfPackageOverrides flags)
           case overrides of
-            Left e      -> pure (Left e)
+            Left e       -> pure (Left e)
             Right os -> do
               let appliedPlan = applyOverrides os rawPlan
+              env       <- mkBuildEnv root appliedPlan
               resolver <- mkPackageResolver env hclient appliedPlan
               k (resolver, env)
 
 -- | Create a basic BuildEnv (store only, no project source dirs).
+-- Tries a few common GHC store paths and falls back to a null env.
 mkBasicBuildEnv :: IO (BuildEnv IO)
 mkBasicBuildEnv = do
   home <- getHomeDirectory
-  let ghcDirs = [ home </> ".cabal" </> "store" </> d | d <- ["ghc-9.10.3-d332", "ghc-9.6.7", "ghc-9.6.6"] ]
-      storeDir = head ghcDirs
-  eEnv <- mkCabalBuildEnv storeDir
-  case eEnv of
-    Right env -> pure env
-    Left _    -> pure offlineNullBuildEnv
-
--- | BuildEnv rooted at a project directory.
-mkRootedBuildEnv :: ProjectRoot -> IO (BuildEnv IO)
-mkRootedBuildEnv _root = do
-  home <- getHomeDirectory
-  -- Try to detect GHC version from a plan, or use a reasonable default
-  let storeDir = home </> ".cabal" </> "store" </> "ghc-9.6.7"
-  eEnv <- mkCabalBuildEnv storeDir
-  case eEnv of
-    Right env -> pure env
-    Left _    -> pure offlineNullBuildEnv
+  let candidates = [ home </> ".cabal" </> "store" </> d
+                   | d <- ["ghc-9.10.3-d332", "ghc-9.6.7", "ghc-9.6.6"]
+                   ]
+  let tryStore []     = pure offlineNullBuildEnv
+      tryStore (p:ps) = do
+        eEnv <- mkCabalBuildEnv p
+        case eEnv of
+          Right env -> pure env
+          Left _    -> tryStore ps
+  tryStore candidates
 
 -- | Attempt to load a plan.json from CWD for basic version info.
 --   Falls back to empty plan if not found.
@@ -346,12 +343,6 @@ errorOutcome :: HyphaError -> Outcome Value
 errorOutcome err =
   let (code, msg, ec) = toOutcomeError err
   in failureOutcome (OutcomeError code msg ec)
-
--- | Set the outside_plan flag on an Outcome.
-tagOutsidePlan :: Outcome Value -> Bool -> Outcome Value
-tagOutsidePlan (OutcomeSuccess r _ o a rel) flag =
-  OutcomeSuccess r flag o a rel
-tagOutsidePlan (OutcomeFailure err a) _ = OutcomeFailure err a
 
 -- | Split @PKG[@VER]@ into its parts.
 splitVersionHint :: Text -> (Text, Maybe Text)
