@@ -26,6 +26,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TIO
 import qualified Data.Vector as V
+import Network.HTTP.Client (newManager)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory (getHomeDirectory)
 import System.FilePath ((</>))
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
@@ -45,6 +47,7 @@ import qualified Hypha.Command.WhatProvides  as WhatProvides
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
 import Hypha.Exit (toSystemExitCode)
+import Hypha.Hackage.Api (mkHackageClient, mkOfflineHackageClient)
 import Hypha.Hoogle.Query (mkHoogleForFlags)
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
@@ -52,12 +55,13 @@ import Hypha.Output.Outcome
   ( Outcome (..), OutcomeError (..)
   , failureOutcome
   )
+import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..), mkPackageResolver)
 import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
 import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PackageOverride (..), ProjectRoot (..)
-  , applyOverrides, lookupPackage
+  , applyOverrides, emptyBuildPlan, lookupPackage
   )
 import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
 
@@ -108,40 +112,133 @@ collectOverrides raws =
     Left  err -> pure (Left (UserError (Text.pack (show err))))
     Right xs  -> pure (Right xs)
 
+-- | Build a resolver that can look up packages beyond the plan.
+--   Creates the Hackage client, cabal BuildEnv, and wires them together.
+withResolver
+  :: GlobalFlags
+  -> ((PackageResolver IO, BuildEnv IO) -> IO (Either HyphaError a))
+  -> IO (Either HyphaError a)
+withResolver flags k = do
+  eRoot <- discoverProjectRoot (gfProjectDir flags)
+  case eRoot of
+    Left _noProject -> do
+      -- No project?  Try a bare resolver with store-only BuildEnv.
+      env <- mkBasicBuildEnv
+      hclient <- if gfOffline flags
+                   then mkOfflineHackageClient
+                   else do
+                     mgr <- newManager tlsManagerSettings
+                     mkHackageClient mgr
+      plan <- mkPlanFromPlanJson
+      resolver <- mkPackageResolver env hclient plan
+      k (resolver, env)
+    Right root -> do
+      env <- mkRootedBuildEnv root
+      hclient <- if gfOffline flags
+                   then mkOfflineHackageClient
+                   else do
+                     mgr <- newManager tlsManagerSettings
+                     mkHackageClient mgr
+      ePlan <- loadBuildPlan root
+      case ePlan of
+        Left _planErr -> do
+          -- Plan missing; use an empty resolver via store + Hackage
+          let emptyPlan = emptyBuildPlan
+          resolver <- mkPackageResolver env hclient emptyPlan
+          k (resolver, env)
+        Right rawPlan -> do
+          overrides <- collectOverrides (gfPackageOverrides flags)
+          case overrides of
+            Left e      -> pure (Left e)
+            Right os -> do
+              let appliedPlan = applyOverrides os rawPlan
+              resolver <- mkPackageResolver env hclient appliedPlan
+              k (resolver, env)
+
+-- | Create a basic BuildEnv (store only, no project source dirs).
+mkBasicBuildEnv :: IO (BuildEnv IO)
+mkBasicBuildEnv = do
+  home <- getHomeDirectory
+  let ghcDirs = [ home </> ".cabal" </> "store" </> d | d <- ["ghc-9.10.3-d332", "ghc-9.6.7", "ghc-9.6.6"] ]
+      storeDir = head ghcDirs
+  eEnv <- mkCabalBuildEnv storeDir
+  case eEnv of
+    Right env -> pure env
+    Left _    -> pure offlineNullBuildEnv
+
+-- | BuildEnv rooted at a project directory.
+mkRootedBuildEnv :: ProjectRoot -> IO (BuildEnv IO)
+mkRootedBuildEnv _root = do
+  home <- getHomeDirectory
+  -- Try to detect GHC version from a plan, or use a reasonable default
+  let storeDir = home </> ".cabal" </> "store" </> "ghc-9.6.7"
+  eEnv <- mkCabalBuildEnv storeDir
+  case eEnv of
+    Right env -> pure env
+    Left _    -> pure offlineNullBuildEnv
+
+-- | Attempt to load a plan.json from CWD for basic version info.
+--   Falls back to empty plan if not found.
+mkPlanFromPlanJson :: IO BuildPlan
+mkPlanFromPlanJson = do
+  eRoot <- discoverProjectRoot Nothing
+  case eRoot of
+    Left _        -> pure emptyBuildPlan
+    Right root -> do
+      ePlan <- loadBuildPlan root
+      case ePlan of
+        Left _  -> pure emptyBuildPlan
+        Right p -> pure p
+
 -- | Per-command dispatch.  Each arm returns either an error or a successful
--- outcome.  Unimplemented commands return a structured 'UserError' so the
--- envelope shape is preserved.
+-- outcome.
 dispatch :: GlobalFlags -> Command -> IO (Either HyphaError (Outcome Value))
 dispatch flags = \case
   SearchCommand q extras ->
     runSearchWithHoogle flags q extras
 
   PackageCommand rawArg ->
-    withPlan flags $ \_root plan ->
-      pure $ Right $ Package.runPackagePure plan rawArg
+    withResolver flags $ \(resolver, _env) -> do
+      let (rawName, _mVerHint) = splitVersionHint rawArg
+      result <- resolvePkg resolver (PackageName rawName)
+      case result of
+        Left hyErr -> pure (Left hyErr)
+        Right rp ->
+          pure (Right (Package.mkSuccessOutcome
+            rawName
+            (pkgVersion (rpPkgId rp))
+            (rpIsLocal rp)
+            (rpDepsCount rp)))
 
   VersionsCommand pkg ->
-    withPlan flags $ \_root plan ->
-      pure $ Right $ Versions.runVersionsPure plan (PackageName pkg)
+    withResolver flags $ \(resolver, _env) -> do
+      let pkgName = PackageName pkg
+      avResult <- fetchVrs resolver pkgName
+      case avResult of
+        Left _err ->
+          withPlan flags $ \_root plan ->
+            pure (Right (Versions.runVersionsPure plan pkgName))
+        Right versions ->
+          withPlan flags $ \_root plan ->
+            pure (Right (Versions.runVersionsWithAvail plan pkgName versions))
 
   ModuleCommand arg ->
     case Text.splitOn "/" arg of
       [pkg, modPath] ->
-        withPlan flags $ \root plan ->
-          case lookupPackage (PackageName pkg) plan of
-            Nothing -> pure (Left (NotFound
-              ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
-            Just ver -> do
-              env <- mkBuildEnv root plan
-              oc  <- Module.runModule env
-                        (Module.mkPid pkg ver) modPath
-              pure (Right oc)
+        withResolver flags $ \(resolver, env) -> do
+          let pkgName = PackageName pkg
+          result <- resolvePkg resolver pkgName
+          case result of
+            Left hyErr -> pure (Left hyErr)
+            Right rp -> do
+              let pid = rpPkgId rp
+              oc <- Module.runModule env pid modPath
+              pure (Right (tagOutsidePlan oc (rpIsOutsidePlan rp)))
       _ -> pure (Left (UserError ("expected PKG/MOD (got: " <> arg <> ")")))
 
   SymbolCommand arg ->
-    withPlan flags $ \root plan -> do
-      env <- mkBuildEnv root plan
-      Symbol.runSymbol env plan arg
+    withResolver flags $ \(resolver, env) ->
+      Symbol.runSymbolWith env resolver arg
 
   SourceCommand arg ->
     case Text.splitOn "/" arg of
@@ -149,7 +246,7 @@ dispatch flags = \case
         withPlan flags $ \root plan ->
           case lookupPackage (PackageName pkg) plan of
             Nothing -> pure (Left (NotFound
-              ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
+              ("package '" <> pkg <> "' not in build plan")))
             Just ver -> do
               env <- mkBuildEnv root plan
               let pid = PackageId (PackageName pkg) ver
@@ -158,16 +255,18 @@ dispatch flags = \case
         withPlan flags $ \root plan ->
           case lookupPackage (PackageName pkg) plan of
             Nothing -> pure (Left (NotFound
-              ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
+              ("package '" <> pkg <> "' not in build plan")))
             Just ver -> do
               env <- mkBuildEnv root plan
               let pid = PackageId (PackageName pkg) ver
               Source.runSource env plan pid modPath (Just sym)
       _ -> pure (Left (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")")))
+
   DepsCommand pkgName reverseMode mDepth ->
     withPlan flags $ \_root plan -> do
       outcome <- Deps.runDeps plan (PackageName pkgName) reverseMode mDepth
       pure (Right outcome)
+
   WhatProvidesCommand sym -> do
     result <- try @SomeException $ do
       hoogle <- mkHoogleForFlags flags
@@ -195,6 +294,7 @@ runSearchWithHoogle flags q extras = do
     Left e  -> pure (Left (NetworkError (Text.pack (show e))))
     Right o -> pure (Right o)
 
+-- | Construct a BuildEnv IO from a project root and its build plan.
 mkBuildEnv :: ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
 mkBuildEnv (ProjectRoot _) plan = do
   home <- getHomeDirectory
@@ -246,6 +346,21 @@ errorOutcome :: HyphaError -> Outcome Value
 errorOutcome err =
   let (code, msg, ec) = toOutcomeError err
   in failureOutcome (OutcomeError code msg ec)
+
+-- | Set the outside_plan flag on an Outcome.
+tagOutsidePlan :: Outcome Value -> Bool -> Outcome Value
+tagOutsidePlan (OutcomeSuccess r _ o a rel) flag =
+  OutcomeSuccess r flag o a rel
+tagOutsidePlan (OutcomeFailure err a) _ = OutcomeFailure err a
+
+-- | Split @PKG[@VER]@ into its parts.
+splitVersionHint :: Text -> (Text, Maybe Text)
+splitVersionHint raw =
+  case Text.splitOn "@" raw of
+    [n]    -> (n, Nothing)
+    [n, v] -> (n, Just v)
+    (n:_)  -> (n, Nothing)
+    []     -> ("", Nothing)
 
 -- | Compact / full field sets per command name.  Keep in sync with each
 -- command module's local key declarations.  Equal sets where there is no

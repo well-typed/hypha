@@ -5,6 +5,7 @@ module Hypha.Command.Symbol
   , compactKeys
   , fullKeys
   , runSymbol
+  , runSymbolWith
   ) where
 
 import Control.Monad (unless)
@@ -24,6 +25,7 @@ import System.FilePath ((</>))
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Error (HyphaError (..))
 import Hypha.Output.Outcome (Outcome (..), Related (..))
+import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
 import Hypha.Source.Extract (SymbolInfo (..), extractSymbolInfo)
 import Hypha.Source.Locate (modulePathToFile)
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
@@ -77,7 +79,7 @@ runSymbol env plan rawArg = runExceptT $ do
       sym     = unSymbolName symName
       modTxt  = unModulePath modPath
   ver       <- liftMaybe (NotFound ("package '" <> unPackageName pkgName
-                              <> "' not in build plan (use --any to widen)"))
+                              <> "' not in build plan"))
                 (lookupPackage pkgName plan)
   let pid = PackageId pkgName ver
   d         <- liftMaybe (EnvError ("source directory not found for "
@@ -89,6 +91,41 @@ runSymbol env plan rawArg = runExceptT $ do
   src       <- liftIO (TIO.readFile f)
   let info = extractSymbolInfo src sym
   pure (mkOutcome pkgName ver modTxt sym f info)
+
+-- | Execute the @symbol@ command using the package resolver instead of a raw build plan.
+--
+-- Falls through plan -> store -> Hackage to resolve the package, then proceeds
+-- with source extraction just like 'runSymbol'.
+runSymbolWith
+  :: BuildEnv IO
+  -> PackageResolver IO
+  -> Text
+  -> IO (Either HyphaError (Outcome Value))
+runSymbolWith env resolver rawArg = runExceptT $ do
+  sp        <- liftParseError rawArg (parseSymbolPath rawArg)
+  (modPath, symName) <- requireModuleAndSymbol sp rawArg
+  let pkgName = spPackage sp
+      sym     = unSymbolName symName
+      modTxt  = unModulePath modPath
+  rp        <- ExceptT $ resolvePkg resolver pkgName
+  let pid = rpPkgId rp
+      ver = pkgVersion pid
+  d         <- liftMaybe (EnvError ("source directory not found for "
+                              <> unPackageName pkgName <> "-" <> unVersion ver))
+                =<< liftIO (locatePackageSource env pid)
+  let f = d </> modulePathToFile modTxt
+  ok        <- liftIO (doesFileExist f)
+  unless ok (throwE (NotFound ("module file not found: " <> Text.pack f)))
+  src       <- liftIO (TIO.readFile f)
+  let info = extractSymbolInfo src sym
+      outcome = mkOutcome pkgName ver modTxt sym f info
+  pure (tagOutside outcome (rpIsOutsidePlan rp))
+
+-- | Tag an Outcome with the outside_plan flag.
+tagOutside :: Outcome Value -> Bool -> Outcome Value
+tagOutside (OutcomeSuccess r _ o a rel) flag =
+  OutcomeSuccess r flag o a rel
+tagOutside (OutcomeFailure err a) _ = OutcomeFailure err a
 
 -- | Convert a 'SymbolPath' parse failure into a 'UserError'.
 liftParseError :: Text -> Either e SymbolPath -> ExceptT HyphaError IO SymbolPath

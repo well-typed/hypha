@@ -16,8 +16,6 @@ data GlobalFlags = GlobalFlags
     -- ^ Override project root.
   , gfPackageOverrides :: ![Text]
     -- ^ @PKG=VER@ overrides (repeatable).
-  , gfAny              :: !Bool
-    -- ^ Allow widening outside plan.
   , gfGlobal            :: !Bool
     -- ^ Widen Hoogle to global stackage DB.
   , gfOffline           :: !Bool
@@ -84,10 +82,6 @@ globalFlagsParser = GlobalFlags
        <> metavar "PKG=VER"
        <> help "Replace plan entry (repeatable)"
         ))
-  <*> switch
-        ( long "any"
-       <> help "Allow widening outside plan"
-        )
   <*> switch
         ( long "global"
        <> help "Widen Hoogle to global stackage DB"
