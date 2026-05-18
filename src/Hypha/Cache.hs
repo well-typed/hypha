@@ -2,6 +2,7 @@
 module Hypha.Cache
   ( cacheRoot
   , hackageCacheDir
+  , haddockCacheRoot
   ) where
 
 import System.Directory (getXdgDirectory, XdgDirectory (XdgCache))
@@ -15,3 +16,7 @@ cacheRoot = getXdgDirectory XdgCache "hypha"
 -- | Hackage HTTP cache subdirectory.
 hackageCacheDir :: IO FilePath
 hackageCacheDir = (</> "hackage") <$> cacheRoot
+
+-- | Haddock HTML cache subdirectory.
+haddockCacheRoot :: IO FilePath
+haddockCacheRoot = (</> "haddock") <$> cacheRoot

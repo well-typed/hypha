@@ -19,6 +19,7 @@ import qualified Unit.Hoogle
 import qualified Unit.Module
 import qualified Unit.Project
 import qualified Unit.WhatProvides
+import qualified Unit.Haddock
 
 main :: IO ()
 main = defaultMain (testGroup "hypha"
@@ -40,4 +41,5 @@ main = defaultMain (testGroup "hypha"
   , Unit.Hoogle.tests
   , Unit.Module.tests
   , Unit.WhatProvides.tests
+  , Unit.Haddock.tests
   ])

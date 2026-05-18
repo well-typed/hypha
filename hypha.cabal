@@ -64,6 +64,7 @@ library
     Hypha.Hoogle.Type
     Hypha.Hoogle.Database
     Hypha.Hoogle.Query
+    Hypha.Haddock.Generate
     Hypha.Cli.Parser
     Hypha.Cli.Run
     Hypha.Command.Doctor
@@ -133,6 +134,7 @@ test-suite hypha-tests
     Unit.Deps
     Unit.Project
     Unit.WhatProvides
+    Unit.Haddock
   build-depends:
     , aeson
     , base
