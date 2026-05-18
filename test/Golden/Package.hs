@@ -11,7 +11,6 @@ import Hypha.Command.Package (runPackage)
 import Hypha.Output.Json (encodeEnvelope)
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Plan (loadBuildPlan)
-import Hypha.Types.BuildPlan (ProjectRoot (..))
 
 tests :: TestTree
 tests = testGroup "Golden.Package"

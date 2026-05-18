@@ -17,7 +17,6 @@ module Hypha.Command.Search
 
 import Data.Aeson (Value, (.=))
 import qualified Data.Aeson as Aeson
-import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -25,8 +24,11 @@ import qualified Data.Text as Text
 
 import Hypha.Error (HyphaError (..))
 import Hypha.Hoogle.Type (Hoogle (..), HoogleHit (..), HoogleQuery (..))
-import Hypha.Output.Outcome (Outcome (..), Related (..), failureOutcome, successOutcome, OutcomeError (..))
-import Hypha.Types.BuildPlan (BuildPlan (..))
+import Hypha.Output.Outcome
+  ( Outcome (..), OutcomeError (..), Related (..)
+  , failureOutcome
+  )
+import Hypha.Types.BuildPlan (BuildPlan)
 
 -- | Result of a search command.
 data SearchResult = SearchResult
@@ -76,13 +78,12 @@ runSearchWith hoogle q extras = do
   hits <- searchHoogle hoogle (HoogleQuery queryText)
   let shits = map fromHoogle hits
       body  = SearchResult { srQuery = queryText, srHits = shits }
-      related =
+      rel   =
         [ Related (shName h)
                   ("hypha symbol " <> shPackage h <> "/" <> shModule h <> "/" <> shName h)
         | h <- take 5 shits
         ]
-      OutcomeSuccess r outside overrides actions _ = successOutcome (searchResultToJSON body)
-  pure (OutcomeSuccess r outside overrides actions related)
+  pure (OutcomeSuccess (searchResultToJSON body) False [] mempty rel)
 
 fromHoogle :: HoogleHit -> SearchHit
 fromHoogle h = SearchHit

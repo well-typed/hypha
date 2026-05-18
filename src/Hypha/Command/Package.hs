@@ -23,7 +23,7 @@ import Hypha.Output.Outcome
   ( Outcome (..), Related (..), OutcomeError (..)
   , failureOutcome
   )
-import Hypha.Types.BuildPlan (BuildPlan (..), lookupPackage)
+import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
 -- | Metadata for a single package, as returned by the @package@ command.

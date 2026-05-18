@@ -9,7 +9,7 @@ import Test.Tasty.Golden (goldenVsString)
 
 import Hypha.Command.Versions (runVersions)
 import Hypha.Output.Json (encodeEnvelope)
-import Hypha.Types.BuildPlan (BuildPlan (..), emptyBuildPlan, PackageOverride (..))
+import Hypha.Types.BuildPlan (BuildPlan (..), emptyBuildPlan)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import qualified Data.Map.Strict as Map
 

@@ -15,11 +15,11 @@ module Hypha.Cli.Run
 import Control.Exception (try, SomeException)
 import Data.Aeson (Value)
 import qualified Data.Aeson as Aeson
+import Data.Aeson.Key (Key)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
-import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -43,11 +43,10 @@ import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toO
 import Hypha.Exit (toSystemExitCode)
 import Hypha.Hoogle.Database (HoogleConfig (..))
 import Hypha.Hoogle.Query (mkGlobalHoogle, mkProjectHoogle)
-import Hypha.Hoogle.Type (Hoogle (..))
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
 import Hypha.Output.Outcome
-  ( Outcome (..), OutcomeError (..), Related (..)
+  ( Outcome (..), OutcomeError (..)
   , failureOutcome
   )
 import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
@@ -64,9 +63,7 @@ import Hypha.Types.PackageId (PackageName (..), Version (..))
 -- terminal-friendly rendering of the same content).
 runCli :: GlobalFlags -> Command -> IO ()
 runCli flags cmd = do
-  let tracer = if gfVerbose flags then verboseTracer
-                                  else if gfQuiet flags then silentTracer
-                                                        else silentTracer
+  let tracer = if gfVerbose flags then verboseTracer else silentTracer
   tracer (LogInfo "starting hypha")
   result <- dispatch flags cmd
   emit flags (commandName cmd) result
@@ -267,40 +264,44 @@ commandName = \case
 -- envelope and prints a readable summary.  This is a stop-gap until the
 -- DocH→ANSI renderer lands (Plan A task 11 / issue 017).
 humanFromValue :: Value -> Text
-humanFromValue v = case v of
-  Aeson.Object km ->
-    let cmd      = fromString km "command"
-        ok       = fromBool   km "ok"
-        outside  = fromBool   km "outside_plan"
-        line0    = "hypha " <> cmd <> (if ok then "" else "  [error]")
-        line1    = if outside then "  [outside-plan]" else ""
-        body     = pretty (KM.lookup "result"  km)
-        actions  = renderActions (KM.lookup "actions" km)
-        related  = renderRelated (KM.lookup "related" km)
-        errBlock = if ok then ""
-                   else case KM.lookup "error" km of
-                          Just (Aeson.Object e) ->
-                            "\n" <> fromString e "code" <> ": "
-                                  <> fromString e "message"
-                          _ -> ""
-    in Text.intercalate "\n" $ filter (not . Text.null)
-         [ line0 <> line1, errBlock, body, actions, related ]
-  other -> renderJsonValue 0 other
-  where
-    fromString km k = case KM.lookup k km of
-      Just (Aeson.String s) -> s
-      _                     -> ""
-    fromBool km k = case KM.lookup k km of
-      Just (Aeson.Bool b) -> b
-      _                   -> False
+humanFromValue (Aeson.Object obj) =
+  let cmd      = stringAt obj "command"
+      ok       = boolAt   obj "ok"
+      outside  = boolAt   obj "outside_plan"
+      line0    = "hypha " <> cmd <> (if ok then "" else "  [error]")
+      line1    = if outside then "  [outside-plan]" else ""
+      body     = renderResult (KM.lookup "result"  obj)
+      acts     = renderActions (KM.lookup "actions" obj)
+      rel      = renderRelated (KM.lookup "related" obj)
+      errBlock = if ok then ""
+                 else case KM.lookup "error" obj of
+                        Just (Aeson.Object e) ->
+                          "\n" <> stringAt e "code" <> ": "
+                                <> stringAt e "message"
+                        _ -> ""
+  in Text.intercalate "\n" $ filter (not . Text.null)
+       [ line0 <> line1, errBlock, body, acts, rel ]
+humanFromValue other = renderJsonValue 0 other
+
+-- | Look up a 'String' value in an Aeson 'Object', defaulting to empty.
+stringAt :: KM.KeyMap Value -> Key -> Text
+stringAt obj k = case KM.lookup k obj of
+  Just (Aeson.String s) -> s
+  _                     -> ""
+
+-- | Look up a 'Bool' value in an Aeson 'Object', defaulting to 'False'.
+boolAt :: KM.KeyMap Value -> Key -> Bool
+boolAt obj k = case KM.lookup k obj of
+  Just (Aeson.Bool b) -> b
+  _                   -> False
 
 renderActions :: Maybe Value -> Text
 renderActions (Just (Aeson.Object km)) | not (KM.null km) =
   "actions:\n" <> Text.intercalate "\n"
-    [ "  " <> Key.toText k <> "  " <> case v of
-                                         Aeson.String s -> s
-                                         _              -> ""
-    | (k, v) <- KM.toList km
+    [ "  " <> Key.toText k <> "  " <> case val of
+                                        Aeson.String s -> s
+                                        _              -> ""
+    | (k, val) <- KM.toList km
     ]
 renderActions _ = ""
 
@@ -309,18 +310,18 @@ renderRelated (Just (Aeson.Array xs)) | not (V.null xs) =
   "related:\n" <> Text.intercalate "\n"
     [ case x of
         Aeson.Object o ->
-          let lbl = case KM.lookup "label" o of Just (Aeson.String s) -> s; _ -> ""
-              fch = case KM.lookup "fetch" o of Just (Aeson.String s) -> s; _ -> ""
+          let lbl = stringAt o "label"
+              fch = stringAt o "fetch"
           in "  " <> lbl <> "  " <> fch
         _ -> ""
     | x <- V.toList xs
     ]
 renderRelated _ = ""
 
--- Tiny indented value printer used as a fallback for the @result@ body.
-pretty :: Maybe Value -> Text
-pretty Nothing  = ""
-pretty (Just v) = "result:\n" <> renderJsonValue 1 v
+-- | Tiny indented value printer used as a fallback for the @result@ body.
+renderResult :: Maybe Value -> Text
+renderResult Nothing  = ""
+renderResult (Just v) = "result:\n" <> renderJsonValue 1 v
 
 renderJsonValue :: Int -> Value -> Text
 renderJsonValue depth v =

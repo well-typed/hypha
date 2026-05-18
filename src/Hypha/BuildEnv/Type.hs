@@ -5,7 +5,7 @@ module Hypha.BuildEnv.Type
 
 import Data.Set (Set)
 
-import Hypha.Types.PackageId (PackageId (..), Version (..))
+import Hypha.Types.PackageId (PackageId, Version)
 
 -- | Record-of-functions interface for interacting with the build environment.
 --

@@ -12,10 +12,10 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 
-import Hypha.BuildEnv.Type   (BuildEnv (..))
+import Hypha.BuildEnv.Type   (BuildEnv)
 import Hypha.Output.Outcome  (Outcome (..), Related (..))
 import Hypha.Source.Locate   (listExportedSymbols)
-import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version)
 
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList ["package", "module", "exports"]

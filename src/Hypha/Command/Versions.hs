@@ -22,7 +22,7 @@ import Hypha.Output.Outcome
   ( Outcome (..), Related (..), OutcomeError (..)
   , failureOutcome
   )
-import Hypha.Types.BuildPlan (BuildPlan (..), lookupPackage)
+import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
 compactKeys, fullKeys :: Set Text
