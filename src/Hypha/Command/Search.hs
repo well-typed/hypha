@@ -12,10 +12,9 @@ import Data.Aeson (Value (..), (.=))
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 
-import Hypha.Types.BuildPlan (BuildPlan (..), PackageOverride (..))
-import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Error (HyphaError (..))
-import Hypha.Output (OutcomeEnvelope, successEnvelope)
+import Hypha.Output.Outcome (Outcome, successOutcome)
+import Hypha.Types.BuildPlan (BuildPlan (..))
 
 -- | Result of a search command.
 data SearchResult = SearchResult
@@ -44,13 +43,13 @@ data SearchHit = SearchHit
 -- | Execute the search command.
 --
 --   For now, this returns a stub result. Hoogle integration will be added later.
-runSearch :: BuildPlan -> Text -> [Text] -> Either HyphaError OutcomeEnvelope
-runSearch plan query _extraPkgs =
+runSearch :: BuildPlan -> Text -> [Text] -> Either HyphaError (Outcome Value)
+runSearch _plan query _extraPkgs =
   let result = SearchResult
         { srQuery = query
         , srHits  = stubHits query
       }
-  in Right $ successEnvelope "search" (map showOverride (bpOverrides plan)) (searchResultToJSON result)
+  in Right $ successOutcome (searchResultToJSON result)
 
 -- | Generate stub search hits for demonstration.
 stubHits :: Text -> [SearchHit]
@@ -88,7 +87,3 @@ hitToJSON hit = Aeson.object $ concat
     ]
   , maybe [] (\s -> ["signature" .= s]) (shSignature hit)
   ]
-
--- Helper to show an override as text
-showOverride :: PackageOverride -> Text
-showOverride (PackageOverride (PackageName name) (Version ver)) = name <> "=" <> ver

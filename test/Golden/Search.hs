@@ -6,9 +6,10 @@ import Data.Text (Text)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
+import qualified Data.Aeson as Aeson
 
 import Hypha.Command.Search (runSearch)
-import Hypha.Output (encodeEnvelope)
+import Hypha.Output.Json (encodeEnvelope)
 import Hypha.Types.BuildPlan (emptyBuildPlan)
 
 tests :: TestTree
@@ -29,4 +30,4 @@ runSearchCommand = do
       result = runSearch plan query extras
   case result of
     Left _ -> error "Search command failed unexpectedly"
-    Right envelope -> pure (encodeEnvelope envelope)
+    Right outcome -> pure (Aeson.encode (encodeEnvelope "search" outcome))

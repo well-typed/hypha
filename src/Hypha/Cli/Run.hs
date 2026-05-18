@@ -8,17 +8,17 @@ module Hypha.Cli.Run
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as Text
-import qualified Data.Text.IO as TIO
 import System.IO (hFlush, stdout)
+import qualified System.Exit as System
+import qualified Data.Aeson as Aeson
 
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Command.Search (runSearch)
-import Hypha.Error (HyphaError (..), errorToExitCode)
-import Hypha.Exit (ExitCode (..), toSystemExitCode)
+import Hypha.Error (HyphaError (..), errorExitCode, errorMessage, errorCode, ExitCode (..))
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
-import Hypha.Output (OutcomeEnvelope, encodeEnvelope, errorEnvelope)
-import Hypha.Types.BuildPlan (BuildPlan (..), emptyBuildPlan)
-import qualified System.Exit as System
+import Hypha.Output.Outcome (Outcome (..), OutcomeError (..), failureOutcome)
+import Hypha.Output.Json (encodeEnvelope)
+import Hypha.Types.BuildPlan (emptyBuildPlan)
 
 -- | Run the CLI with the given flags and command.
 runCli :: GlobalFlags -> Command -> IO ()
@@ -32,22 +32,29 @@ runCli flags cmd = do
     SearchCommand query extras -> do
       tracer (LogDebug $ "Search: " <> query)
       pure $ runSearch plan query extras
-    _ -> pure $ Left $ CliError "Command not yet implemented"
+    _ -> pure $ Left $ UserError "Command not yet implemented"
 
   case result of
-    Right envelope -> do
-      emitEnvelope flags envelope
+    Right outcome -> do
+      emitOutcome flags (commandName cmd) outcome
       System.exitSuccess
     Left err -> do
-      let envelope = errorEnvelope (commandName cmd) [] err
-      emitEnvelope flags envelope
-      System.exitWith (toSystemExitCode (errorToExitCode err))
+      let errObj = OutcomeError (errorCode err) (errorMessage err) (unExitCode (errorExitCode err))
+          outcome = failureOutcome errObj :: Outcome Aeson.Value
+      emitOutcome flags (commandName cmd) outcome
+      System.exitWith (toSystemExitCode (errorExitCode err))
 
--- | Emit an envelope to stdout.
-emitEnvelope :: GlobalFlags -> OutcomeEnvelope -> IO ()
-emitEnvelope _flags envelope = do
-  LBS.hPut stdout (encodeEnvelope envelope)
+-- | Emit an outcome to stdout as JSON.
+emitOutcome :: GlobalFlags -> Text -> Outcome Aeson.Value -> IO ()
+emitOutcome _flags cmdName outcome = do
+  let envelope = encodeEnvelope cmdName outcome
+  LBS.hPut stdout (Aeson.encode envelope)
   hFlush stdout
+
+-- | Convert our ExitCode to System.Exit.ExitCode.
+toSystemExitCode :: ExitCode -> System.ExitCode
+toSystemExitCode (ExitCode 0) = System.ExitSuccess
+toSystemExitCode (ExitCode n) = System.ExitFailure n
 
 -- | Get the command name for the envelope.
 commandName :: Command -> Text
