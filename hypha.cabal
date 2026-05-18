@@ -69,6 +69,7 @@ library
     Hypha.Command.Package
     Hypha.Command.Search
     Hypha.Command.Versions
+    Hypha.Command.Source
     Hypha.Logging
     Hypha.Source.Locate
   build-depends:
@@ -105,6 +106,7 @@ test-suite hypha-tests
     Golden.Package
     Golden.Search
     Golden.Versions
+    Golden.Source
     Property.HackageCache
     Property.OutputJson
     Property.SymbolPath

@@ -36,6 +36,7 @@ import Hypha.BuildEnv.Type (BuildEnv (..))
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
 import qualified Hypha.Command.Search   as Search
+import qualified Hypha.Command.Source   as Source
 import qualified Hypha.Command.Versions as Versions
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
@@ -55,7 +56,7 @@ import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PackageOverride (..), ProjectRoot (..)
   , applyOverrides, lookupPackage
   )
-import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
 
 -- | Top-level entry point.  Wires global flags and the chosen subcommand to
 -- their handlers and emits exactly one JSON envelope (or, with @--human@, a
@@ -136,8 +137,27 @@ dispatch flags = \case
 
   SymbolCommand _ ->
     pure (Left (notImplemented "symbol" "see issues/todo/013-symbol-command.md"))
-  SourceCommand _ ->
-    pure (Left (notImplemented "source" "see issues/todo/014-source-command.md"))
+  SourceCommand arg ->
+    case Text.splitOn "/" arg of
+      [pkg, modPath] ->
+        withPlan flags $ \root plan ->
+          case lookupPackage (PackageName pkg) plan of
+            Nothing -> pure (Left (NotFound
+              ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
+            Just ver -> do
+              env <- mkBuildEnv root plan
+              let pid = PackageId (PackageName pkg) ver
+              Source.runSource env plan pid modPath Nothing
+      [pkg, modPath, sym] ->
+        withPlan flags $ \root plan ->
+          case lookupPackage (PackageName pkg) plan of
+            Nothing -> pure (Left (NotFound
+              ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
+            Just ver -> do
+              env <- mkBuildEnv root plan
+              let pid = PackageId (PackageName pkg) ver
+              Source.runSource env plan pid modPath (Just sym)
+      _ -> pure (Left (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")")))
   DepsCommand _ _ _ ->
     pure (Left (notImplemented "deps" "see issues/todo/015-deps-command.md"))
   WhatProvidesCommand _ ->
@@ -239,12 +259,14 @@ compactKeysFor = \case
   "package"  -> Package.compactKeys
   "versions" -> Versions.compactKeys
   "module"   -> Module.compactKeys
+  "source"   -> Source.compactKeys
   _          -> Set.empty
 fullKeysFor = \case
   "search"   -> Search.fullKeys
   "package"  -> Package.fullKeys
   "versions" -> Versions.fullKeys
   "module"   -> Module.fullKeys
+  "source"   -> Source.fullKeys
   _          -> Set.empty
 
 commandName :: Command -> Text
