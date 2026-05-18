@@ -70,7 +70,7 @@ data HackageError
 -- misbehave.  The version is hard-coded here rather than picked up from
 -- @Paths_hypha@ for now; revisit if that becomes a maintenance burden.
 userAgent :: BS.ByteString
-userAgent = "hypha/0.0.0 (+https://github.com/well-typed/hypha; contact: info@well-typed.com)"
+userAgent = "hypha/0.1.0 (+https://github.com/well-typed/hypha; contact: info@well-typed.com)"
 
 -- | Thread-safe rate limiter using 'MVar'.  The MVar holds the time of the
 -- most recently completed request; throttle releases once at least

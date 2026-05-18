@@ -1,6 +1,6 @@
 cabal-version:      3.4
 name:               hypha
-version:            0.0.0
+version:            0.1.0
 synopsis:           Agent-first CLI for browsing Hackage and Hoogle, scoped to your cabal build plan.
 description:
   hypha probes a cabal project's actual build plan to answer questions about
