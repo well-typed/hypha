@@ -8,6 +8,7 @@ module Hypha.Mcp.Server
   ) where
 
 import Control.Exception (try, SomeException)
+import Control.Monad (unless)
 import Data.Aeson
   ( FromJSON (..), ToJSON (..), Value (..)
   , object, (.=), (.:), (.:?)
@@ -29,50 +30,62 @@ import System.Process.Typed (proc, readProcess)
 -- ---------------------------------------------------------------------------
 -- * JSON-RPC types
 
--- | A JSON-RPC request envelope.
+-- | A JSON-RPC request envelope (method call or notification).
+--
+-- Notifications lack an @id@; we track that in 'rpcIsNotification'.
 data JSONRPCRequest = JSONRPCRequest
-  { rpcJsonrpc :: !Text
-  , rpcId      :: !Value
-  , rpcMethod  :: !Text
-  , rpcParams  :: !(Maybe Value)
+  { rpcJsonrpc        :: !Text
+  , rpcId             :: !(Maybe Value)
+  , rpcMethod         :: !Text
+  , rpcParams         :: !(Maybe Value)
+  , rpcIsNotification :: !Bool
   }
   deriving stock (Show, Eq)
 
 instance FromJSON JSONRPCRequest where
   parseJSON = withObject "JSONRPCRequest" $ \o -> do
-    v <- o .:    "jsonrpc"
-    i <- o .:    "id"
-    m <- o .:    "method"
-    p <- o .:?  "params"
-    pure (JSONRPCRequest v i m p)
+    v  <- o .:   "jsonrpc"
+    mi <- o .:?  "id"
+    m  <- o .:   "method"
+    p  <- o .:?  "params"
+    pure (JSONRPCRequest v mi m p (Nothing == mi))
 
 instance ToJSON JSONRPCRequest where
-  toJSON (JSONRPCRequest v i m p) = object
-    $ [ "jsonrpc" .= v, "id" .= i, "method" .= m ]
-    ++ maybe [] (\x -> [ "params"  .= x ]) p
+  toJSON (JSONRPCRequest v mi m p _) = object
+    $ maybe [] (\i -> [ "id" .= i ]) mi
+    ++ [ "jsonrpc" .= v, "method" .= m ]
+    ++ maybe [] (\x -> [ "params" .= x ]) p
 
 -- | A JSON-RPC response envelope.
+--
+-- Notifications produce /no/ response, but we reuse the same datatype
+-- internally for the success-path helper functions.
 data JSONRPCResponse = JSONRPCResponse
   { respJsonrpc :: !Text
-  , respId      :: !Value
+  , respId      :: !(Maybe Value)
   , respResult  :: !(Maybe Value)
   , respError   :: !(Maybe JSONRPCError)
   }
   deriving stock (Show, Eq)
 
 instance ToJSON JSONRPCResponse where
-  toJSON (JSONRPCResponse v i r e) = object
-    $ [ "jsonrpc" .= v, "id" .= i ]
+  toJSON (JSONRPCResponse v mi r e) = object
+    $ maybe [] (\i -> [ "id" .= i ]) mi
+    ++ [ "jsonrpc" .= v ]
     ++ maybe [] (\x -> [ "result" .= x ]) r
     ++ maybe [] (\x -> [ "error"  .= x ]) e
 
-jsonSuccess :: Value -> Value -> JSONRPCResponse
-jsonSuccess reqId result = JSONRPCResponse "2.0" reqId (Just result) Nothing
+jsonSuccess :: Maybe Value -> Value -> JSONRPCResponse
+jsonSuccess mReqId result = JSONRPCResponse "2.0" mReqId (Just result) Nothing
 
-jsonError :: Value -> Int -> Text -> JSONRPCResponse
-jsonError reqId code msg = JSONRPCResponse "2.0" reqId Nothing (Just err)
+jsonError :: Maybe Value -> Int -> Text -> JSONRPCResponse
+jsonError mReqId code msg = JSONRPCResponse "2.0" mReqId Nothing (Just err)
   where
     err = JSONRPCError code msg Nothing
+
+-- | Convenience: render a JSON-RPC error as a strict byte string.
+encodeError :: Maybe Value -> Int -> Text -> ByteString
+encodeError mId code msg = LBS.toStrict (encode (jsonError mId code msg))
 
 -- | JSON-RPC error object.
 data JSONRPCError = JSONRPCError
@@ -88,27 +101,12 @@ instance ToJSON JSONRPCError where
     ++ maybe [] (\x -> [ "data" .= x ]) d
 
 -- ---------------------------------------------------------------------------
--- * Tool types
-
--- | Tool description exposed in @tools/list@.
-data ToolDesc = ToolDesc
-  { tdName        :: !Text
-  , tdDescription :: !Text
-  , tdInputSchema :: !Value
-  }
-  deriving stock (Show, Eq)
-
-instance ToJSON ToolDesc where
-  toJSON (ToolDesc n d s) = object
-    [ "name"        .= n
-    , "description" .= d
-    , "inputSchema" .= s
-    ]
-
--- ---------------------------------------------------------------------------
 -- * Server
 
 -- | Run the MCP stdio server until EOF on stdin.
+--
+-- Each line is parsed as a JSON-RPC message.  Notifications are
+-- consumed silently (no response written).
 runMcpStdio :: IO ()
 runMcpStdio = loop
   where
@@ -120,30 +118,35 @@ runMcpStdio = loop
           line <- BS8.getLine
           case eitherDecodeStrict line of
             Left parseErr -> do
-              -- Malformed JSON-RPC: emit a generic parse-error response
-              let err = jsonError Null (-32700) (Text.pack parseErr)
-              BS8.putStrLn (BS8.pack (show (encode err)))
+              -- Malformed JSON-RPC: emit a generic parse-error response.
+              -- No request id available, so we omit it per spec.
+              BS8.putStrLn (encodeError Nothing (-32700)
+                              (Text.pack parseErr))
               hFlush stdout
               loop
             Right req -> do
               resp <- dispatch req
-              BS8.putStrLn (encodeStrict resp)
-              hFlush stdout
+              unless (rpcIsNotification req) $ do
+                BS8.putStrLn (encodeStrict resp)
+                hFlush stdout
               loop
 
     encodeStrict :: JSONRPCResponse -> ByteString
-    encodeStrict = BS8.pack . show . encode
+    encodeStrict = LBS.toStrict . encode
 
--- | Dispatch a single JSON-RPC request.
+-- | Dispatch a single JSON-RPC request.  Notifications produce no response.
 dispatch :: JSONRPCRequest -> IO JSONRPCResponse
-dispatch req = case rpcMethod req of
-  "initialize"        -> pure (jsonSuccess (rpcId req) initializeResult)
-  "tools/list"        -> pure (jsonSuccess (rpcId req) toolsListResult)
-  "tools/call"        -> handleToolCall (rpcId req) (rpcParams req)
-  "notifications/initialized" -> pure (jsonSuccess (rpcId req) (object []))
-  "notifications/cancelled"   -> pure (jsonSuccess (rpcId req) (object []))
-  other               -> pure (jsonError (rpcId req) (-32601)
-                                 ("Method not found: " <> other))
+dispatch req
+  | rpcIsNotification req = case rpcMethod req of
+      "notifications/initialized" -> pure (jsonSuccess Nothing (object []))
+      "notifications/cancelled"   -> pure (jsonSuccess Nothing (object []))
+      _                         -> pure (jsonSuccess Nothing (object []))
+  | otherwise = case rpcMethod req of
+      "initialize"      -> pure (jsonSuccess (rpcId req) initializeResult)
+      "tools/list"      -> pure (jsonSuccess (rpcId req) toolsListResult)
+      "tools/call"      -> handleToolCall (rpcId req) (rpcParams req)
+      other             -> pure (jsonError (rpcId req) (-32601)
+                                  ("Method not found: " <> other))
 
 -- | Initialize response payload.
 initializeResult :: Value
@@ -185,8 +188,8 @@ hyphaExecTool = object
 -- * Tool execution
 
 -- | Handle a @tools/call@ request.
-handleToolCall :: Value -> Maybe Value -> IO JSONRPCResponse
-handleToolCall reqId mParams = do
+handleToolCall :: Maybe Value -> Maybe Value -> IO JSONRPCResponse
+handleToolCall mReqId mParams = do
   let args = parseArgs mParams
   bin <- hyphaBinPath
   (ec, out, err) <- execHypha bin (map Text.unpack args)
@@ -202,7 +205,7 @@ handleToolCall reqId mParams = do
             ]
         , "isError" .= (exitCode /= 0)
         ]
-  pure (jsonSuccess reqId result)
+  pure (jsonSuccess mReqId result)
 
 -- | Extract the string array from @{"arguments": {"args": [...]}}@.
 -- Also tolerates a flat @{"args": [...]}@ for testing convenience.
@@ -215,7 +218,7 @@ parseArgs = \case
           Just (Object ao) -> ao
           _                -> o
     in case KM.lookup "args" inner of
-         Just (Array arr) -> [ txt | String txt <- toList arr ]
+         Just (Array arr)  -> [ txt | String txt <- toList arr ]
          Just (String raw) -> [raw]
          _                 -> []
   Just _ -> []
