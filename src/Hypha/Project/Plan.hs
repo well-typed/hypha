@@ -13,9 +13,8 @@ import qualified Data.Text as Text
 import qualified Cabal.Plan as CP
 
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), CompilerId (..), PlanHash (..) )
+  ( BuildPlan (..), CompilerId (..), ProjectRoot (..) )
 import Hypha.Types.PackageId (PackageName (..), Version (..))
-import Hypha.Types.BuildPlan (ProjectRoot (..))
 
 -- | Errors that can occur when loading the build plan.
 data PlanError

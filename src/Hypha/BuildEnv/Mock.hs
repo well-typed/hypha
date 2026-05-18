@@ -10,11 +10,9 @@ module Hypha.BuildEnv.Mock
 
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Set (Set)
-import qualified Data.Set as Set
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
+import Hypha.Types.PackageId (PackageId (..), Version (..))
 
 -- | Configuration for a mock build environment.
 data MockBuildEnv = MockBuildEnv
