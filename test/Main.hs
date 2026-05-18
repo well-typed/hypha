@@ -16,6 +16,7 @@ import qualified Unit.Hackage
 import qualified Unit.Hoogle
 import qualified Unit.Module
 import qualified Unit.Project
+import qualified Unit.WhatProvides
 
 main :: IO ()
 main = defaultMain (testGroup "hypha"
@@ -34,4 +35,5 @@ main = defaultMain (testGroup "hypha"
   , Unit.Hoogle.tests
   , Unit.Module.tests
   , Unit.Project.tests
+  , Unit.WhatProvides.tests
   ])

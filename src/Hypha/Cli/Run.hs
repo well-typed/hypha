@@ -35,15 +35,15 @@ import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
-import qualified Hypha.Command.Search   as Search
-import qualified Hypha.Command.Source   as Source
-import qualified Hypha.Command.Symbol   as Symbol
-import qualified Hypha.Command.Versions as Versions
+import qualified Hypha.Command.Search        as Search
+import qualified Hypha.Command.Source        as Source
+import qualified Hypha.Command.Symbol        as Symbol
+import qualified Hypha.Command.Versions      as Versions
+import qualified Hypha.Command.WhatProvides  as WhatProvides
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
 import Hypha.Exit (toSystemExitCode)
-import Hypha.Hoogle.Database (HoogleConfig (..))
-import Hypha.Hoogle.Query (mkGlobalHoogle, mkProjectHoogle)
+import Hypha.Hoogle.Query (mkHoogleForFlags)
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
 import Hypha.Output.Outcome
@@ -164,8 +164,14 @@ dispatch flags = \case
       _ -> pure (Left (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")")))
   DepsCommand _ _ _ ->
     pure (Left (notImplemented "deps" "see issues/todo/015-deps-command.md"))
-  WhatProvidesCommand _ ->
-    pure (Left (notImplemented "whatprovides" "see issues/todo/016-whatprovides-command.md"))
+  WhatProvidesCommand sym -> do
+    result <- try @SomeException $ do
+      hoogle <- mkHoogleForFlags flags
+      WhatProvides.runWhatProvides hoogle sym
+    case result of
+      Left e  -> pure (Left (NetworkError (Text.pack (show e))))
+      Right o -> pure (Right o)
+
   DoctorCommand ->
     pure (Left (notImplemented "doctor" "see issues/todo/018-doctor-command.md"))
 
@@ -183,20 +189,7 @@ runSearchWithHoogle
   -> IO (Either HyphaError (Outcome Value))
 runSearchWithHoogle flags q extras = do
   result <- try @SomeException $ do
-    hoogle <-
-      if gfGlobal flags
-        then mkGlobalHoogle
-        else do
-          eRoot <- discoverProjectRoot (gfProjectDir flags)
-          case eRoot of
-            Left _  -> mkGlobalHoogle
-            Right root -> do
-              -- Use the (raw) plan.json contents as the staleness hash; if
-              -- loading fails we fall back to the global DB.
-              ePlan <- loadBuildPlan root
-              case ePlan of
-                Left _  -> mkGlobalHoogle
-                Right _ -> mkProjectHoogle (HoogleConfig root [] "alpha-stub")
+    hoogle <- mkHoogleForFlags flags
     Search.runSearchWith hoogle q extras
   case result of
     Left e  -> pure (Left (NetworkError (Text.pack (show e))))
@@ -264,16 +257,17 @@ compactKeysFor = \case
   "versions" -> Versions.compactKeys
   "module"   -> Module.compactKeys
   "source"   -> Source.compactKeys
-  "symbol"   -> Symbol.compactKeys
-  _          -> Set.empty
+  "whatprovides" -> WhatProvides.compactKeys
+  _              -> Set.empty
 fullKeysFor = \case
-  "search"   -> Search.fullKeys
-  "package"  -> Package.fullKeys
-  "versions" -> Versions.fullKeys
-  "module"   -> Module.fullKeys
-  "source"   -> Source.fullKeys
-  "symbol"   -> Symbol.fullKeys
-  _          -> Set.empty
+  "search"       -> Search.fullKeys
+  "package"      -> Package.fullKeys
+  "versions"     -> Versions.fullKeys
+  "module"       -> Module.fullKeys
+  "source"       -> Source.fullKeys
+  "symbol"       -> Symbol.fullKeys
+  "whatprovides" -> WhatProvides.fullKeys
+  _              -> Set.empty
 
 commandName :: Command -> Text
 commandName = \case
