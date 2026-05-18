@@ -38,6 +38,7 @@ import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
 import qualified Hypha.Command.Search   as Search
 import qualified Hypha.Command.Source   as Source
+import qualified Hypha.Command.Symbol   as Symbol
 import qualified Hypha.Command.Versions as Versions
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
@@ -136,8 +137,11 @@ dispatch flags = \case
               pure (Right oc)
       _ -> pure (Left (UserError ("expected PKG/MOD (got: " <> arg <> ")")))
 
-  SymbolCommand _ ->
-    pure (Left (notImplemented "symbol" "see issues/todo/013-symbol-command.md"))
+  SymbolCommand arg ->
+    withPlan flags $ \root plan -> do
+      env <- mkBuildEnv root plan
+      Symbol.runSymbol env plan arg
+
   SourceCommand arg ->
     case Text.splitOn "/" arg of
       [pkg, modPath] ->
@@ -261,6 +265,7 @@ compactKeysFor = \case
   "versions" -> Versions.compactKeys
   "module"   -> Module.compactKeys
   "source"   -> Source.compactKeys
+  "symbol"   -> Symbol.compactKeys
   _          -> Set.empty
 fullKeysFor = \case
   "search"   -> Search.fullKeys
@@ -268,6 +273,7 @@ fullKeysFor = \case
   "versions" -> Versions.fullKeys
   "module"   -> Module.fullKeys
   "source"   -> Source.fullKeys
+  "symbol"   -> Symbol.fullKeys
   _          -> Set.empty
 
 commandName :: Command -> Text

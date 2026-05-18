@@ -4,6 +4,7 @@ import Test.Tasty (defaultMain, testGroup)
 import qualified Golden.Package
 import qualified Golden.Search
 import qualified Golden.Source
+import qualified Golden.Symbol
 import qualified Golden.Versions
 import qualified Property.HackageCache
 import qualified Property.OutputJson
@@ -20,6 +21,7 @@ main = defaultMain (testGroup "hypha"
   [ Golden.Package.tests
   , Golden.Search.tests
   , Golden.Source.tests
+  , Golden.Symbol.tests
   , Golden.Versions.tests
   , Property.SymbolPath.tests
   , Property.HackageCache.tests
