@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Hypha.Project.Plan
   ( -- * Types
     PlanError (..)
@@ -7,14 +8,16 @@ module Hypha.Project.Plan
   ) where
 
 import Control.Exception (IOException, try)
+import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Data.Text as Text
 
 import qualified Cabal.Plan as CP
 
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), CompilerId (..), ProjectRoot (..) )
-import Hypha.Types.PackageId (PackageName (..), Version (..))
+  ( BuildPlan (..), CompilerId (..), PlannedUnit (..), ProjectRoot (..) )
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | Errors that can occur when loading the build plan.
 data PlanError
@@ -39,7 +42,7 @@ loadBuildPlan (ProjectRoot root) = do
 cabalPlanToBuildPlan :: CP.PlanJson -> BuildPlan
 cabalPlanToBuildPlan pj = BuildPlan
   { bpCompiler  = compilerFromPlan pj
-  , bpPackages  = packagesFromPlan pj
+  , bpUnits     = unitsFromPlan pj
   , bpOverrides = []
   }
 
@@ -50,11 +53,35 @@ compilerFromPlan pj =
       verStr = Text.intercalate (Text.pack ".") (map (Text.pack . show) parts)
   in CompilerId (name <> Text.pack "-" <> verStr)
 
--- | Extract the set of non-builtin, non-local packages with their versions.
-packagesFromPlan :: CP.PlanJson -> Map.Map PackageName Version
-packagesFromPlan pj =
-  Map.fromList
-    [ (PackageName pkgText, Version (CP.dispVer ver))
-    | CP.Unit { CP.uPId = CP.PkgId (CP.PkgName pkgText) ver, CP.uType = utype } <- Map.elems (CP.pjUnits pj)
-    , utype /= CP.UnitTypeLocal
+-- | Extract planned units with their dependencies from the plan.
+unitsFromPlan :: CP.PlanJson -> Map PackageName PlannedUnit
+unitsFromPlan pj =
+  let allUnits = Map.elems (CP.pjUnits pj)
+      -- Build a map from UnitId to PkgId for dependency resolution
+      unitIdToPkgId = Map.fromList
+        [ (CP.uId u, CP.uPId u)
+        | u <- allUnits
+        ]
+      -- Filter to non-local units (include pre-existing and global)
+      relevantUnits = filter (\u -> CP.uType u /= CP.UnitTypeLocal) allUnits
+  in Map.fromList
+    [ (PackageName pkgText, toPlannedUnit unitIdToPkgId u)
+    | u <- relevantUnits
+    , let CP.PkgId (CP.PkgName pkgText) _ = CP.uPId u
     ]
+
+-- | Convert a cabal-plan Unit to our PlannedUnit type.
+toPlannedUnit :: Map CP.UnitId CP.PkgId -> CP.Unit -> PlannedUnit
+toPlannedUnit unitIdToPkgId u =
+  let CP.PkgId (CP.PkgName name) ver = CP.uPId u
+      pkgId = PackageId (PackageName name) (Version (CP.dispVer ver))
+      -- Get library dependencies from all components
+      libDeps = concatMap (Set.toList . CP.ciLibDeps) (Map.elems (CP.uComps u))
+      -- Resolve UnitIds to PackageIds
+      deps = [ toPackageId pid | uid <- libDeps, Just pid <- [Map.lookup uid unitIdToPkgId] ]
+  in PlannedUnit { puId = pkgId, puDeps = deps }
+
+-- | Convert a cabal-plan PkgId to our PackageId type.
+toPackageId :: CP.PkgId -> PackageId
+toPackageId (CP.PkgId (CP.PkgName name) ver) =
+  PackageId (PackageName name) (Version (CP.dispVer ver))

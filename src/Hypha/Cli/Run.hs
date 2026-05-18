@@ -20,7 +20,6 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
-import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -54,7 +53,7 @@ import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PackageOverride (..), ProjectRoot (..)
-  , applyOverrides
+  , applyOverrides, lookupPackage
   )
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
@@ -125,7 +124,7 @@ dispatch flags = \case
     case Text.splitOn "/" arg of
       [pkg, modPath] ->
         withPlan flags $ \root plan ->
-          case Map.lookup (PackageName pkg) (bpPackages plan) of
+          case lookupPackage (PackageName pkg) plan of
             Nothing -> pure (Left (NotFound
               ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
             Just ver -> do

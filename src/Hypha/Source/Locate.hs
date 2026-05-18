@@ -117,7 +117,7 @@ parseExports src
       Nothing   -> t
 
     splitTopLevel :: Text -> [Text]
-    splitTopLevel = go 0 Text.empty
+    splitTopLevel = go (0 :: Int) Text.empty
       where
         go _depth acc t = case Text.uncons t of
           Nothing                         -> [acc]

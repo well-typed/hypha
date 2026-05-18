@@ -8,7 +8,6 @@ module Hypha.Cli.Parser
   ) where
 
 import Data.Text (Text)
-import qualified Data.Text as Text
 import Options.Applicative
 
 -- | Global flags that apply to all commands.

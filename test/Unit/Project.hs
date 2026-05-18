@@ -3,7 +3,6 @@ module Unit.Project (tests) where
 
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=), assertBool)
-import qualified Data.Map.Strict as Map
 import System.FilePath ((</>))
 
 import Hypha.Types.BuildPlan
@@ -43,11 +42,10 @@ testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $ do
       -- Check compiler
       bpCompiler bp @?= CompilerId "ghc-9.6.7"
       -- Check packages
-      let pkgs = bpPackages bp
-      Map.lookup (PackageName "async") pkgs @?= Just (Version "2.2.5")
-      Map.lookup (PackageName "base") pkgs @?= Just (Version "4.18.3.0")
-      Map.lookup (PackageName "text") pkgs @?= Just (Version "2.0.2")
-      Map.lookup (PackageName "nonexistent") pkgs @?= Nothing
+      lookupPackage (PackageName "async") bp @?= Just (Version "2.2.5")
+      lookupPackage (PackageName "base") bp @?= Just (Version "4.18.3.0")
+      lookupPackage (PackageName "text") bp @?= Just (Version "2.0.2")
+      lookupPackage (PackageName "nonexistent") bp @?= Nothing
 
 testParseOverride :: TestTree
 testParseOverride = testCase "parsePackageOverride parses async=2.2.6" $ do
@@ -69,8 +67,8 @@ testApplyOverrides = testCase "applyOverrides changes pinned version in plan" $ 
       let override = PackageOverride (PackageName "async") (Version "2.2.6")
           bp' = applyOverrides [override] bp
       -- Check that the override took effect
-      Map.lookup (PackageName "async") (bpPackages bp') @?= Just (Version "2.2.6")
+      lookupPackage (PackageName "async") bp' @?= Just (Version "2.2.6")
       -- Check that other packages are unchanged
-      Map.lookup (PackageName "base") (bpPackages bp') @?= Just (Version "4.18.3.0")
+      lookupPackage (PackageName "base") bp' @?= Just (Version "4.18.3.0")
       -- Check that overrides are recorded
       bpOverrides bp' @?= [override]
