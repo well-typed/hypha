@@ -33,6 +33,7 @@ import qualified System.Exit as System
 
 import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import qualified Hypha.Command.Deps       as Deps
 import qualified Hypha.Command.Doctor   as Doctor
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
@@ -163,8 +164,10 @@ dispatch flags = \case
               let pid = PackageId (PackageName pkg) ver
               Source.runSource env plan pid modPath (Just sym)
       _ -> pure (Left (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")")))
-  DepsCommand _ _ _ ->
-    pure (Left (notImplemented "deps" "see issues/todo/015-deps-command.md"))
+  DepsCommand pkgName reverseMode mDepth ->
+    withPlan flags $ \_root plan -> do
+      outcome <- Deps.runDeps plan (PackageName pkgName) reverseMode mDepth
+      pure (Right outcome)
   WhatProvidesCommand sym -> do
     result <- try @SomeException $ do
       hoogle <- mkHoogleForFlags flags
@@ -175,10 +178,6 @@ dispatch flags = \case
 
   DoctorCommand ->
     Doctor.runDoctor >>= \outcome -> pure (Right outcome)
-
-notImplemented :: Text -> Text -> HyphaError
-notImplemented name hint =
-  UserError ("command '" <> name <> "' not yet implemented (" <> hint <> ")")
 
 -- | Wire the @search@ command to a real Hoogle DB.  Search is the only
 -- command that can operate without a plan (it can fall back to the global
@@ -258,6 +257,7 @@ compactKeysFor = \case
   "versions" -> Versions.compactKeys
   "module"   -> Module.compactKeys
   "source"   -> Source.compactKeys
+  "deps"     -> Deps.compactKeys
   "whatprovides" -> WhatProvides.compactKeys
   _              -> Set.empty
 fullKeysFor = \case
@@ -267,6 +267,7 @@ fullKeysFor = \case
   "module"       -> Module.fullKeys
   "source"       -> Source.fullKeys
   "doctor"       -> Doctor.fullKeys
+  "deps"         -> Deps.fullKeys
   "symbol"       -> Symbol.fullKeys
   "whatprovides" -> WhatProvides.fullKeys
   _              -> Set.empty
