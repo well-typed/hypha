@@ -1,0 +1,52 @@
+cabal-version:      3.4
+name:               hypha
+version:            0.0.0
+synopsis:           Agent-first CLI for browsing Hackage and Hoogle, scoped to your cabal build plan.
+description:
+  hypha probes a cabal project's actual build plan to answer questions about
+  packages, modules, symbols, sources, and dependencies. JSON-first output for
+  agents; `--human` ANSI text for terminal use; a separate `server` mode (Plan B)
+  serves a browser-based offline doc viewer.
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Well-Typed LLP
+maintainer:         info@well-typed.com
+copyright:          2026 Well-Typed LLP
+category:           Development
+build-type:         Simple
+tested-with:        GHC == 9.6.*, GHC == 9.8.*, GHC == 9.10.*
+
+common warnings
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Widentities
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-export-lists
+    -Wmissing-home-modules
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
+common deps
+  default-language: GHC2021
+  build-depends:    base >= 4.18 && < 5
+
+library
+  import:           warnings, deps
+  hs-source-dirs:   src
+  exposed-modules:  Hypha.Prelude
+
+executable hypha
+  import:           warnings, deps
+  hs-source-dirs:   app/hypha
+  main-is:          Main.hs
+  build-depends:    hypha
+
+test-suite hypha-tests
+  import:           warnings, deps
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Main.hs
+  build-depends:    hypha, tasty
