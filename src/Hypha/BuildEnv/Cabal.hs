@@ -8,11 +8,13 @@ module Hypha.BuildEnv.Cabal
   ) where
 
 import Control.Exception (IOException, try)
+import Data.List (find, isPrefixOf)
+import Data.Maybe (mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
-import System.FilePath ((</>))
+import System.FilePath (takeFileName, (</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
@@ -48,7 +50,7 @@ mkCabalBuildEnv storeRoot = do
 --   Expects format: @ghc-X.Y.Z@
 detectGhcVersion :: FilePath -> IO (Maybe Version)
 detectGhcVersion storeRoot = do
-  let dirname = last (splitPath storeRoot)
+  let dirname = takeFileName storeRoot
   case parseGhcDirName dirname of
     Nothing -> pure Nothing
     Just ver -> pure (Just (Version (Text.pack ver)))
@@ -57,9 +59,6 @@ detectGhcVersion storeRoot = do
     parseGhcDirName name
       | take 4 name == "ghc-" = Just (drop 4 name)
       | otherwise = Nothing
-
-    splitPath :: FilePath -> [String]
-    splitPath = words . map (\c -> if c == '/' then ' ' else c)
 
 -- | Discover all installed packages in the cabal store.
 discoverInStore :: FilePath -> IO (Set PackageId)
@@ -119,24 +118,3 @@ locateHaddock storeRoot (PackageId (PackageName name) (Version ver)) = do
           if exists
             then pure (Just indexPath)
             else pure Nothing
-
--- Helper: like Data.List.mapMaybe
-mapMaybe :: (a -> Maybe b) -> [a] -> [b]
-mapMaybe _ [] = []
-mapMaybe f (x:xs) =
-  case f x of
-    Nothing -> mapMaybe f xs
-    Just y  -> y : mapMaybe f xs
-
--- Helper: like Data.List.find
-find :: (a -> Bool) -> [a] -> Maybe a
-find _ [] = Nothing
-find p (x:xs)
-  | p x       = Just x
-  | otherwise = find p xs
-
--- Helper: like Data.List.isPrefixOf
-isPrefixOf :: String -> String -> Bool
-isPrefixOf [] _ = True
-isPrefixOf _ [] = False
-isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys

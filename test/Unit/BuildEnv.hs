@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Unit.BuildEnv (tests) where
 
+import Data.List (isInfixOf, isSuffixOf)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Test.Tasty (TestTree, testGroup)
@@ -8,7 +9,7 @@ import Test.Tasty.HUnit (testCase, (@?=), assertBool)
 import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.BuildEnv.Cabal (CabalStoreError (..), mkCabalBuildEnv)
+import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
 import Hypha.BuildEnv.Mock (MockBuildEnv (..), emptyMock, mkMockBuildEnv)
 import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
 
@@ -17,6 +18,7 @@ tests = testGroup "Unit.BuildEnv"
   [ testMockReturnsConfiguredPaths
   , testCabalFindsAsync
   , testCabalLocateHaddock
+  , testCabalMissingPackage
   ]
 
 testMockReturnsConfiguredPaths :: TestTree
@@ -73,21 +75,17 @@ testCabalLocateHaddock = testCase "Cabal locateHaddockHtml hits stub index.html"
           assertBool "path should end with index.html" ("index.html" `isSuffixOf` path)
           assertBool "path should contain async-2.2.5" ("async-2.2.5" `isInfixOf` path)
 
--- Helper: like Data.List.isSuffixOf
-isSuffixOf :: String -> String -> Bool
-isSuffixOf suffix str = suffix == drop (length str - length suffix) str
-
--- Helper: like Data.List.isInfixOf
-isInfixOf :: String -> String -> Bool
-isInfixOf needle haystack = any (isPrefixOf needle) (tails haystack)
-
--- Helper: like Data.List.isPrefixOf
-isPrefixOf :: String -> String -> Bool
-isPrefixOf [] _ = True
-isPrefixOf _ [] = False
-isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
-
--- Helper: like Data.List.tails
-tails :: [a] -> [[a]]
-tails [] = [[]]
-tails xs@(_:xs') = xs : tails xs'
+testCabalMissingPackage :: TestTree
+testCabalMissingPackage = testCase "Cabal impl returns Nothing for missing package" $ do
+  let storeRoot = "test" </> "fixtures" </> "fake-cabal-store" </> "ghc-9.6.7"
+  result <- mkCabalBuildEnv storeRoot
+  case result of
+    Left err -> error ("Expected Right, got: " ++ show err)
+    Right env -> do
+      let missingId = PackageId (PackageName "nonexistent") (Version "1.0.0")
+      -- locatePackageSource should return Nothing for missing package
+      src <- locatePackageSource env missingId
+      src @?= Nothing
+      -- locateHaddockHtml should return Nothing for missing package
+      doc <- locateHaddockHtml env missingId
+      doc @?= Nothing
