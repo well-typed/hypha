@@ -46,12 +46,12 @@ tests = testGroup "Module"
       parseExports src @?= []
 
   , testCase "listExportedSymbols reads fixture file" $ do
-      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123/share/async"
+      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"
       exps <- listExportedSymbols env testPkg "Control.Concurrent.Async"
       exps @?= ["Async", "async", "wait", "cancel", "concurrently", "race"]
 
   , testCase "listExportedSymbols returns empty for missing module" $ do
-      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123/share/async"
+      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"
       exps <- listExportedSymbols env testPkg "NonExistent.Module"
       exps @?= []
 
@@ -66,16 +66,16 @@ tests = testGroup "Module"
       exps @?= []
 
   , testCase "locateSymbolDefinition finds definition line" $ do
-      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123/share/async"
+      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"
       loc <- locateSymbolDefinition env testPkg "Control.Concurrent.Async" "module"
       case loc of
         Nothing -> error "expected SourceLocation"
         Just sl -> do
-          slPath sl @?= "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123/share/async/Control/Concurrent/Async.hs"
+          slPath sl @?= "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async/Control/Concurrent/Async.hs"
           slLine sl @?= 1
 
   , testCase "locateSymbolDefinition returns Nothing for missing symbol" $ do
-      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123/share/async"
+      let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"
       loc <- locateSymbolDefinition env testPkg "Control.Concurrent.Async" "nonexistent"
       loc @?= Nothing
   ]
