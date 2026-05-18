@@ -1,4 +1,29 @@
 .tree { list-style: none; padding: 0; margin: 0; }
-.tree li { padding: 0.15rem 0; }
-.tree details > summary { cursor: pointer; }
-.tree .module-leaf a { display: block; padding: 0.1rem 0; }
+.tree li {
+  padding: 0;
+  border-radius: 4px;
+}
+.tree li a {
+  display: block;
+  padding: 0.25rem 0.55rem;
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree li a:hover {
+  background: var(--code-bg);
+  color: var(--accent);
+  text-decoration: none;
+}
+.tree li.active a { color: var(--accent); font-weight: 600; }
+.tree .section-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 0.4rem 0.55rem 0.2rem;
+}

@@ -30,10 +30,14 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
   body_ $ do
     div_ [class_ "app"] $ do
       div_ [class_ "topbar"] $ do
+        a_ [href_ "/", class_ "brand"] "hypha"
         UISearch.searchInput
-      div_ [class_ "sidebar"] (UITree.packageTree pkgs)
+      div_ [class_ "sidebar"] $ do
+        div_ [class_ "section-title"] "Packages"
+        UITree.packageTree pkgs
       div_ [class_ "main"] $ do
         breadcrumbs crumbs
+        ul_ [class_ "results", id_ "results"] (pure ())
         body
     helpOverlay
 

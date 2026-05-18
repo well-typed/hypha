@@ -5,6 +5,8 @@ module Hypha.Server.Api
   ( HyphaApi
   , api
   , HTML
+  , CSS
+  , JS
   ) where
 
 import qualified Data.ByteString.Lazy as BL
@@ -21,6 +23,20 @@ instance Accept HTML where
 
 instance MimeRender HTML (Html ()) where
   mimeRender _ = renderBS
+
+-- | Custom @text/css@ content type for stylesheets.
+data CSS
+instance Accept CSS where
+  contentType _ = "text" // "css" /: ("charset", "utf-8")
+instance MimeRender CSS BL.ByteString where
+  mimeRender _ = id
+
+-- | Custom @application/javascript@ content type.
+data JS
+instance Accept JS where
+  contentType _ = "application" // "javascript" /: ("charset", "utf-8")
+instance MimeRender JS BL.ByteString where
+  mimeRender _ = id
 
 -- | All server routes.
 --
@@ -45,9 +61,9 @@ type HyphaApi
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Capture "sym" String :> Get '[HTML] (Html ())
   :<|> "haddock" :> Capture "pkgver" String :> CaptureAll "path" String :> Get '[HTML] (Html ())
   :<|> "source"  :> Capture "pkg" String :> Capture "mod" String :> Get '[HTML] (Html ())
-  :<|> "assets" :> "style.css"      :> Get '[OctetStream] BL.ByteString
-  :<|> "assets" :> "htmx.min.js"    :> Get '[OctetStream] BL.ByteString
-  :<|> "assets" :> "keybindings.js" :> Get '[OctetStream] BL.ByteString
+  :<|> "assets" :> "style.css"      :> Get '[CSS] BL.ByteString
+  :<|> "assets" :> "htmx.min.js"    :> Get '[JS]  BL.ByteString
+  :<|> "assets" :> "keybindings.js" :> Get '[JS]  BL.ByteString
   :<|> "healthz" :> Get '[PlainText] String
 
 api :: Proxy HyphaApi

@@ -35,6 +35,10 @@ data ServerConfig = ServerConfig
   , scHaddockHtml  :: !(Text -> [String] -> IO (Maybe BL.ByteString))
       -- ^ \"\<pkg\>-\<ver\>\" + path segments → raw bytes (already rewritten)
   , scSourceText   :: !(Text -> Text -> IO (Maybe Text))
+  , scPackageInfo  :: !(Text -> IO (Maybe (Text, [Text])))
+      -- ^ Package overview: pkg → (version, top-level modules)
+  , scModuleExports :: !(Text -> Text -> IO [Text])
+      -- ^ Module export list: pkg → mod → [symbol names]
   }
 
 -- | Build a WAI 'Application' from the given 'ServerConfig'.  The CSP
@@ -68,13 +72,23 @@ server cfg =
   :<|> pure (BL.fromStrict Assets.keybindingsJs)
   :<|> pure "ok"
 
--- | Home page — landing with search bar.
+-- | Home page — landing with project headline + prominent search.
 homePage :: ServerConfig -> Handler (Html ())
 homePage cfg = pure $ UI.shellPage (scProjectName cfg) [] (scPackages cfg) $
-  p_ $ do
-    toHtml ("Welcome to hypha. Press " :: Text)
-    code_ "s"
-    toHtml (" to search." :: Text)
+  section_ [class_ "hero"] $ do
+    h1_ (toHtml (scProjectName cfg))
+    p_  [class_ "lede"] $ do
+      toHtml ("Browsing " :: Text)
+      strong_ (toHtml (Text.pack (show (length (scPackages cfg)))))
+      toHtml (" packages from your build plan." :: Text)
+    p_  [class_ "hint"] $ do
+      toHtml ("Press " :: Text)
+      kbd_ "s"
+      toHtml (" or " :: Text)
+      kbd_ "/"
+      toHtml (" to search. Press " :: Text)
+      kbd_ "?"
+      toHtml (" for all keybindings." :: Text)
 
 -- | Search results fragment (HTMX target).
 searchPage :: ServerConfig -> Maybe String -> Handler (Html ())
@@ -83,16 +97,50 @@ searchPage cfg mq = do
   rows <- liftIO (scHumanSearch cfg q)
   pure (UISearch.resultsFragment rows)
 
--- | Package overview page.
+-- | Package overview page — show pinned version + linked module index.
 pkgPage :: ServerConfig -> String -> Handler (Html ())
-pkgPage cfg pkg = pure $ UI.shellPage (Text.pack pkg) [] (scPackages cfg) $
-  p_ (toHtml ("Package " <> Text.pack pkg))
+pkgPage cfg pkg = do
+  let pkgT = Text.pack pkg
+  m <- liftIO (scPackageInfo cfg pkgT)
+  let crumbs = [(pkgT, "/pkg/" <> pkgT)]
+  pure $ UI.shellPage pkgT crumbs (scPackages cfg) $ case m of
+    Nothing -> p_ [class_ "warn"] (toHtml ("Package " <> pkgT <> " not found."))
+    Just (ver, mods) -> div_ [class_ "pkg"] $ do
+      h1_ (toHtml pkgT)
+      p_  [class_ "meta"] $ do
+        toHtml ("version " :: Text)
+        code_ (toHtml ver)
+      h2_ "Modules"
+      if null mods
+        then p_ [class_ "hint"] (toHtml ("No modules exposed." :: Text))
+        else ul_ [class_ "module-list"] $
+          mapM_ (\mp -> li_ $ a_ [href_ ("/pkg/" <> pkgT <> "/" <> mp)] (toHtml mp)) mods
 
--- | Module view page.
+-- | Module view page — list exports with links to symbol cards.
 modPage :: ServerConfig -> String -> String -> Handler (Html ())
-modPage cfg pkg modPath = pure $
-  UI.shellPage (Text.pack modPath) [] (scPackages cfg) $
-    p_ (toHtml ("Module " <> Text.pack modPath <> " in " <> Text.pack pkg))
+modPage cfg pkg modPath = do
+  let pkgT = Text.pack pkg
+      modT = Text.pack modPath
+  exps <- liftIO (scModuleExports cfg pkgT modT)
+  let crumbs =
+        [ (pkgT, "/pkg/" <> pkgT)
+        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
+        ]
+  pure $ UI.shellPage modT crumbs (scPackages cfg) $ div_ [class_ "mod"] $ do
+    h1_ (toHtml modT)
+    p_  [class_ "meta"] $ do
+      toHtml ("in package " :: Text)
+      a_ [href_ ("/pkg/" <> pkgT)] (toHtml pkgT)
+    h2_ "Exports"
+    if null exps
+      then p_ [class_ "hint"] (toHtml ("No exports detected." :: Text))
+      else ul_ [class_ "export-list"] $
+        mapM_ (\nm -> li_ $
+                 a_ [href_ ("/pkg/" <> pkgT <> "/" <> modT <> "/" <> nm)]
+                    (code_ (toHtml nm)))
+              exps
+    p_ [class_ "footer-actions"] $
+      a_ [href_ ("/source/" <> pkgT <> "/" <> modT)] (toHtml ("View source" :: Text))
 
 -- | Symbol documentation card.
 symPage :: ServerConfig

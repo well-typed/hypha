@@ -142,7 +142,7 @@ buildServerConfig
   -> PackageResolver IO
   -> Hoogle IO
   -> IO App.ServerConfig
-buildServerConfig plan env _hclient resolver hoogle = do
+buildServerConfig plan _env _hclient resolver hoogle = do
   let pids      = planPackageIds plan
       packages  = map (unPackageName . pkgName) pids
   slots <- Slots.initialiseSlots pids
@@ -161,22 +161,20 @@ buildServerConfig plan env _hclient resolver hoogle = do
         case ePid of
           Left _ -> pure Nothing
           Right rp -> do
-            let pid = rpPkgId rp
-            mDir <- locatePackageSource env pid
-            case mDir of
-              Nothing  -> pure Nothing
-              Just dir -> do
-                let file = dir FP.</> Locate.modulePathToFile modT
-                exists <- Dir.doesFileExist file
-                if not exists
-                  then pure Nothing
-                  else do
-                    src <- TIO.readFile file
+            eDir <- resolveSrc resolver (rpPkgId rp)
+            case eDir of
+              Left _  -> pure Nothing
+              Right d -> do
+                mFile <- Locate.findModuleFile d modT
+                case mFile of
+                  Nothing -> pure Nothing
+                  Just f  -> do
+                    src <- TIO.readFile f
                     let info = Extract.extractSymbolInfo src symT
                         sig  = maybe "" id (Extract.siSignature info)
                         hd   = maybe "" unDocText (Extract.siHaddock info)
                         ln   = maybe 1 id (Extract.siLine info)
-                    pure (Just (sig, hd, Text.pack file, ln))
+                    pure (Just (sig, hd, Text.pack f, ln))
     , App.scHaddockHtml  = \pkgVer segments -> do
         let pidM = parsePkgVer pkgVer
         case pidM of
@@ -196,16 +194,95 @@ buildServerConfig plan env _hclient resolver hoogle = do
         case ePid of
           Left _ -> pure Nothing
           Right rp -> do
-            mDir <- locatePackageSource env (rpPkgId rp)
-            case mDir of
-              Nothing  -> pure Nothing
-              Just dir -> do
-                let file = dir FP.</> Locate.modulePathToFile modT
-                exists <- Dir.doesFileExist file
-                if not exists
-                  then pure Nothing
-                  else Just <$> TIO.readFile file
+            let pid = rpPkgId rp
+            eDir <- resolveSrc resolver pid
+            case eDir of
+              Left _   -> pure Nothing
+              Right d  -> do
+                mFile <- Locate.findModuleFile d modT
+                case mFile of
+                  Nothing -> pure Nothing
+                  Just f  -> Just <$> TIO.readFile f
+    , App.scPackageInfo  = \pkgT -> do
+        ePid <- resolvePkg resolver (PackageName pkgT)
+        case ePid of
+          Left _   -> pure Nothing
+          Right rp -> do
+            let pid = rpPkgId rp
+                ver = unVersion (pkgVersion pid)
+            mods <- listModulesFor resolver pid
+            pure (Just (ver, mods))
+    , App.scModuleExports = \pkgT modT -> do
+        ePid <- resolvePkg resolver (PackageName pkgT)
+        case ePid of
+          Left _   -> pure []
+          Right rp -> do
+            eDir <- resolveSrc resolver (rpPkgId rp)
+            case eDir of
+              Left _  -> pure []
+              Right d -> do
+                mFile <- Locate.findModuleFile d modT
+                case mFile of
+                  Nothing -> pure []
+                  Just f  -> Locate.parseExports <$> TIO.readFile f
     }
+
+-- | Walk the resolved source tree and list every @.hs@ file as a dotted
+-- module path.  Skips the standard build/test/bench directories so the
+-- module index reflects the library's exposed-modules-shape closely enough.
+listModulesFor :: PackageResolver IO -> PackageId -> IO [Text]
+listModulesFor resolver pid = do
+  eDir <- resolveSrc resolver pid
+  case eDir of
+    Left _   -> pure []
+    Right d  -> do
+      let roots = [d, d FP.</> "src", d FP.</> "library", d FP.</> "lib"]
+      existing <- filterExisting roots
+      paths    <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) existing
+      pure (map (Text.pack . hsToModule) paths)
+
+filterExisting :: [FilePath] -> IO [FilePath]
+filterExisting [] = pure []
+filterExisting (p : ps) = do
+  ok <- Dir.doesDirectoryExist p
+  rest <- filterExisting ps
+  pure (if ok then p : rest else rest)
+
+findHs :: FilePath -> Int -> IO [FilePath]
+findHs _ depth | depth < 0 = pure []
+findHs dir depth = do
+  entries <- Dir.listDirectory dir
+  let absEntries = map (dir FP.</>) entries
+  concat <$> mapM (visit depth) absEntries
+  where
+    visit d p = do
+      isDir <- Dir.doesDirectoryExist p
+      if isDir
+        then if skipDir (FP.takeFileName p)
+               then pure []
+               else findHs p (d - 1)
+        else if ".hs" `Text.isSuffixOf` Text.pack p
+               then pure [p]
+               else pure []
+
+    skipDir name = case name of
+      '.':_ -> True
+      "dist" -> True
+      "dist-newstyle" -> True
+      "test" -> True
+      "tests" -> True
+      "bench" -> True
+      "benchmarks" -> True
+      "Setup" -> True
+      _ -> False
+
+hsToModule :: FilePath -> String
+hsToModule fp =
+  let stripped = case Text.stripSuffix ".hs" (Text.pack fp) of
+                   Just t  -> Text.unpack t
+                   Nothing -> fp
+      dotted   = map (\c -> if c == '/' then '.' else c) stripped
+  in dotted
 
 -- | Project name (best-effort).  Uses the first local package, or a
 -- placeholder when none are present.

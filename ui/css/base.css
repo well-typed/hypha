@@ -1,26 +1,86 @@
 :root {
   color-scheme: light dark;
-  --bg: #fff;
-  --fg: #111;
-  --muted: #666;
-  --accent: #b0413e;
-  --code-bg: #f4f1ea;
-  --border: #ddd;
+  --bg:        #fdfcfa;
+  --panel:     #ffffff;
+  --fg:        #1a1a1a;
+  --muted:     #6b6f76;
+  --accent:    #b0413e;
+  --accent-2:  #5a3a86;
+  --code-bg:   #f4f1ea;
+  --code-fg:   #1a1a1a;
+  --border:    #e4e2dd;
+  --shadow:    0 2px 8px rgba(0, 0, 0, 0.04);
+  --mono:      ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+  --sans:      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161616;
-    --fg: #e8e8e8;
-    --muted: #8a8a8a;
-    --accent: #f08c84;
-    --code-bg: #1f1f1f;
-    --border: #333;
+    --bg:        #0f1115;
+    --panel:     #161922;
+    --fg:        #e8e9ee;
+    --muted:     #8a8f9c;
+    --accent:    #f08c84;
+    --accent-2:  #b3a1e5;
+    --code-bg:   #1a1d26;
+    --code-fg:   #e8e9ee;
+    --border:    #262a36;
+    --shadow:    0 2px 12px rgba(0, 0, 0, 0.32);
   }
 }
+
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
-             font-family: ui-sans-serif, system-ui, sans-serif; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-code, pre { font-family: ui-monospace, monospace; background: var(--code-bg); }
-pre { padding: 0.6rem 0.8rem; border-radius: 4px; overflow-x: auto; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+a:hover { color: var(--accent-2); text-decoration: underline; }
+
+h1, h2, h3, h4 {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+h1 { font-size: 1.75rem; }
+h2 { font-size: 1.2rem;  margin-top: 1.5rem; color: var(--fg); }
+h3 { font-size: 0.95rem; margin-top: 1.2rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+code, pre {
+  font-family: var(--mono);
+  background: var(--code-bg);
+  color: var(--code-fg);
+}
+code { padding: 0.05em 0.35em; border-radius: 3px; font-size: 0.92em; }
+pre  {
+  padding: 0.8rem 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  line-height: 1.45;
+}
+kbd {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--fg);
+}
+
+::selection { background: var(--accent); color: #fff; }

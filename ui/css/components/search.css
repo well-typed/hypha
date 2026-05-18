@@ -1,7 +1,46 @@
-.search-input { flex: 1; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
-                background: var(--bg); color: var(--fg); border-radius: 4px; }
-.results      { list-style: none; padding: 0; margin: 0.6rem 0 0 0; }
-.results li   { padding: 0.3rem 0.4rem; border-radius: 3px; cursor: pointer; }
-.results li.cursor    { background: var(--code-bg); }
-.results li .sig      { color: var(--muted); margin-left: 0.6rem; }
-.results li .pkgmod   { color: var(--accent); font-size: 0.85rem; }
+.search-input {
+  flex: 1;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(176, 65, 62, 0.15);
+}
+
+.results {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0 0;
+}
+.results li {
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  margin-bottom: 0.15rem;
+}
+.results li:hover         { background: var(--code-bg); }
+.results li.cursor        { background: var(--code-bg); border-color: var(--border); }
+.results li .pkgmod       {
+  color: var(--accent-2);
+  font-size: 0.78rem;
+  text-transform: lowercase;
+  display: block;
+  margin-bottom: 0.15rem;
+}
+.results li .name         { font-family: var(--mono); font-weight: 600; }
+.results li .sig          {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  margin-left: 0.6rem;
+}
+.results .empty           { color: var(--muted); padding: 0.5rem 0.75rem; }

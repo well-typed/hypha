@@ -1,12 +1,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.Ui.Search
   ( searchInput
+  , searchPanel
   , resultsFragment
   ) where
 
 import Data.Text (Text)
 import Lucid
 import Lucid.Base (makeAttributes)
+
+-- | Search input + empty results container.  HTMX swaps content into
+-- @#results@ as the user types.
+searchPanel :: Html ()
+searchPanel = do
+  searchInput
+  ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | The search input bar with HTMX live-search attributes.
 searchInput :: Html ()
