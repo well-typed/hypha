@@ -62,11 +62,11 @@ unitsFromPlan pj =
         [ (CP.uId u, CP.uPId u)
         | u <- allUnits
         ]
-      -- Filter to non-local units (include pre-existing and global)
-      relevantUnits = filter (\u -> CP.uType u /= CP.UnitTypeLocal) allUnits
+      -- Include all units (local, global, builtin, inplace).
+      -- Local packages (hypha itself) are included with puIsLocal = True.
   in Map.fromList
     [ (PackageName pkgText, toPlannedUnit unitIdToPkgId u)
-    | u <- relevantUnits
+    | u <- allUnits
     , let CP.PkgId (CP.PkgName pkgText) _ = CP.uPId u
     ]
 
@@ -79,7 +79,11 @@ toPlannedUnit unitIdToPkgId u =
       libDeps = concatMap (Set.toList . CP.ciLibDeps) (Map.elems (CP.uComps u))
       -- Resolve UnitIds to PackageIds
       deps = [ toPackageId pid | uid <- libDeps, Just pid <- [Map.lookup uid unitIdToPkgId] ]
-  in PlannedUnit { puId = pkgId, puDeps = deps }
+  in PlannedUnit
+    { puId      = pkgId
+    , puDeps    = deps
+    , puIsLocal = (CP.uType u == CP.UnitTypeLocal)
+    }
 
 -- | Convert a cabal-plan PkgId to our PackageId type.
 toPackageId :: CP.PkgId -> PackageId

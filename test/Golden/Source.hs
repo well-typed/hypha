@@ -43,6 +43,7 @@ runSourceCommand = do
             [ (PackageName "async", PlannedUnit
                 { puId = PackageId (PackageName "async") (Version "2.2.5")
                 , puDeps = []
+                , puIsLocal = False
                 })
             ]
         }

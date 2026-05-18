@@ -252,12 +252,14 @@ errorOutcome err =
 -- distinction yet (alpha).
 compactKeysFor, fullKeysFor :: Text -> Set Text
 compactKeysFor = \case
-  "search"   -> Search.compactKeys
-  "package"  -> Package.compactKeys
-  "versions" -> Versions.compactKeys
-  "module"   -> Module.compactKeys
-  "source"   -> Source.compactKeys
-  "deps"     -> Deps.compactKeys
+  "search"       -> Search.compactKeys
+  "package"      -> Package.compactKeys
+  "versions"     -> Versions.compactKeys
+  "module"       -> Module.compactKeys
+  "source"       -> Source.compactKeys
+  "doctor"       -> Doctor.compactKeys
+  "deps"         -> Deps.compactKeys
+  "symbol"       -> Symbol.compactKeys
   "whatprovides" -> WhatProvides.compactKeys
   _              -> Set.empty
 fullKeysFor = \case
@@ -352,19 +354,35 @@ renderJsonValue depth v =
   let ind = Text.replicate (depth * 2) " "
   in case v of
        Aeson.Object km ->
-         Text.intercalate "\n"
-           [ ind <> Key.toText k <> ": " <> renderInline val
+         if KM.null km
+         then ind <> "{}"
+         else Text.intercalate "\n"
+           [ case val of
+               -- Non-empty nested objects/arrays rendered on their own lines
+               Aeson.Object km2 | not (KM.null km2) -> ind <> Key.toText k <> ":\n" <> renderJsonValue (depth + 1) val
+               Aeson.Array  xs  | not (V.null xs)   -> ind <> Key.toText k <> ":\n" <> renderJsonValue (depth + 1) val
+               -- Empty objects/arrays and leaf values inline
+               _                                     -> ind <> Key.toText k <> ": " <> renderInline val
            | (k, val) <- KM.toList km ]
        Aeson.Array xs ->
-         Text.intercalate "\n"
+         if V.null xs
+         then ind <> "[]"
+         else Text.intercalate "\n"
            [ ind <> "- " <> renderInline x | x <- V.toList xs ]
        other -> ind <> renderInline other
 
 renderInline :: Value -> Text
 renderInline = \case
   Aeson.String s -> s
-  Aeson.Number n -> Text.pack (show n)
+  Aeson.Number n ->
+    let s = Text.pack (show n)
+        -- Trim redundant ".0" suffix from whole-number Scientific values
+    in if ".0" `Text.isSuffixOf` s then Text.dropEnd 2 s else s
   Aeson.Bool b   -> if b then "true" else "false"
   Aeson.Null     -> "null"
-  Aeson.Object{} -> "{…}"
-  Aeson.Array{}  -> "[…]"
+  Aeson.Object km ->
+    let entries = [ Key.toText k <> ": " <> renderInline val | (k, val) <- KM.toList km ]
+    in "{" <> Text.intercalate ", " entries <> "}"
+  Aeson.Array xs ->
+    let items = [ renderInline x | x <- V.toList xs ]
+    in "[" <> Text.intercalate ", " items <> "]"

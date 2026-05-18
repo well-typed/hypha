@@ -30,20 +30,24 @@ mkTestPlan = emptyBuildPlan
               [ PackageId (PackageName "stm") (Version "2.5.1")
               , PackageId (PackageName "hashable") (Version "1.4.4")
               ]
+          , puIsLocal = False
           })
       , (PackageName "stm", PlannedUnit
           { puId = PackageId (PackageName "stm") (Version "2.5.1")
           , puDeps =
               [ PackageId (PackageName "array") (Version "0.5.6")
               ]
+          , puIsLocal = False
           })
       , (PackageName "hashable", PlannedUnit
           { puId = PackageId (PackageName "hashable") (Version "1.4.4")
           , puDeps = []
+          , puIsLocal = False
           })
       , (PackageName "array", PlannedUnit
           { puId = PackageId (PackageName "array") (Version "0.5.6")
           , puDeps = []
+          , puIsLocal = False
           })
       ]
   }

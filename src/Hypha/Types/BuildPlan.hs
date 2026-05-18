@@ -49,17 +49,19 @@ data PackageOverride = PackageOverride
   }
   deriving stock (Show, Eq, Ord)
 
--- | A single package entry in the build plan.
+-- | A single package entry in the build plan (legacy type; prefer 'PlannedUnit').
 data PlanPackage = PlanPackage
   { ppName    :: !PackageName
   , ppVersion :: !Version
   }
   deriving stock (Show, Eq, Ord)
 
--- | A planned unit with its dependencies.
+-- | A planned unit with its dependencies and metadata.
 data PlannedUnit = PlannedUnit
-  { puId   :: !PackageId
-  , puDeps :: ![PackageId]
+  { puId      :: !PackageId
+  , puDeps    :: ![PackageId]
+  , puIsLocal :: !Bool
+    -- ^ Whether this is a local project package (not a dependency).
   }
   deriving stock (Show, Eq)
 
@@ -104,7 +106,7 @@ applyOverrides overrides bp = bp
   where
     applyOverride (PackageOverride n v) =
       Map.insertWith (\_ old -> old { puId = (puId old) { pkgVersion = v } }) n
-        PlannedUnit { puId = PackageId n v, puDeps = [] }
+        PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False }
 
 -- | Get forward dependencies of a package.
 forwardDepsOf :: PackageName -> BuildPlan -> [(PackageName, Version)]
