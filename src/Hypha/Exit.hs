@@ -29,7 +29,7 @@ exitOk = ExitCode 0
 exitUserError :: ExitCode
 exitUserError = ExitCode 2
 
--- | Not found — symbol/pkg not in plan (and no @--any@), or absent from Hackage.
+-- | Not found — symbol/pkg absent from the full fallback chain (plan → store → Hackage).
 exitNotFound :: ExitCode
 exitNotFound = ExitCode 3
 

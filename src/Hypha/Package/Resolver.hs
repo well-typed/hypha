@@ -4,13 +4,13 @@
 -- | Package resolution with automatic fallback chain.
 --
 -- When a command needs package metadata or source, the resolver implements
--- the lookup chain from the design spec (Section 7) but without the @--any@
--- flag — widening to Hackage is automatic:
+-- the seamless lookup chain from the design spec (Section 7).  No @--any@
+-- flag — widening is automatic:
 --
---   1. Check the build plan (pinned version from @plan.json@).
---   2. If not in plan, check the cabal store (installed packages).
---   3. If not in store, fetch from Hackage JSON API.
---   4. Cache the result for subsequent lookups.
+--   1. Local HTTP cache (XDG cache, consulted by 'HackageClient').
+--   2. Build plan (pinned version from @plan.json@).
+--   3. Cabal store (installed packages).
+--   4. Hackage JSON API (latest version).
 --
 -- Each step tags the result with @outside_plan@ so the envelope can surface it.
 module Hypha.Package.Resolver

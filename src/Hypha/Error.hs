@@ -18,7 +18,7 @@ import Hypha.Exit (ExitCode, exitUserError, exitNotFound, exitNetworkError, exit
 -- @test/Property/Errors.hs@).
 data HyphaError
   = UserError     !Text   -- ^ bad CLI args, malformed path, conflicting flags
-  | NotFound      !Text   -- ^ symbol/pkg not in plan (and no --any), or absent from Hackage
+  | NotFound      !Text   -- ^ symbol/pkg absent from the full fallback chain (plan → store → Hackage)
   | NetworkError  !Text   -- ^ --offline with cache miss, 429, 503, etc.
   | Corruption    !Text   -- ^ cache / parse / on-disk corruption
   | EnvError      !Text   -- ^ no plan.json, missing ghc/haddock, store unreachable, Stack

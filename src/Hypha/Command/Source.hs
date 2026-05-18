@@ -8,6 +8,7 @@ module Hypha.Command.Source
   , fullKeys
     -- * Execution
   , runSource
+  , runSourceFromDir
   ) where
 
 import Data.Aeson (Value (..), (.=))
@@ -62,44 +63,50 @@ fullKeys = Set.fromList
 --   around the symbol definition (or the module header if no symbol).
 runSource :: BuildEnv IO -> BuildPlan -> PackageId -> Text -> Maybe Text -> IO (Either HyphaError (Outcome Value))
 runSource env _plan pid modPath mSym = do
-  -- Try to locate the source file
   mSrcDir <- locatePackageSource env pid
   case mSrcDir of
     Nothing -> pure (Left $ NotFound
       ("source not found for " <> renderPid pid <> "; run `cabal build` first"))
-    Just srcDir -> do
-      let filePath = srcDir </> modulePathToFile modPath
-      exists <- doesFileExist filePath
-      if not exists
-        then pure (Left $ NotFound
-          ("module file not found: " <> Text.pack filePath))
-        else do
-          -- Find the symbol location (or use line 1 for module header)
-          mLoc <- case mSym of
-            Nothing -> pure (Just (SourceLocation filePath 1))
-            Just sym -> locateSymbolDefinition env pid modPath sym
+    Just srcDir -> runSourceFromDir env pid srcDir modPath mSym
 
-          case mLoc of
-            Nothing -> pure (Left $ NotFound
-              ("symbol '" <> fromMaybe "" mSym <> "' not found in " <> modPath))
-            Just loc -> do
-              -- Read the file and extract a 30-line snippet
-              content <- TIO.readFile (slPath loc)
-              let allLines = Text.lines content
-                  targetLine = slLine loc
-                  snippet = extractSnippet targetLine allLines
-
-              let result = SourceResult
-                    { srcPackage = unPackageName (pkgName pid)
-                    , srcVersion = unVersion (pkgVersion pid)
-                    , srcModule  = modPath
-                    , srcSymbol  = mSym
-                    , srcPath    = slPath loc
-                    , srcLine    = slLine loc
-                    , srcSnippet = snippet
-                    }
-
-              pure (Right $ successOutcome (sourceResultToJSON result))
+-- | Variant that takes an already-resolved source directory.  Used by the
+-- 'PackageResolver'-driven dispatch path so the full fallback chain (plan
+-- → store → Hackage tarball) can locate sources before this command runs.
+runSourceFromDir
+  :: BuildEnv IO
+  -> PackageId
+  -> FilePath   -- ^ Source directory (resolved upstream).
+  -> Text       -- ^ Module path (dotted).
+  -> Maybe Text -- ^ Optional symbol name.
+  -> IO (Either HyphaError (Outcome Value))
+runSourceFromDir env pid srcDir modPath mSym = do
+  let filePath = srcDir </> modulePathToFile modPath
+  exists <- doesFileExist filePath
+  if not exists
+    then pure (Left $ NotFound
+      ("module file not found: " <> Text.pack filePath))
+    else do
+      mLoc <- case mSym of
+        Nothing  -> pure (Just (SourceLocation filePath 1))
+        Just sym -> locateSymbolDefinition env pid modPath sym
+      case mLoc of
+        Nothing -> pure (Left $ NotFound
+          ("symbol '" <> fromMaybe "" mSym <> "' not found in " <> modPath))
+        Just loc -> do
+          content <- TIO.readFile (slPath loc)
+          let allLines = Text.lines content
+              targetLine = slLine loc
+              snippet = extractSnippet targetLine allLines
+              result = SourceResult
+                { srcPackage = unPackageName (pkgName pid)
+                , srcVersion = unVersion (pkgVersion pid)
+                , srcModule  = modPath
+                , srcSymbol  = mSym
+                , srcPath    = slPath loc
+                , srcLine    = slLine loc
+                , srcSnippet = snippet
+                }
+          pure (Right $ successOutcome (sourceResultToJSON result))
 
 -- | Extract a 30-line snippet around the target line (15 lines before, 15 after).
 extractSnippet :: Int -> [Text] -> Text

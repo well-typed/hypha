@@ -41,13 +41,10 @@ compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList ["name", "version", "in_plan", "is_local", "deps_count"]
 fullKeys    = compactKeys
 
--- | Execute the @package@ command.
---
--- Parses the optional @\@ver@ qualifier from the raw argument (spec §9).
---
--- If the package is not present in the build plan we return a 'NotFound'
--- error wrapped as a structured failure 'Outcome'.  The caller can also use
--- @--any@ to widen.
+-- | Plan-only variant of the @package@ command, used by golden tests for the
+-- in-plan path.  Production dispatch in "Hypha.Cli.Run" goes through the
+-- 'Hypha.Package.Resolver.PackageResolver' which performs the full fallback
+-- chain (plan → store → Hackage).
 runPackage :: BuildPlan -> Text -> Either HyphaError (Outcome Value)
 runPackage plan rawArg =
   let (rawName, _mVerHint) = splitVersionHint rawArg
@@ -55,7 +52,7 @@ runPackage plan rawArg =
   in case lookupUnit pkgName plan of
        Just pu -> Right (mkSuccessOutcome rawName (pkgVersion (puId pu)) (puIsLocal pu) (length (puDeps pu)))
        Nothing -> Left $ NotFound
-         ("package '" <> rawName <> "' not in build plan (use --any to widen)")
+         ("package '" <> rawName <> "' not in build plan")
 
 -- | Total variant: never fails at the IO boundary, but encodes "not in plan"
 -- as a structured 'OutcomeFailure' so the envelope shape stays consistent.

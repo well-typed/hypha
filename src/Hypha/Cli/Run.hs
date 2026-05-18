@@ -61,7 +61,7 @@ import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PackageOverride (..), ProjectRoot (..)
-  , applyOverrides, emptyBuildPlan, lookupPackage
+  , applyOverrides, emptyBuildPlan
   )
 import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
 
@@ -239,24 +239,8 @@ dispatch flags = \case
 
   SourceCommand arg ->
     case Text.splitOn "/" arg of
-      [pkg, modPath] ->
-        withPlan flags $ \root plan ->
-          case lookupPackage (PackageName pkg) plan of
-            Nothing -> pure (Left (NotFound
-              ("package '" <> pkg <> "' not in build plan")))
-            Just ver -> do
-              env <- mkBuildEnv root plan
-              let pid = PackageId (PackageName pkg) ver
-              Source.runSource env plan pid modPath Nothing
-      [pkg, modPath, sym] ->
-        withPlan flags $ \root plan ->
-          case lookupPackage (PackageName pkg) plan of
-            Nothing -> pure (Left (NotFound
-              ("package '" <> pkg <> "' not in build plan")))
-            Just ver -> do
-              env <- mkBuildEnv root plan
-              let pid = PackageId (PackageName pkg) ver
-              Source.runSource env plan pid modPath (Just sym)
+      [pkg, modPath]      -> runSourceArm flags pkg modPath Nothing
+      [pkg, modPath, sym] -> runSourceArm flags pkg modPath (Just sym)
       _ -> pure (Left (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")")))
 
   DepsCommand pkgName reverseMode mDepth ->
@@ -274,6 +258,28 @@ dispatch flags = \case
 
   DoctorCommand ->
     Doctor.runDoctor >>= \outcome -> pure (Right outcome)
+
+-- | Source command arm: resolve package (plan → store → Hackage), locate
+-- source directory (local → Hackage tarball), then extract snippet.
+runSourceArm
+  :: GlobalFlags
+  -> Text
+  -> Text
+  -> Maybe Text
+  -> IO (Either HyphaError (Outcome Value))
+runSourceArm flags pkg modPath mSym =
+  withResolver flags $ \(resolver, env) -> do
+    eRp <- resolvePkg resolver (PackageName pkg)
+    case eRp of
+      Left err -> pure (Left err)
+      Right rp -> do
+        let pid = rpPkgId rp
+        eDir <- resolveSrc resolver pid
+        case eDir of
+          Left err   -> pure (Left err)
+          Right dir  -> do
+            oc <- Source.runSourceFromDir env pid dir modPath mSym
+            pure (fmap (`tagOutsidePlan` rpIsOutsidePlan rp) oc)
 
 -- | Wire the @search@ command to a real Hoogle DB.  Search is the only
 -- command that can operate without a plan (it can fall back to the global
