@@ -1,0 +1,58 @@
+{-# LANGUAGE LambdaCase #-}
+module Hypha.Server.Slots
+  ( BuildSlots
+  , BuildState (..)
+  , initialiseSlots
+  , withSlot
+  ) where
+
+import Control.Concurrent.Async (Async, async, wait)
+import Control.Concurrent.MVar  (MVar, newMVar, modifyMVar)
+import Control.Exception        (SomeException, try)
+import qualified Data.Map.Strict as Map
+import Data.Map.Strict          (Map)
+
+import Hypha.Types.PackageId (PackageId)
+
+-- | Per-package build state for de-duplicated lazy Haddock builds.
+data BuildState
+  = NotStarted
+  | Building !(Async FilePath)
+  | Done     !FilePath
+  | Failed   !SomeException
+
+-- | Immutable map of per-package build slots. The outer 'Map' is built once
+-- at server startup from the 'BuildPlan' and never modified afterwards.
+-- Each per-package 'MVar' is an independent lock so concurrent requests for
+-- different packages never contend.
+type BuildSlots = Map PackageId (MVar BuildState)
+
+-- | Build a fresh slot for every package in the given list.
+initialiseSlots :: [PackageId] -> IO BuildSlots
+initialiseSlots pids = do
+  pairs <- mapM (\pid -> do mv <- newMVar NotStarted; pure (pid, mv)) pids
+  pure (Map.fromList pairs)
+
+-- | Acquire-or-spawn semantics. The first caller spawns the build action;
+-- subsequent callers wait on the same 'Async'. If the 'PackageId' is not in
+-- the slots map, the build is spawned with no caching.
+withSlot :: BuildSlots
+         -> PackageId
+         -> IO FilePath        -- ^ build action; returns the haddock dir on success
+         -> IO (Either SomeException FilePath)
+withSlot slots pid build = case Map.lookup pid slots of
+  Nothing -> try build
+  Just slot -> modifyMVar slot $ \case
+    NotStarted -> do
+      a <- async build
+      r <- try (wait a)
+      pure $ case r of
+        Right fp -> (Done fp, Right fp)
+        Left  e  -> (Failed e, Left  e)
+    Building a -> do
+      r <- try (wait a)
+      pure $ case r of
+        Right fp -> (Done fp, Right fp)
+        Left  e  -> (Failed e, Left  e)
+    Done fp   -> pure (Done fp, Right fp)
+    Failed e  -> pure (Failed e, Left  e)

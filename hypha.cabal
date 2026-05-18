@@ -78,6 +78,8 @@ library
     Hypha.Command.WhatProvides
     Hypha.Haddock.Interface
     Hypha.Logging
+    Hypha.Server.Slots
+    Hypha.Server.Haddock.Rewrite
     Hypha.Source.Extract
     Hypha.Source.Locate
   build-depends:
@@ -96,13 +98,15 @@ library
     , haddock-library     >= 1.11
     , hoogle             >= 5.0 && < 6
     , optparse-applicative >= 0.18
+    , async                 >= 2.2
     , prettyprinter         >= 1.7
     , prettyprinter-ansi-terminal >= 1.1
     , skylighting           >= 0.14
-    , text                 >= 2.0
-    , time                 >= 1.12
-    , transformers         >= 0.6
-    , vector               >= 0.13
+    , tagsoup               >= 0.14
+    , text                  >= 2.0
+    , time                  >= 1.12
+    , transformers          >= 0.6
+    , vector                >= 0.13
 
 executable hypha
   import:           warnings, deps
@@ -135,8 +139,11 @@ test-suite hypha-tests
     Unit.Project
     Unit.WhatProvides
     Unit.Haddock
+    Unit.ServerSlots
+    Property.HaddockRewrite
   build-depends:
     , aeson
+    , async
     , base
     , bytestring
     , containers
