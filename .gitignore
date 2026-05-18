@@ -2,6 +2,7 @@ dist-newstyle/
 dist/
 .hypha/
 .stack-work/
+.worktrees/
 result
 result-*
 *.hi
