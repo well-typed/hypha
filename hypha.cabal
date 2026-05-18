@@ -64,6 +64,7 @@ library
     Hypha.Hoogle.Query
     Hypha.Cli.Parser
     Hypha.Cli.Run
+    Hypha.Command.Doctor
     Hypha.Command.Module
     Hypha.Command.Package
     Hypha.Command.Search
@@ -88,7 +89,7 @@ library
     , optparse-applicative >= 0.18
     , text                 >= 2.0
     , time                 >= 1.12
-    , vector               >= 0.13
+    , vector             >= 0.13
 
 executable hypha
   import:           warnings, deps
@@ -111,6 +112,7 @@ test-suite hypha-tests
     Property.SymbolPath
     Unit.BuildEnv
     Unit.BuildEnvCompose
+    Unit.Doctor
     Unit.Hackage
     Unit.Hoogle
     Unit.Module

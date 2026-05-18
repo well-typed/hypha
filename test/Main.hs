@@ -10,6 +10,7 @@ import qualified Property.OutputJson
 import qualified Property.SymbolPath
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
+import qualified Unit.Doctor
 import qualified Unit.Hackage
 import qualified Unit.Hoogle
 import qualified Unit.Module
@@ -26,6 +27,7 @@ main = defaultMain (testGroup "hypha"
   , Property.OutputJson.tests
   , Unit.BuildEnv.tests
   , Unit.BuildEnvCompose.tests
+  , Unit.Doctor.tests
   , Unit.Project.tests
   , Unit.Hackage.tests
   , Unit.Hoogle.tests
