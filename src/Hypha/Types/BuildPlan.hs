@@ -56,8 +56,6 @@ data PlanPackage = PlanPackage
 data BuildPlan = BuildPlan
   { bpCompiler  :: !CompilerId
   , bpPackages  :: !(Map PackageName Version)
-    -- ^ Lazy because this is a read-heavy lookup table; forcing the whole map
-    -- eagerly would waste work when only a few lookups are needed.
   , bpOverrides :: ![PackageOverride]
   }
   deriving stock (Show)

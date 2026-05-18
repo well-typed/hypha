@@ -4,86 +4,108 @@ module Hypha.Command.Search
   ( -- * Types
     SearchResult (..)
   , SearchHit (..)
+    -- * Field sets
+  , compactKeys
+  , fullKeys
     -- * Execution
   , runSearch
+  , runSearchWith
+    -- * Internal (for testing)
+  , hitToJSON
+  , searchResultToJSON
   ) where
 
-import Data.Aeson (Value (..), (.=))
+import Data.Aeson (Value, (.=))
 import qualified Data.Aeson as Aeson
+import qualified Data.Map.Strict as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
+import qualified Data.Text as Text
 
 import Hypha.Error (HyphaError (..))
-import Hypha.Output.Outcome (Outcome, successOutcome)
+import Hypha.Hoogle.Type (Hoogle (..), HoogleHit (..), HoogleQuery (..))
+import Hypha.Output.Outcome (Outcome (..), Related (..), failureOutcome, successOutcome, OutcomeError (..))
 import Hypha.Types.BuildPlan (BuildPlan (..))
 
 -- | Result of a search command.
 data SearchResult = SearchResult
   { srQuery :: !Text
-    -- ^ The original search query.
   , srHits  :: ![SearchHit]
-    -- ^ The search results.
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 -- | A single search hit.
 data SearchHit = SearchHit
   { shName      :: !Text
-    -- ^ Symbol name.
   , shModule    :: !Text
-    -- ^ Module path.
   , shPackage   :: !Text
-    -- ^ Package name.
   , shVersion   :: !Text
-    -- ^ Package version.
   , shSignature :: !(Maybe Text)
-    -- ^ Type signature (if available).
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
--- | Execute the search command.
+-- | Compact result keys: the JSON object emitted under @result@ when
+-- @--full@ is not set.
+compactKeys :: Set Text
+compactKeys = Set.fromList ["query", "hits"]
+
+-- | Full result keys.  Equal to compact for alpha; reserved for later
+-- enrichment (e.g. @total@, @sources@).
+fullKeys :: Set Text
+fullKeys = compactKeys
+
+-- | Pure variant used only when no Hoogle DB is available.  Returns a
+-- failure outcome explaining that Hoogle is required.
 --
---   For now, this returns a stub result. Hoogle integration will be added later.
+-- Real call-sites should use 'runSearchWith' threaded with a 'Hoogle IO'.
 runSearch :: BuildPlan -> Text -> [Text] -> Either HyphaError (Outcome Value)
-runSearch _plan query _extraPkgs =
-  let result = SearchResult
-        { srQuery = query
-        , srHits  = stubHits query
-      }
-  in Right $ successOutcome (searchResultToJSON result)
+runSearch _plan _query _extraPkgs =
+  Right $ failureOutcome $ OutcomeError
+    "USER_ERROR"
+    "search requires a Hoogle DB; call runSearchWith via the CLI dispatcher"
+    2
 
--- | Generate stub search hits for demonstration.
-stubHits :: Text -> [SearchHit]
-stubHits _query =
-  [ SearchHit
-      { shName      = "map"
-      , shModule    = "Data.Map.Strict"
-      , shPackage   = "containers"
-      , shVersion   = "0.6.7"
-      , shSignature = Just "(a -> b) -> Map k a -> Map k b"
-      }
-  , SearchHit
-      { shName      = "insert"
-      , shModule    = "Data.Map.Strict"
-      , shPackage   = "containers"
-      , shVersion   = "0.6.7"
-      , shSignature = Just "Ord k => k -> a -> Map k a -> Map k a"
-      }
-  ]
+-- | Run a Hoogle search against the supplied 'Hoogle' record.
+--
+-- Builds a 'Related' list pointing at the first five hits so the agent can
+-- recurse into them with @hypha symbol …@ — the "doorway" principle.
+runSearchWith :: Monad m => Hoogle m -> Text -> [Text] -> m (Outcome Value)
+runSearchWith hoogle q extras = do
+  let queryText = Text.intercalate " " (q : map ("+" <>) extras)
+  hits <- searchHoogle hoogle (HoogleQuery queryText)
+  let shits = map fromHoogle hits
+      body  = SearchResult { srQuery = queryText, srHits = shits }
+      related =
+        [ Related (shName h)
+                  ("hypha symbol " <> shPackage h <> "/" <> shModule h <> "/" <> shName h)
+        | h <- take 5 shits
+        ]
+      OutcomeSuccess r outside overrides actions _ = successOutcome (searchResultToJSON body)
+  pure (OutcomeSuccess r outside overrides actions related)
 
--- | Convert a search result to JSON.
+fromHoogle :: HoogleHit -> SearchHit
+fromHoogle h = SearchHit
+  { shName      = hhName h
+  , shModule    = hhModule h
+  , shPackage   = hhPackage h
+  , shVersion   = ""                       -- ^ filled in once cabal-plan lookup wired (post-MVP)
+  , shSignature = if Text.null (hhSig h) then Nothing else Just (hhSig h)
+  }
+
 searchResultToJSON :: SearchResult -> Value
 searchResultToJSON (SearchResult query hits) = Aeson.object
   [ "query" .= query
   , "hits"  .= map hitToJSON hits
   ]
 
--- | Convert a search hit to JSON.
 hitToJSON :: SearchHit -> Value
-hitToJSON hit = Aeson.object $ concat
-  [ [ "name"      .= shName hit
-    , "module"    .= shModule hit
-    , "package"   .= shPackage hit
-    , "version"   .= shVersion hit
-    ]
-  , maybe [] (\s -> ["signature" .= s]) (shSignature hit)
+hitToJSON hit = Aeson.object $
+  [ "name"      .= shName hit
+  , "module"    .= shModule hit
+  , "package"   .= shPackage hit
+  , "fetch"     .= ("hypha symbol "
+                    <> shPackage hit <> "/" <> shModule hit <> "/" <> shName hit)
   ]
+  ++ maybe [] (\s -> ["signature" .= s]) (shSignature hit)
+  ++ (if Text.null (shVersion hit) then [] else ["version" .= shVersion hit])

@@ -32,8 +32,9 @@ emptyMock = MockBuildEnv
 
 -- | Create a 'BuildEnv' from a 'MockBuildEnv' configuration.
 --
---   This is pure — no IO effects.
-mkMockBuildEnv :: MockBuildEnv -> BuildEnv IO
+--   Polymorphic in the carrier monad: tests can instantiate at 'Identity'
+--   for pure assertions or 'IO' / 'State' as needed.  No IO is performed.
+mkMockBuildEnv :: Applicative m => MockBuildEnv -> BuildEnv m
 mkMockBuildEnv mock = BuildEnv
   { discoverInstalledPackages = pure (Map.keysSet (mockPackages mock))
   , locatePackageSource       = \pkgId ->

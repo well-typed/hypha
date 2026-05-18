@@ -2,17 +2,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Command.Package
   ( PackageResult (..)
+    -- * Field sets
+  , compactKeys
+  , fullKeys
+    -- * Execution
   , runPackage
+  , runPackagePure
   ) where
 
-import Data.Aeson (Value (..), (.=))
+import Data.Aeson (Value, (.=))
 import qualified Data.Aeson as Aeson
-import Data.Maybe (isJust)
+import qualified Data.Map.Strict as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 
 import Hypha.Error (HyphaError (..))
-import Hypha.Output.Outcome (Outcome, successOutcome)
+import Hypha.Output.Outcome
+  ( Outcome (..), Related (..), OutcomeError (..)
+  , failureOutcome
+  )
 import Hypha.Types.BuildPlan (BuildPlan (..), lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
@@ -22,35 +32,68 @@ data PackageResult = PackageResult
   , prVersion    :: !Text
   , prInPlan     :: !Bool
   , prIsLocal    :: !Bool
-    -- ^ MVP placeholder; true only if the package is a local / inplace build.
   , prDepsCount  :: !Int
-    -- ^ MVP placeholder; dependency counting deferred to Phase 10.
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
+
+compactKeys, fullKeys :: Set Text
+compactKeys = Set.fromList ["name", "version", "in_plan", "is_local", "deps_count"]
+fullKeys    = compactKeys
 
 -- | Execute the @package@ command.
 --
---   If the package is not present in the build plan we return a 'NotFound'
---   error (the caller should widen with @--any@ if desired).
+-- Parses the optional @\@ver@ qualifier from the raw argument (spec §9).
+--
+-- If the package is not present in the build plan we return a 'NotFound'
+-- error wrapped as a structured failure 'Outcome'.  The caller can also use
+-- @--any@ to widen.
 runPackage :: BuildPlan -> Text -> Either HyphaError (Outcome Value)
-runPackage plan rawName =
-  let pkgName = PackageName rawName
-      mVer    = lookupPackage pkgName plan
-  in case mVer of
-       Just ver ->
-         let result = PackageResult
-               { prName      = rawName
-               , prVersion   = unVersion ver
-               , prInPlan    = True
-               , prIsLocal   = False
-               , prDepsCount = 0
-               }
-         in Right $ successOutcome (packageResultToJSON result)
-       Nothing ->
-         Left $ NotFound
-           ( Text.pack "package '" <> rawName <> Text.pack "' not in build plan (use --any to widen)" )
+runPackage plan rawArg =
+  let (rawName, _mVerHint) = splitVersionHint rawArg
+      pkgName              = PackageName rawName
+  in case lookupPackage pkgName plan of
+       Just ver -> Right (mkSuccessOutcome rawName ver)
+       Nothing  -> Left $ NotFound
+         ("package '" <> rawName <> "' not in build plan (use --any to widen)")
 
--- | Convert a 'PackageResult' to a JSON 'Value'.
+-- | Total variant: never fails at the IO boundary, but encodes "not in plan"
+-- as a structured 'OutcomeFailure' so the envelope shape stays consistent.
+runPackagePure :: BuildPlan -> Text -> Outcome Value
+runPackagePure plan rawArg =
+  case runPackage plan rawArg of
+    Right o  -> o
+    Left err -> failureOutcome $ OutcomeError
+      "NOT_FOUND"
+      (case err of NotFound m -> m; _ -> Text.pack (show err))
+      3
+
+splitVersionHint :: Text -> (Text, Maybe Text)
+splitVersionHint raw =
+  case Text.splitOn "@" raw of
+    [n]    -> (n, Nothing)
+    [n, v] -> (n, Just v)
+    (n:_)  -> (n, Nothing)
+    []     -> ("", Nothing)
+
+mkSuccessOutcome :: Text -> Version -> Outcome Value
+mkSuccessOutcome rawName ver =
+  let result = PackageResult
+        { prName      = rawName
+        , prVersion   = unVersion ver
+        , prInPlan    = True
+        , prIsLocal   = False
+        , prDepsCount = 0
+        }
+      body = packageResultToJSON result
+      actions = Map.fromList
+        [ ("version_history", "hypha versions " <> rawName)
+        , ("reverse_deps",    "hypha deps " <> rawName <> " --reverse")
+        ]
+  in OutcomeSuccess body False [] actions
+       [ Related "versions" ("hypha versions " <> rawName)
+       , Related "module_index_hint" ("hypha module " <> rawName <> "/<Module>")
+       ]
+
 packageResultToJSON :: PackageResult -> Value
 packageResultToJSON r = Aeson.object
   [ "name"       .= prName r

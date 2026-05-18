@@ -70,34 +70,69 @@ discoverInStore storeRoot = do
       let pkgIds = mapMaybe parseStoreEntry entries
       pure (Set.fromList pkgIds)
 
--- | Parse a store directory entry into a PackageId.
---   Store entries have format: @<pkg-name>-<version>-<hash>@
+-- | Parse a store directory entry into a 'PackageId'.
+--   Store entries have format: @<pkg-name>-<version>-<hash>@ where the hash
+--   segment is mandatory and consists of at least eight hex-ish characters
+--   (the real cabal-install hashes are 64 hex; we accept >= 8 to keep the
+--   predicate cheap and tolerant of test fixtures).
+--
+--   Without the hash requirement, entries like @async-2.2.5@ would parse as
+--   name=async, ver=2.2, hash=5 — silently wrong.
 parseStoreEntry :: String -> Maybe PackageId
 parseStoreEntry entry =
   let entryT = Text.pack entry
   in case Text.breakOnEnd "-" entryT of
        ("", _) -> Nothing
-       (nameVerT, _hash) ->
-         let nameVer = Text.init nameVerT  -- drop trailing separator
-         in case Text.breakOnEnd "-" nameVer of
-              ("", _) -> Nothing
-              (nameT, verT) ->
-                let name = Text.init nameT  -- drop trailing separator
-                    ver  = verT
-                in if Text.null name || Text.null ver
-                   then Nothing
-                   else Just (PackageId (PackageName name) (Version ver))
+       (nameVerT, hash) ->
+         if Text.length hash < 8
+           then Nothing
+           else
+             let nameVer = Text.init nameVerT  -- drop trailing separator
+             in case Text.breakOnEnd "-" nameVer of
+                  ("", _) -> Nothing
+                  (nameT, verT) ->
+                    let name = Text.init nameT
+                        ver  = verT
+                    in if Text.null name || Text.null ver
+                       then Nothing
+                       else Just (PackageId (PackageName name) (Version ver))
 
 -- | Locate the source directory for a package.
---   In the cabal store, sources are typically not kept after building.
---   We look for @dist-newstyle/src/@ relative to the store root.
+--
+--   The cabal store does not normally keep package sources after a build;
+--   we make a best-effort search through a few candidate layouts:
+--
+--   1. @<storeRoot>\/src\/<pkg>-<ver>@ (used by some unpacked fixtures and
+--      by some experimental cabal-install builds);
+--   2. @<storeRoot>\/<pkg>-<ver>-<hash>\/src@ inside the per-package store
+--      entry (rarely populated but supported by older toolchains);
+--   3. otherwise return 'Nothing' — the @module@ / @symbol@ commands will
+--      then report an empty result, and the caller can drive them through
+--      @dist-newstyle\/src@ of the active project (this requires the
+--      project root, which is wired in via the dispatcher, not here).
 locateSource :: FilePath -> PackageId -> IO (Maybe FilePath)
-locateSource storeRoot (PackageId (PackageName name) (Version ver)) = do
-  let srcDir = storeRoot </> "src" </> (Text.unpack name <> "-" <> Text.unpack ver)
-  exists <- doesDirectoryExist srcDir
-  if exists
-    then pure (Just srcDir)
-    else pure Nothing
+locateSource storeRoot pid@(PackageId (PackageName name) (Version ver)) = do
+  let prefix = Text.unpack name <> "-" <> Text.unpack ver
+      candidate1 = storeRoot </> "src" </> prefix
+  exists1 <- doesDirectoryExist candidate1
+  if exists1
+    then pure (Just candidate1)
+    else findInStoreEntry storeRoot pid
+  where
+    findInStoreEntry :: FilePath -> PackageId -> IO (Maybe FilePath)
+    findInStoreEntry sr (PackageId (PackageName n) (Version v)) = do
+      r <- try @IOException (listDirectory sr)
+      case r of
+        Left _ -> pure Nothing
+        Right entries -> do
+          let want = Text.unpack n <> "-" <> Text.unpack v <> "-"
+              hit  = find (isPrefixOf want) entries
+          case hit of
+            Nothing  -> pure Nothing
+            Just e   -> do
+              let srcDir = sr </> e </> "src"
+              ok <- doesDirectoryExist srcDir
+              pure (if ok then Just srcDir else Nothing)
 
 -- | Locate the Haddock HTML for a package.
 --   Look in @share/doc/<pkg>-<ver>/index.html@ within the store entry.

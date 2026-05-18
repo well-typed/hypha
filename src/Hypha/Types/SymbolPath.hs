@@ -36,7 +36,27 @@ data ParseError
   | InvalidVersion !Text
   | InvalidModule !Text
   | InvalidSymbol !Text
+  | ModuleSegmentNotUppercase !Text
   deriving stock (Show, Eq)
+
+-- | A module path consists of dot-separated segments, each of which must
+-- start with an uppercase ASCII letter (Haskell module convention).
+validateModulePath :: Text -> Either ParseError ModulePath
+validateModulePath m
+  | Text.null m = Left (InvalidModule m)
+  | otherwise =
+      let segs = Text.splitOn "." m
+      in case foldr validateSeg (Right ()) segs of
+           Right () -> Right (ModulePath m)
+           Left err -> Left err
+  where
+    validateSeg :: Text -> Either ParseError () -> Either ParseError ()
+    validateSeg _ err@(Left _) = err
+    validateSeg seg (Right ())
+      | Text.null seg = Left (InvalidModule seg)
+      | otherwise = case Text.uncons seg of
+          Just (c, _) | c >= 'A' && c <= 'Z' -> Right ()
+          _ -> Left (ModuleSegmentNotUppercase seg)
 
 -- | Parse @pkg[@ver][/Mod[.Path]][/sym]@.
 parseSymbolPath :: Text -> Either ParseError SymbolPath
@@ -65,7 +85,7 @@ parseSymbolPath t
                                 then if mSymSeg /= Nothing
                                        then Left SymbolWithoutModule
                                        else Left (InvalidModule m)
-                                else Right (Just (ModulePath m))
+                                else Just <$> validateModulePath m
         ms  <- case mSymSeg of
                  Nothing -> Right Nothing
                  Just s  -> if Text.null s then Left (InvalidSymbol s) else Right (Just (SymbolName s))

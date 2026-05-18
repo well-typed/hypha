@@ -1,93 +1,345 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Hypha.Cli.Run
   ( -- * Execution
     runCli
-    -- * Helpers
+    -- * Internals exposed for testing
   , withPlan
+  , dispatch
+  , humanFromValue
   ) where
 
+import Control.Exception (try, SomeException)
+import Data.Aeson (Value)
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.Char8 as LBS8
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
-import System.IO (hFlush, stdout)
+import qualified Data.Text.IO as TIO
+import qualified Data.Vector as V
+import System.Directory (getHomeDirectory)
+import System.FilePath ((</>))
+import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import qualified System.Exit as System
-import qualified Data.Aeson as Aeson
 
+import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
+import Hypha.BuildEnv.Type (BuildEnv (..))
+import qualified Hypha.Command.Module   as Module
+import qualified Hypha.Command.Package  as Package
+import qualified Hypha.Command.Search   as Search
+import qualified Hypha.Command.Versions as Versions
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
-import Hypha.Command.Package (runPackage)
-import Hypha.Command.Search (runSearch)
-import Hypha.Command.Versions (runVersions)
-import Hypha.Error (HyphaError (..), errorExitCode, errorMessage, errorCode, ExitCode (..))
+import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
+import Hypha.Exit (toSystemExitCode)
+import Hypha.Hoogle.Database (HoogleConfig (..))
+import Hypha.Hoogle.Query (mkGlobalHoogle, mkProjectHoogle)
+import Hypha.Hoogle.Type (Hoogle (..))
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
-import Hypha.Output.Outcome (Outcome (..), OutcomeError (..), failureOutcome)
-import Hypha.Output.Json (encodeEnvelope)
-import Hypha.Types.BuildPlan (BuildPlan (..), emptyBuildPlan)
-import Hypha.Types.PackageId (PackageName (..))
+import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
+import Hypha.Output.Outcome
+  ( Outcome (..), OutcomeError (..), Related (..)
+  , failureOutcome
+  )
+import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
+import Hypha.Project.Overrides (parsePackageOverride)
+import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
+import Hypha.Types.BuildPlan
+  ( BuildPlan (..), CompilerId (..), PackageOverride (..), ProjectRoot (..)
+  , applyOverrides
+  )
+import Hypha.Types.PackageId (PackageName (..), Version (..))
 
--- | Run the CLI with the given flags and command.
+-- | Top-level entry point.  Wires global flags and the chosen subcommand to
+-- their handlers and emits exactly one JSON envelope (or, with @--human@, a
+-- terminal-friendly rendering of the same content).
 runCli :: GlobalFlags -> Command -> IO ()
 runCli flags cmd = do
-  let tracer = if gfVerbose flags then verboseTracer else silentTracer
-
-  tracer (LogInfo "Starting hypha")
-
-  -- For now, use emptyBuildPlan. In the future, this will load from project.
-  let plan = emptyBuildPlan
-
-  result <- case cmd of
-    SearchCommand query extras -> do
-      tracer (LogDebug $ "Search: " <> query)
-      pure $ runSearch plan query extras
-    PackageCommand pkgName -> do
-      tracer (LogDebug $ "Package: " <> pkgName)
-      pure $ runPackage plan pkgName
-    VersionsCommand pkg -> do
-      tracer (LogDebug $ "Versions: " <> pkg)
-      pure $ runVersions plan (PackageName pkg)
-    _ -> pure $ Left $ UserError "Command not yet implemented"
-
+  let tracer = if gfVerbose flags then verboseTracer
+                                  else if gfQuiet flags then silentTracer
+                                                        else silentTracer
+  tracer (LogInfo "starting hypha")
+  result <- dispatch flags cmd
+  emit flags (commandName cmd) result
   case result of
-    Right outcome -> do
-      emitOutcome flags (commandName cmd) outcome
-      System.exitSuccess
-    Left err -> do
-      let errObj = OutcomeError (errorCode err) (errorMessage err) (unExitCode (errorExitCode err))
-          outcome = failureOutcome errObj :: Outcome Aeson.Value
-      emitOutcome flags (commandName cmd) outcome
-      System.exitWith (toSystemExitCode (errorExitCode err))
+    Right{}  -> System.exitWith System.ExitSuccess
+    Left err -> System.exitWith (toSystemExitCode (errorExitCode err))
 
--- | Helper that runs an action with the build plan.
---   Abstracts plan-root discovery and error handling.
---
---   In the future, this will:
---   1. Discover project root
---   2. Load build plan from plan.json
---   3. Apply overrides
---   4. Pass the plan to the action
-withPlan :: (BuildPlan -> Either HyphaError (Outcome Aeson.Value)) -> Either HyphaError (Outcome Aeson.Value)
-withPlan action = action emptyBuildPlan
+-- | Run the body action with the loaded build plan (project resolution +
+-- overrides applied).  Returns an environment error if no plan is reachable.
+withPlan
+  :: GlobalFlags
+  -> (ProjectRoot -> BuildPlan -> IO (Either HyphaError (Outcome Value)))
+  -> IO (Either HyphaError (Outcome Value))
+withPlan flags k = do
+  eRoot <- discoverProjectRoot (gfProjectDir flags)
+  case eRoot of
+    Left (NoProjectFound where_) ->
+      pure (Left (EnvError
+        ("no cabal project found (searched up from " <> Text.pack where_ <> ")")))
+    Right root -> do
+      ePlan <- loadBuildPlan root
+      case ePlan of
+        Left e -> pure (Left (planErrorToHypha root e))
+        Right rawPlan -> do
+          overrides <- collectOverrides (gfPackageOverrides flags)
+          case overrides of
+            Left e   -> pure (Left e)
+            Right os -> k root (applyOverrides os rawPlan)
 
--- | Emit an outcome to stdout as JSON.
-emitOutcome :: GlobalFlags -> Text -> Outcome Aeson.Value -> IO ()
-emitOutcome _flags cmdName outcome = do
-  let envelope = encodeEnvelope cmdName outcome
-  LBS.hPut stdout (Aeson.encode envelope)
+planErrorToHypha :: ProjectRoot -> PlanError -> HyphaError
+planErrorToHypha (ProjectRoot r) = \case
+  PlanNotFound _msg -> EnvError
+    ("plan.json missing under " <> Text.pack r <> "; run `cabal build --dry-run`")
+  PlanParseFailure msg -> Corruption ("plan.json parse failure: " <> Text.pack msg)
+
+collectOverrides :: [Text] -> IO (Either HyphaError [PackageOverride])
+collectOverrides raws =
+  case traverse parsePackageOverride raws of
+    Left  err -> pure (Left (UserError (Text.pack (show err))))
+    Right xs  -> pure (Right xs)
+
+-- | Per-command dispatch.  Each arm returns either an error or a successful
+-- outcome.  Unimplemented commands return a structured 'UserError' so the
+-- envelope shape is preserved.
+dispatch :: GlobalFlags -> Command -> IO (Either HyphaError (Outcome Value))
+dispatch flags = \case
+  SearchCommand q extras ->
+    runSearchWithHoogle flags q extras
+
+  PackageCommand rawArg ->
+    withPlan flags $ \_root plan ->
+      pure $ Right $ Package.runPackagePure plan rawArg
+
+  VersionsCommand pkg ->
+    withPlan flags $ \_root plan ->
+      pure $ Right $ Versions.runVersionsPure plan (PackageName pkg)
+
+  ModuleCommand arg ->
+    case Text.splitOn "/" arg of
+      [pkg, modPath] ->
+        withPlan flags $ \root plan ->
+          case Map.lookup (PackageName pkg) (bpPackages plan) of
+            Nothing -> pure (Left (NotFound
+              ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
+            Just ver -> do
+              env <- mkBuildEnv root plan
+              oc  <- Module.runModule env
+                        (Module.mkPid pkg ver) modPath
+              pure (Right oc)
+      _ -> pure (Left (UserError ("expected PKG/MOD (got: " <> arg <> ")")))
+
+  SymbolCommand _ ->
+    pure (Left (notImplemented "symbol" "see issues/todo/013-symbol-command.md"))
+  SourceCommand _ ->
+    pure (Left (notImplemented "source" "see issues/todo/014-source-command.md"))
+  DepsCommand _ _ _ ->
+    pure (Left (notImplemented "deps" "see issues/todo/015-deps-command.md"))
+  WhatProvidesCommand _ ->
+    pure (Left (notImplemented "whatprovides" "see issues/todo/016-whatprovides-command.md"))
+  DoctorCommand ->
+    pure (Left (notImplemented "doctor" "see issues/todo/018-doctor-command.md"))
+
+notImplemented :: Text -> Text -> HyphaError
+notImplemented name hint =
+  UserError ("command '" <> name <> "' not yet implemented (" <> hint <> ")")
+
+-- | Wire the @search@ command to a real Hoogle DB.  Search is the only
+-- command that can operate without a plan (it can fall back to the global
+-- DB), so we don't go through 'withPlan' here.
+runSearchWithHoogle
+  :: GlobalFlags
+  -> Text
+  -> [Text]
+  -> IO (Either HyphaError (Outcome Value))
+runSearchWithHoogle flags q extras = do
+  result <- try @SomeException $ do
+    hoogle <-
+      if gfGlobal flags
+        then mkGlobalHoogle
+        else do
+          eRoot <- discoverProjectRoot (gfProjectDir flags)
+          case eRoot of
+            Left _  -> mkGlobalHoogle
+            Right root -> do
+              -- Use the (raw) plan.json contents as the staleness hash; if
+              -- loading fails we fall back to the global DB.
+              ePlan <- loadBuildPlan root
+              case ePlan of
+                Left _  -> mkGlobalHoogle
+                Right _ -> mkProjectHoogle (HoogleConfig root [] "alpha-stub")
+    Search.runSearchWith hoogle q extras
+  case result of
+    Left e  -> pure (Left (NetworkError (Text.pack (show e))))
+    Right o -> pure (Right o)
+
+mkBuildEnv :: ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
+mkBuildEnv (ProjectRoot _) plan = do
+  home <- getHomeDirectory
+  let CompilerId cid = bpCompiler plan
+      ghcDir = "ghc-" <> Text.unpack (Text.takeWhileEnd (/= '-') cid)
+      storeDir = home </> ".cabal" </> "store" </> ghcDir
+  eEnv <- mkCabalBuildEnv storeDir
+  case eEnv of
+    Right env -> pure env
+    Left _    -> pure offlineNullBuildEnv
+
+-- | Empty BuildEnv used when no cabal store is reachable.  All operations
+-- return 'Nothing' / empty sets.  GHC version surfaces as a sentinel
+-- @"unknown"@ so that callers can detect the absence without crashing.
+offlineNullBuildEnv :: BuildEnv IO
+offlineNullBuildEnv = BuildEnv
+  { discoverInstalledPackages = pure Set.empty
+  , locatePackageSource       = \_ -> pure Nothing
+  , locateHaddockHtml         = \_ -> pure Nothing
+  , ghcVersion                = pure (Version "unknown")
+  }
+
+-- | Emit the outcome to stdout, honouring all output-shaping flags.
+emit :: GlobalFlags -> Text -> Either HyphaError (Outcome Value) -> IO ()
+emit flags cmd result = do
+  let oc      = either errorOutcome id result
+      compact = compactKeysFor cmd
+      full    = fullKeysFor cmd
+      opts    = EnvelopeOpts
+                  { eoFull       = gfFull flags
+                  , eoSelect     = maybe [] parseSelectList (gfSelect flags)
+                  , eoPrettyJson = gfPrettyJson flags
+                  }
+  if gfHuman flags
+    then do
+      let bs = encodeOutcomeBytes opts cmd compact full oc
+      case Aeson.eitherDecode bs of
+        Right v -> TIO.putStrLn (humanFromValue v)
+        Left  _ -> LBS8.putStrLn bs
+    else LBS.hPut stdout (encodeOutcomeBytes opts cmd compact full oc)
   hFlush stdout
+  case result of
+    Left err -> hPutStrLn stderr
+                  (Text.unpack (errorCode err) <> ": "
+                   <> Text.unpack (errorMessage err))
+    Right _  -> pure ()
 
--- | Convert our ExitCode to System.Exit.ExitCode.
-toSystemExitCode :: ExitCode -> System.ExitCode
-toSystemExitCode (ExitCode 0) = System.ExitSuccess
-toSystemExitCode (ExitCode n) = System.ExitFailure n
+errorOutcome :: HyphaError -> Outcome Value
+errorOutcome err =
+  let (code, msg, ec) = toOutcomeError err
+  in failureOutcome (OutcomeError code msg ec)
 
--- | Get the command name for the envelope.
+-- | Compact / full field sets per command name.  Keep in sync with each
+-- command module's local key declarations.  Equal sets where there is no
+-- distinction yet (alpha).
+compactKeysFor, fullKeysFor :: Text -> Set Text
+compactKeysFor = \case
+  "search"   -> Search.compactKeys
+  "package"  -> Package.compactKeys
+  "versions" -> Versions.compactKeys
+  "module"   -> Module.compactKeys
+  _          -> Set.empty
+fullKeysFor = \case
+  "search"   -> Search.fullKeys
+  "package"  -> Package.fullKeys
+  "versions" -> Versions.fullKeys
+  "module"   -> Module.fullKeys
+  _          -> Set.empty
+
 commandName :: Command -> Text
-commandName (SearchCommand _ _)     = "search"
-commandName (PackageCommand _)      = "package"
-commandName (ModuleCommand _)       = "module"
-commandName (SymbolCommand _)       = "symbol"
-commandName (SourceCommand _)       = "source"
-commandName (VersionsCommand _)     = "versions"
-commandName (DepsCommand _ _ _)     = "deps"
-commandName (WhatProvidesCommand _) = "whatprovides"
-commandName DoctorCommand           = "doctor"
+commandName = \case
+  SearchCommand _ _      -> "search"
+  PackageCommand _       -> "package"
+  ModuleCommand _        -> "module"
+  SymbolCommand _        -> "symbol"
+  SourceCommand _        -> "source"
+  VersionsCommand _      -> "versions"
+  DepsCommand _ _ _      -> "deps"
+  WhatProvidesCommand _  -> "whatprovides"
+  DoctorCommand          -> "doctor"
+
+-- | A small, dependency-free human renderer used by @--human@.  Walks the
+-- envelope and prints a readable summary.  This is a stop-gap until the
+-- DocH→ANSI renderer lands (Plan A task 11 / issue 017).
+humanFromValue :: Value -> Text
+humanFromValue v = case v of
+  Aeson.Object km ->
+    let cmd      = fromString km "command"
+        ok       = fromBool   km "ok"
+        outside  = fromBool   km "outside_plan"
+        line0    = "hypha " <> cmd <> (if ok then "" else "  [error]")
+        line1    = if outside then "  [outside-plan]" else ""
+        body     = pretty (KM.lookup "result"  km)
+        actions  = renderActions (KM.lookup "actions" km)
+        related  = renderRelated (KM.lookup "related" km)
+        errBlock = if ok then ""
+                   else case KM.lookup "error" km of
+                          Just (Aeson.Object e) ->
+                            "\n" <> fromString e "code" <> ": "
+                                  <> fromString e "message"
+                          _ -> ""
+    in Text.intercalate "\n" $ filter (not . Text.null)
+         [ line0 <> line1, errBlock, body, actions, related ]
+  other -> renderJsonValue 0 other
+  where
+    fromString km k = case KM.lookup k km of
+      Just (Aeson.String s) -> s
+      _                     -> ""
+    fromBool km k = case KM.lookup k km of
+      Just (Aeson.Bool b) -> b
+      _                   -> False
+
+renderActions :: Maybe Value -> Text
+renderActions (Just (Aeson.Object km)) | not (KM.null km) =
+  "actions:\n" <> Text.intercalate "\n"
+    [ "  " <> Key.toText k <> "  " <> case v of
+                                         Aeson.String s -> s
+                                         _              -> ""
+    | (k, v) <- KM.toList km
+    ]
+renderActions _ = ""
+
+renderRelated :: Maybe Value -> Text
+renderRelated (Just (Aeson.Array xs)) | not (V.null xs) =
+  "related:\n" <> Text.intercalate "\n"
+    [ case x of
+        Aeson.Object o ->
+          let lbl = case KM.lookup "label" o of Just (Aeson.String s) -> s; _ -> ""
+              fch = case KM.lookup "fetch" o of Just (Aeson.String s) -> s; _ -> ""
+          in "  " <> lbl <> "  " <> fch
+        _ -> ""
+    | x <- V.toList xs
+    ]
+renderRelated _ = ""
+
+-- Tiny indented value printer used as a fallback for the @result@ body.
+pretty :: Maybe Value -> Text
+pretty Nothing  = ""
+pretty (Just v) = "result:\n" <> renderJsonValue 1 v
+
+renderJsonValue :: Int -> Value -> Text
+renderJsonValue depth v =
+  let ind = Text.replicate (depth * 2) " "
+  in case v of
+       Aeson.Object km ->
+         Text.intercalate "\n"
+           [ ind <> Key.toText k <> ": " <> renderInline val
+           | (k, val) <- KM.toList km ]
+       Aeson.Array xs ->
+         Text.intercalate "\n"
+           [ ind <> "- " <> renderInline x | x <- V.toList xs ]
+       other -> ind <> renderInline other
+
+renderInline :: Value -> Text
+renderInline = \case
+  Aeson.String s -> s
+  Aeson.Number n -> Text.pack (show n)
+  Aeson.Bool b   -> if b then "true" else "false"
+  Aeson.Null     -> "null"
+  Aeson.Object{} -> "{…}"
+  Aeson.Array{}  -> "[…]"

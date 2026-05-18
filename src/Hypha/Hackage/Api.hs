@@ -1,5 +1,7 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Hypha.Hackage.Api
   ( HackageClient (..)
   , PackageJson
@@ -7,18 +9,22 @@ module Hypha.Hackage.Api
   , HackageError (..)
   , mkHackageClient
   , mkOfflineHackageClient
+    -- * Internals exposed for testing
+  , userAgent
   ) where
 
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_)
 import Control.Exception (try, SomeException)
-import Data.Aeson (FromJSON, ToJSON, Value, decode)
+import Data.Aeson (Value, decode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (UTCTime, NominalDiffTime, diffUTCTime, getCurrentTime, secondsToNominalDiffTime)
+import Data.Time
+  ( UTCTime, NominalDiffTime, diffUTCTime, getCurrentTime, secondsToNominalDiffTime
+  , defaultTimeLocale, formatTime, parseTimeM, rfc822DateFormat
+  )
 import Network.HTTP.Client
   ( Manager
   , Response
@@ -29,7 +35,8 @@ import Network.HTTP.Client
   , responseBody
   , responseHeaders
   )
-import Network.HTTP.Types.Header (hETag, hLastModified, hUserAgent)
+import Network.HTTP.Types.Header
+  ( hIfModifiedSince, hIfNoneMatch, hUserAgent, hETag, hLastModified )
 import Network.HTTP.Types.Status (statusCode)
 
 import Hypha.Types.PackageId (PackageName (..), Version (..))
@@ -57,45 +64,46 @@ data HackageError
   | HttpError !Int
   deriving stock (Show, Eq)
 
--- | User-Agent header value for hypha.
+-- | User-Agent header value for hypha.  Includes the project contact email
+-- (@info\@well-typed.com@) so Hackage admins can reach us if we ever
+-- misbehave.  The version is hard-coded here rather than picked up from
+-- @Paths_hypha@ for now; revisit if that becomes a maintenance burden.
 userAgent :: BS.ByteString
 userAgent = "hypha/0.0.0 (+https://github.com/well-typed/hypha; contact: info@well-typed.com)"
 
--- | Mutable rate limiter state.
+-- | Thread-safe rate limiter using 'MVar'.  The MVar holds the time of the
+-- most recently completed request; throttle releases once at least
+-- 'rlMinDelay' has elapsed.
 data RateLimiter = RateLimiter
-  { rlLastRequest :: !(IORef (Maybe UTCTime))
-  , rlMinDelay    :: !NominalDiffTime
+  { rlState    :: !(MVar (Maybe UTCTime))
+  , rlMinDelay :: !NominalDiffTime
   }
 
--- | Create a new rate limiter.
-newRateLimiter :: IO RateLimiter
-newRateLimiter = do
-  ref <- newIORef Nothing
-  pure RateLimiter
-    { rlLastRequest = ref
-    , rlMinDelay = secondsToNominalDiffTime 1
-    }
+newRateLimiter :: NominalDiffTime -> IO RateLimiter
+newRateLimiter d = do
+  m <- newMVar Nothing
+  pure (RateLimiter m d)
 
--- | Wait if necessary to respect rate limits.
 throttle :: RateLimiter -> IO ()
 throttle limiter = do
   now <- getCurrentTime
-  lastReq <- readIORef (rlLastRequest limiter)
-  case lastReq of
-    Nothing -> writeIORef (rlLastRequest limiter) (Just now)
-    Just lastTime -> do
-      let elapsed = diffUTCTime now lastTime
-      if elapsed < rlMinDelay limiter
-        then do
-          let delaySeconds = realToFrac (rlMinDelay limiter - elapsed)
-          threadDelay (floor (delaySeconds * 1000000))
-          writeIORef (rlLastRequest limiter) (Just now)
-        else writeIORef (rlLastRequest limiter) (Just now)
+  modifyMVar_ (rlState limiter) $ \mLast -> do
+    case mLast of
+      Nothing -> pure (Just now)
+      Just lastTime -> do
+        let elapsed = diffUTCTime now lastTime
+        if elapsed < rlMinDelay limiter
+          then do
+            let waitSec = realToFrac (rlMinDelay limiter - elapsed) :: Double
+            threadDelay (floor (waitSec * 1e6))
+            after <- getCurrentTime
+            pure (Just after)
+          else pure (Just now)
 
 -- | Create an online HackageClient.
 mkHackageClient :: Manager -> IO (HackageClient IO)
 mkHackageClient manager = do
-  limiter <- newRateLimiter
+  limiter <- newRateLimiter (secondsToNominalDiffTime 1)
   pure HackageClient
     { fetchPackageJson = \pkgName -> do
         throttle limiter
@@ -105,160 +113,188 @@ mkHackageClient manager = do
         fetchVersionsOnline manager pkgName
     }
 
--- | Create an offline HackageClient that only uses the cache.
+-- | Create an offline HackageClient that serves only from the on-disk cache.
+-- A cache miss yields a typed 'OfflineCacheMiss' error.
 mkOfflineHackageClient :: IO (HackageClient IO)
 mkOfflineHackageClient = pure HackageClient
-  { fetchPackageJson = \pkgName ->
-      pure (Left (OfflineCacheMiss pkgName))
-  , fetchVersions = \pkgName ->
-      pure (Left (OfflineCacheMiss pkgName))
+  { fetchPackageJson = \pkgName -> do
+      let url = packageJsonUrl pkgName
+      cacheKey <- Cache.mkCacheKey url
+      mCached  <- Cache.lookupCache cacheKey
+      case mCached of
+        Nothing  -> pure (Left (OfflineCacheMiss pkgName))
+        Just cr  -> pure (decodeJsonBody cr)
+  , fetchVersions = \pkgName -> do
+      let url = preferredVersionsUrl pkgName
+      cacheKey <- Cache.mkCacheKey url
+      mCached  <- Cache.lookupCache cacheKey
+      case mCached of
+        Nothing -> pure (Left (OfflineCacheMiss pkgName))
+        Just cr -> pure (Right (parseVersions (crBody cr)))
   }
+
+packageJsonUrl :: PackageName -> String
+packageJsonUrl pkgName =
+  "https://hackage.haskell.org/package/" ++ Text.unpack (unPackageName pkgName) ++ ".json"
+
+preferredVersionsUrl :: PackageName -> String
+preferredVersionsUrl pkgName =
+  "https://hackage.haskell.org/package/" ++ Text.unpack (unPackageName pkgName) ++ "/preferred"
+
+decodeJsonBody :: CachedResponse -> Either HackageError Value
+decodeJsonBody cr = case decode (LBS.fromStrict (crBody cr)) of
+  Just v  -> Right v
+  Nothing -> Left (DecodeError "failed to decode cached package JSON")
 
 -- | Fetch package JSON from Hackage with cache revalidation.
 fetchPackageJsonOnline :: Manager -> PackageName -> IO (Either HackageError Value)
 fetchPackageJsonOnline manager pkgName = do
-  let url = "https://hackage.haskell.org/package/" ++ Text.unpack (unPackageName pkgName) ++ ".json"
+  let url = packageJsonUrl pkgName
   cacheKey <- Cache.mkCacheKey url
   cached <- Cache.lookupCache cacheKey
   case cached of
-    Nothing -> do
-      result <- fetchWithRetry manager url Nothing Nothing
-      case result of
-        Left err -> pure (Left err)
-        Right (body, etag, lastMod) -> do
-          now <- getCurrentTime
-          let resp = CachedResponse
-                { crEtag = etag
-                , crLastModified = lastMod
-                , crStoredAt = now
-                , crBody = body
-                , crKind = TtlMutable (secondsToNominalDiffTime 900)
-                }
-          Cache.insertCache cacheKey resp
-          case decode (LBS.fromStrict body) of
-            Just val -> pure (Right val)
-            Nothing -> pure (Left (DecodeError "failed to decode package JSON"))
-    Just cachedResp -> do
-      fresh <- Cache.isFresh cachedResp
+    Nothing -> fetchAndCache manager url cacheKey (TtlMutable (secondsToNominalDiffTime 900)) Nothing Nothing decodeJsonBytes
+    Just cr -> do
+      fresh <- Cache.isFresh cr
       if fresh
-        then case decode (LBS.fromStrict (crBody cachedResp)) of
-          Just val -> pure (Right val)
-          Nothing -> pure (Left (DecodeError "failed to decode cached package JSON"))
+        then pure (decodeJsonBody cr)
         else do
-          result <- fetchWithRetry manager url (crEtag cachedResp) (crLastModified cachedResp)
-          case result of
-            Left err -> pure (Left err)
-            Right (body, etag, lastMod) -> do
+          mRefreshed <- revalidate manager url (crEtag cr) (crLastModified cr)
+          case mRefreshed of
+            Left e             -> pure (Left e)
+            Right StillValid   -> do
+              touchCache cacheKey cr
+              pure (decodeJsonBody cr)
+            Right (Refreshed bs et lm) -> do
               now <- getCurrentTime
-              let newResp = CachedResponse
-                    { crEtag = etag
-                    , crLastModified = lastMod
-                    , crStoredAt = now
-                    , crBody = body
-                    , crKind = TtlMutable (secondsToNominalDiffTime 900)
-                    }
-              Cache.insertCache cacheKey newResp
-              case decode (LBS.fromStrict body) of
-                Just val -> pure (Right val)
-                Nothing -> pure (Left (DecodeError "failed to decode revalidated package JSON"))
+              let cr' = CachedResponse et lm now bs (TtlMutable (secondsToNominalDiffTime 900))
+              Cache.insertCache cacheKey cr'
+              pure (decodeJsonBody cr')
+  where
+    decodeJsonBytes bs = case decode (LBS.fromStrict bs) of
+      Just v  -> Right v
+      Nothing -> Left (DecodeError "failed to decode package JSON")
 
--- | Fetch version list from Hackage.
+-- | Fetch the @/preferred@ versions file.  Note: this file is mutable on
+-- Hackage (a maintainer can change preferred-versions), so we treat it as a
+-- TTL-bounded resource, not 'Immutable'.
 fetchVersionsOnline :: Manager -> PackageName -> IO (Either HackageError [Version])
 fetchVersionsOnline manager pkgName = do
-  let url = "https://hackage.haskell.org/package/" ++ Text.unpack (unPackageName pkgName) ++ "/preferred"
+  let url = preferredVersionsUrl pkgName
   cacheKey <- Cache.mkCacheKey url
   cached <- Cache.lookupCache cacheKey
   case cached of
-    Nothing -> do
-      result <- fetchWithRetry manager url Nothing Nothing
-      case result of
-        Left err -> pure (Left err)
-        Right (body, etag, lastMod) -> do
-          now <- getCurrentTime
-          let resp = CachedResponse
-                { crEtag = etag
-                , crLastModified = lastMod
-                , crStoredAt = now
-                , crBody = body
-                , crKind = Immutable
-                }
-          Cache.insertCache cacheKey resp
-          pure (Right (parseVersions body))
-    Just cachedResp -> do
-      fresh <- Cache.isFresh cachedResp
+    Nothing -> fetchAndCache manager url cacheKey (TtlMutable (secondsToNominalDiffTime 900)) Nothing Nothing
+                 (Right . parseVersions)
+    Just cr -> do
+      fresh <- Cache.isFresh cr
       if fresh
-        then pure (Right (parseVersions (crBody cachedResp)))
+        then pure (Right (parseVersions (crBody cr)))
         else do
-          result <- fetchWithRetry manager url (crEtag cachedResp) (crLastModified cachedResp)
-          case result of
-            Left err -> pure (Left err)
-            Right (body, etag, lastMod) -> do
+          mRefreshed <- revalidate manager url (crEtag cr) (crLastModified cr)
+          case mRefreshed of
+            Left e             -> pure (Left e)
+            Right StillValid   -> do
+              touchCache cacheKey cr
+              pure (Right (parseVersions (crBody cr)))
+            Right (Refreshed bs et lm) -> do
               now <- getCurrentTime
-              let newResp = CachedResponse
-                    { crEtag = etag
-                    , crLastModified = lastMod
-                    , crStoredAt = now
-                    , crBody = body
-                    , crKind = Immutable
-                    }
-              Cache.insertCache cacheKey newResp
-              pure (Right (parseVersions body))
+              let cr' = CachedResponse et lm now bs (TtlMutable (secondsToNominalDiffTime 900))
+              Cache.insertCache cacheKey cr'
+              pure (Right (parseVersions bs))
 
--- | Parse versions from the preferred versions file.
--- The format is one version per line.
-parseVersions :: BS.ByteString -> [Version]
-parseVersions bs =
-  map (Version . Text.pack . BS8.unpack)
-      (filter (not . BS.null) (BS8.split '\n' bs))
+-- | Outcome of an HTTP conditional GET.
+data RevalResult
+  = StillValid                                                -- ^ HTTP 304
+  | Refreshed !BS.ByteString !(Maybe BS.ByteString) !(Maybe UTCTime)  -- ^ HTTP 200
 
--- | Fetch with retry and ETag/Last-Modified revalidation.
-fetchWithRetry :: Manager -> String -> Maybe BS.ByteString -> Maybe UTCTime -> IO (Either HackageError (BS.ByteString, Maybe BS.ByteString, Maybe UTCTime))
-fetchWithRetry manager url etag lastMod = do
+-- | Perform a conditional GET, honouring 429/503 with backoff.  Uses
+-- @If-None-Match@ and @If-Modified-Since@ — the correct request headers
+-- for revalidation.
+revalidate
+  :: Manager
+  -> String
+  -> Maybe BS.ByteString
+  -> Maybe UTCTime
+  -> IO (Either HackageError RevalResult)
+revalidate manager url mEtag mLastMod = do
   req <- parseRequest url
-  let req' = req
-        { requestHeaders =
-            [ (hUserAgent, userAgent)
-            ] ++ maybe [] (\e -> [(hETag, e)]) etag
-              ++ maybe [] (\t -> [(hLastModified, bsShow t)]) lastMod
-        }
+  let hdrs = (hUserAgent, userAgent)
+           : maybe [] (\e -> [(hIfNoneMatch,    e)]) mEtag
+          ++ maybe [] (\t -> [(hIfModifiedSince, formatHttpDate t)]) mLastMod
+      req' = req { requestHeaders = hdrs }
   result <- try (httpLbs req' manager) :: IO (Either SomeException (Response LBS.ByteString))
   case result of
     Left ex -> pure (Left (NetworkError (show ex)))
     Right resp -> do
       let status = statusCode (responseStatus resp)
-      if status == 304
-        then do
-          -- 304 Not Modified: cache is still valid, update storedAt
-          now <- getCurrentTime
-          let updatedResp = CachedResponse
-                { crEtag = etag
-                , crLastModified = lastMod
-                , crStoredAt = now
-                , crBody = BS.empty  -- body not needed for 304
-                , crKind = TtlMutable (secondsToNominalDiffTime 900)
-                }
-          -- Re-insert with updated timestamp to refresh TTL
-          cacheKey <- Cache.mkCacheKey url
-          Cache.insertCache cacheKey updatedResp
-          pure (Left (NetworkError "304 not modified - cache refreshed"))
-        else if status >= 200 && status < 300
-          then do
-            let body = BS.concat . LBS.toChunks $ responseBody resp
-            let newEtag = lookup hETag (responseHeaders resp)
-            let newLastMod = lookup hLastModified (responseHeaders resp)
-            pure (Right (body, newEtag, parseBSUTCTime =<< newLastMod))
-          else if status == 429 || status == 503
-            then do
-              threadDelay 2000000
-              fetchWithRetry manager url etag lastMod
-            else pure (Left (HttpError status))
+      case status of
+        304 -> pure (Right StillValid)
+        s | s >= 200 && s < 300 -> do
+            let body = LBS.toStrict (responseBody resp)
+                et   = lookup hETag         (responseHeaders resp)
+                lm   = parseHttpDate =<< lookup hLastModified (responseHeaders resp)
+            pure (Right (Refreshed body et lm))
+        429 -> backoffAndRetry manager url mEtag mLastMod
+        503 -> backoffAndRetry manager url mEtag mLastMod
+        s   -> pure (Left (HttpError s))
 
--- | Parse UTCTime from ByteString (HTTP date format).
-parseBSUTCTime :: BS.ByteString -> Maybe UTCTime
-parseBSUTCTime bs = case reads (BS8.unpack bs) of
-  [(t, "")] -> Just t
-  _ -> Nothing
+backoffAndRetry
+  :: Manager
+  -> String
+  -> Maybe BS.ByteString
+  -> Maybe UTCTime
+  -> IO (Either HackageError RevalResult)
+backoffAndRetry manager url mEtag mLastMod = do
+  threadDelay 2_000_000
+  revalidate manager url mEtag mLastMod
 
--- | Show UTCTime as ByteString.
-bsShow :: UTCTime -> BS.ByteString
-bsShow = BS8.pack . show
+-- | Fetch a URL fresh and store it in the cache; then decode.
+fetchAndCache
+  :: Manager
+  -> String
+  -> Cache.CacheKey
+  -> CacheKind
+  -> Maybe BS.ByteString
+  -> Maybe UTCTime
+  -> (BS.ByteString -> Either HackageError a)
+  -> IO (Either HackageError a)
+fetchAndCache manager url cacheKey kind _ _ decode_ = do
+  r <- revalidate manager url Nothing Nothing
+  case r of
+    Left e              -> pure (Left e)
+    Right StillValid    -> pure (Left (NetworkError "unexpected 304 on first fetch"))
+    Right (Refreshed bs et lm) -> do
+      now <- getCurrentTime
+      let cr = CachedResponse et lm now bs kind
+      Cache.insertCache cacheKey cr
+      pure (decode_ bs)
+
+-- | Persist a freshness-only touch (re-stamp 'storedAt' to defer the next
+-- conditional GET).
+touchCache :: Cache.CacheKey -> CachedResponse -> IO ()
+touchCache key cr = do
+  now <- getCurrentTime
+  Cache.insertCache key (cr { crStoredAt = now })
+
+-- | Parse versions from the preferred-versions file.  The real file is a
+-- @cabal@-syntax constraint expression, but for alpha we just lift any
+-- bare lines that look like version literals.  Lines starting with @--@
+-- are comments; anything else is included verbatim.
+parseVersions :: BS.ByteString -> [Version]
+parseVersions bs =
+  [ Version (Text.strip (Text.pack (BS8.unpack ln)))
+  | ln <- BS8.split '\n' bs
+  , not (BS.null ln)
+  , not ("--" `BS.isPrefixOf` ln)
+  ]
+
+-- | Format a 'UTCTime' as an RFC 822 / HTTP-date string (e.g.
+-- @"Wed, 21 Oct 2015 07:28:00 GMT"@).
+formatHttpDate :: UTCTime -> BS.ByteString
+formatHttpDate t =
+  BS8.pack (formatTime defaultTimeLocale rfc822DateFormat t)
+
+-- | Parse an RFC 822 / HTTP-date 'ByteString'.
+parseHttpDate :: BS.ByteString -> Maybe UTCTime
+parseHttpDate bs = parseTimeM True defaultTimeLocale rfc822DateFormat (BS8.unpack bs)

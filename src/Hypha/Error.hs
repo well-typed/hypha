@@ -1,10 +1,8 @@
 {-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Error
   ( HyphaError (..)
-  , ExitCode (..)
   , errorCode
   , errorMessage
   , errorExitCode
@@ -12,10 +10,12 @@ module Hypha.Error
   ) where
 
 import Data.Text (Text)
-import qualified Data.Text as Text
 
--- | Typed errors produced by hypha.  Each constructor maps to exactly
--- one 'ExitCode' (totality verified by a property test).
+import Hypha.Exit (ExitCode, exitUserError, exitNotFound, exitNetworkError, exitCacheError, exitEnvironmentError, unExitCode)
+
+-- | Typed errors produced by hypha.  Each constructor maps to exactly one
+-- 'ExitCode' (totality verified by a property test in
+-- @test/Property/Errors.hs@).
 data HyphaError
   = UserError     !Text   -- ^ bad CLI args, malformed path, conflicting flags
   | NotFound      !Text   -- ^ symbol/pkg not in plan (and no --any), or absent from Hackage
@@ -24,18 +24,13 @@ data HyphaError
   | EnvError      !Text   -- ^ no plan.json, missing ghc/haddock, store unreachable, Stack
   deriving stock (Show, Eq)
 
--- | Typed exit codes.  We never use the raw 'System.Exit.ExitCode'.
-newtype ExitCode = ExitCode { unExitCode :: Int }
-  deriving stock   (Show, Eq, Ord)
-  deriving newtype (Read)
-
 errorCode :: HyphaError -> Text
 errorCode = \case
-  UserError    _ -> Text.pack "USER_ERROR"
-  NotFound     _ -> Text.pack "NOT_FOUND"
-  NetworkError _ -> Text.pack "NETWORK_ERROR"
-  Corruption   _ -> Text.pack "CORRUPTION"
-  EnvError     _ -> Text.pack "ENV_ERROR"
+  UserError    _ -> "USER_ERROR"
+  NotFound     _ -> "NOT_FOUND"
+  NetworkError _ -> "NETWORK_ERROR"
+  Corruption   _ -> "CORRUPTION"
+  EnvError     _ -> "ENV_ERROR"
 
 errorMessage :: HyphaError -> Text
 errorMessage = \case
@@ -45,13 +40,15 @@ errorMessage = \case
   Corruption   msg -> msg
   EnvError     msg -> msg
 
+-- | Total mapping from error to exit code.  Lives in 'Hypha.Exit'; this
+-- module is the only place that decides which code each error uses.
 errorExitCode :: HyphaError -> ExitCode
 errorExitCode = \case
-  UserError    _ -> ExitCode 2
-  NotFound     _ -> ExitCode 3
-  NetworkError _ -> ExitCode 4
-  Corruption   _ -> ExitCode 5
-  EnvError     _ -> ExitCode 7
+  UserError    _ -> exitUserError
+  NotFound     _ -> exitNotFound
+  NetworkError _ -> exitNetworkError
+  Corruption   _ -> exitCacheError
+  EnvError     _ -> exitEnvironmentError
 
 -- | Convert a 'HyphaError' into the wire-format 'OutcomeError' fields.
 toOutcomeError :: HyphaError -> (Text, Text, Int)
