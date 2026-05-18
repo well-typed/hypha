@@ -36,7 +36,15 @@ common deps
 library
   import:           warnings, deps
   hs-source-dirs:   src
-  exposed-modules:  Hypha.Prelude
+  exposed-modules:
+    Hypha.Prelude
+    Hypha.Types.PackageId
+    Hypha.Types.SymbolPath
+  build-depends:
+    , base       >= 4.18 && < 5
+    , bytestring >= 0.11
+    , containers >= 0.6
+    , text       >= 2.0
 
 executable hypha
   import:           warnings, deps
@@ -49,4 +57,10 @@ test-suite hypha-tests
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Main.hs
-  build-depends:    hypha, tasty
+  other-modules:    Property.SymbolPath
+  build-depends:
+    , base
+    , hypha
+    , tasty
+    , falsify
+    , text
