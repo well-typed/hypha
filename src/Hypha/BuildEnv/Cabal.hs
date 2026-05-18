@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Hypha.BuildEnv.Cabal
   ( -- * Types
     CabalStoreError (..)
@@ -74,23 +75,19 @@ discoverInStore storeRoot = do
 --   Store entries have format: @<pkg-name>-<version>-<hash>@
 parseStoreEntry :: String -> Maybe PackageId
 parseStoreEntry entry =
-  case splitOnLast '-' entry of
-    Nothing -> Nothing
-    Just (nameVer, _hash) ->
-      case splitOnLast '-' nameVer of
-        Nothing -> Nothing
-        Just (name, ver) ->
-          if null name || null ver
-            then Nothing
-            else Just (PackageId (PackageName (Text.pack name)) (Version (Text.pack ver)))
-  where
-    -- Split a string at the last occurrence of a character.
-    -- splitOnLast '-' "async-2.2.5-abc123" == Just ("async-2.2.5", "abc123")
-    splitOnLast :: Char -> String -> Maybe (String, String)
-    splitOnLast c s =
-      case break (== c) (reverse s) of
-        (_, [])     -> Nothing
-        (revAfter, _:revBefore) -> Just (reverse revBefore, reverse revAfter)
+  let entryT = Text.pack entry
+  in case Text.breakOnEnd "-" entryT of
+       ("", _) -> Nothing
+       (nameVerT, _hash) ->
+         let nameVer = Text.init nameVerT  -- drop trailing separator
+         in case Text.breakOnEnd "-" nameVer of
+              ("", _) -> Nothing
+              (nameT, verT) ->
+                let name = Text.init nameT  -- drop trailing separator
+                    ver  = verT
+                in if Text.null name || Text.null ver
+                   then Nothing
+                   else Just (PackageId (PackageName name) (Version ver))
 
 -- | Locate the source directory for a package.
 --   In the cabal store, sources are typically not kept after building.
