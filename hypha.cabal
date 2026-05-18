@@ -66,6 +66,7 @@ library
     Hypha.Cli.Parser
     Hypha.Cli.Run
     Hypha.Command.Module
+    Hypha.Command.Deps
     Hypha.Command.Package
     Hypha.Command.Search
     Hypha.Command.Source
@@ -120,6 +121,7 @@ test-suite hypha-tests
     Unit.Hackage
     Unit.Hoogle
     Unit.Module
+    Unit.Deps
     Unit.Project
   build-depends:
     , aeson
@@ -136,3 +138,4 @@ test-suite hypha-tests
     , temporary
     , text
     , time
+    , vector

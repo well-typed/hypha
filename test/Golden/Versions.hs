@@ -9,8 +9,8 @@ import Test.Tasty.Golden (goldenVsString)
 
 import Hypha.Command.Versions (runVersions)
 import Hypha.Output.Json (encodeEnvelope)
-import Hypha.Types.BuildPlan (BuildPlan (..), emptyBuildPlan)
-import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.BuildPlan (BuildPlan (..), PlannedUnit (..), emptyBuildPlan)
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import qualified Data.Map.Strict as Map
 
 tests :: TestTree
@@ -27,9 +27,15 @@ runVersionsCommand :: IO LBS.ByteString
 runVersionsCommand = do
   -- Create a plan with async pinned to 2.2.5
   let plan = emptyBuildPlan
-        { bpPackages = Map.fromList
-            [ (PackageName "async", Version "2.2.5")
-            , (PackageName "base", Version "4.18.3.0")
+        { bpUnits = Map.fromList
+            [ (PackageName "async", PlannedUnit
+                { puId = PackageId (PackageName "async") (Version "2.2.5")
+                , puDeps = []
+                })
+            , (PackageName "base", PlannedUnit
+                { puId = PackageId (PackageName "base") (Version "4.18.3.0")
+                , puDeps = []
+                })
             ]
         }
       pkgName = PackageName "async"
