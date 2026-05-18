@@ -40,10 +40,17 @@ library
     Hypha.Prelude
     Hypha.Types.PackageId
     Hypha.Types.SymbolPath
+    Hypha.Types.BuildPlan
+    Hypha.Project.Discovery
+    Hypha.Project.Plan
+    Hypha.Project.Overrides
   build-depends:
     , base       >= 4.18 && < 5
     , bytestring >= 0.11
+    , cabal-plan >= 0.7
     , containers >= 0.6
+    , directory  >= 1.3
+    , filepath   >= 1.4
     , text       >= 2.0
 
 executable hypha
@@ -57,10 +64,15 @@ test-suite hypha-tests
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Main.hs
-  other-modules:    Property.SymbolPath
+  other-modules:
+    Property.SymbolPath
+    Unit.Project
   build-depends:
     , base
+    , containers
+    , filepath
     , hypha
     , tasty
+    , tasty-hunit
     , falsify
     , text
