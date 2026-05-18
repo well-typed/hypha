@@ -8,9 +8,9 @@ import System.FilePath ((</>))
 
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId (PackageName (..), Version (..))
-import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
-import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
-import Hypha.Project.Overrides (OverrideError (..), parsePackageOverride)
+import Hypha.Project.Discovery (discoverProjectRoot)
+import Hypha.Project.Plan (loadBuildPlan)
+import Hypha.Project.Overrides (parsePackageOverride)
 
 tests :: TestTree
 tests = testGroup "Unit.Project"

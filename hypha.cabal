@@ -42,6 +42,8 @@ library
     Hypha.Types.SymbolPath
     Hypha.Types.BuildPlan
     Hypha.BuildEnv.Type
+    Hypha.BuildEnv.Cabal
+    Hypha.BuildEnv.Mock
     Hypha.BuildEnv.Compose
     Hypha.BuildEnv.Nix
     Hypha.Project.Discovery
@@ -80,6 +82,7 @@ test-suite hypha-tests
   other-modules:
     Property.SymbolPath
     Property.HackageCache
+    Unit.BuildEnv
     Unit.BuildEnvCompose
     Unit.Project
     Unit.Hackage
