@@ -11,6 +11,7 @@ module Hypha.Hackage.Api
   , mkOfflineHackageClient
     -- * Internals exposed for testing
   , userAgent
+  , sourceTarballUrl
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -39,7 +40,7 @@ import Network.HTTP.Types.Header
   ( hIfModifiedSince, hIfNoneMatch, hUserAgent, hETag, hLastModified )
 import Network.HTTP.Types.Status (statusCode)
 
-import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import qualified Hypha.Hackage.Cache as Cache
 import Hypha.Hackage.Types (CacheKind (..), CachedResponse (..))
 
@@ -140,6 +141,13 @@ packageJsonUrl pkgName =
 preferredVersionsUrl :: PackageName -> String
 preferredVersionsUrl pkgName =
   "https://hackage.haskell.org/package/" ++ Text.unpack (unPackageName pkgName) ++ "/preferred"
+
+-- | URL for a package source tarball on Hackage.
+sourceTarballUrl :: PackageId -> String
+sourceTarballUrl (PackageId (PackageName n) (Version v)) =
+  "https://hackage.haskell.org/package/"
+    ++ Text.unpack n ++ "-" ++ Text.unpack v
+    ++ "/" ++ Text.unpack n ++ "-" ++ Text.unpack v ++ ".tar.gz"
 
 decodeJsonBody :: CachedResponse -> Either HackageError Value
 decodeJsonBody cr = case decode (LBS.fromStrict (crBody cr)) of

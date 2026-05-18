@@ -8,6 +8,7 @@ module Hypha.Command.Package
     -- * Execution
   , runPackage
   , runPackagePure
+  , mkSuccessOutcome
   ) where
 
 import Data.Aeson (Value, (.=))
