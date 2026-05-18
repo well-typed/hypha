@@ -13,6 +13,7 @@ import qualified System.Exit as System
 import qualified Data.Aeson as Aeson
 
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
+import Hypha.Command.Package (runPackage)
 import Hypha.Command.Search (runSearch)
 import Hypha.Error (HyphaError (..), errorExitCode, errorMessage, errorCode, ExitCode (..))
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
@@ -32,6 +33,9 @@ runCli flags cmd = do
     SearchCommand query extras -> do
       tracer (LogDebug $ "Search: " <> query)
       pure $ runSearch plan query extras
+    PackageCommand pkgName -> do
+      tracer (LogDebug $ "Package: " <> pkgName)
+      pure $ runPackage plan pkgName
     _ -> pure $ Left $ UserError "Command not yet implemented"
 
   case result of

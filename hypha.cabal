@@ -63,6 +63,7 @@ library
     Hypha.Logging
     Hypha.Cli.Parser
     Hypha.Cli.Run
+    Hypha.Command.Package
     Hypha.Command.Search
   build-depends:
     , aeson              >= 2.0
@@ -94,6 +95,7 @@ test-suite hypha-tests
   hs-source-dirs:   test
   main-is:          Main.hs
   other-modules:
+    Golden.Package
     Golden.Search
     Property.HackageCache
     Property.OutputJson

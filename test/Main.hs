@@ -1,19 +1,21 @@
 module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
+import qualified Golden.Package
 import qualified Golden.Search
+import qualified Property.HackageCache
 import qualified Property.OutputJson
 import qualified Property.SymbolPath
-import qualified Property.HackageCache
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
-import qualified Unit.Project
 import qualified Unit.Hackage
 import qualified Unit.Hoogle
+import qualified Unit.Project
 
 main :: IO ()
 main = defaultMain (testGroup "hypha"
-  [ Golden.Search.tests
+  [ Golden.Package.tests
+  , Golden.Search.tests
   , Property.SymbolPath.tests
   , Property.HackageCache.tests
   , Property.OutputJson.tests
