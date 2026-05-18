@@ -1,0 +1,13 @@
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 280px 1fr;
+  grid-template-areas: "topbar topbar" "sidebar main";
+  height: 100vh;
+}
+.topbar  { grid-area: topbar;  border-bottom: 1px solid var(--border);
+           padding: 0.6rem 1rem; display: flex; gap: 0.8rem; align-items: center; }
+.sidebar { grid-area: sidebar; border-right: 1px solid var(--border);
+           overflow-y: auto; padding: 0.8rem; }
+.main    { grid-area: main;    overflow-y: auto; padding: 1rem 1.4rem; }
+.crumbs  { color: var(--muted); margin-bottom: 0.8rem; font-size: 0.9rem; }

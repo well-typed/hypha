@@ -1,0 +1,4 @@
+.doc .symbol-name { font-weight: 700; }
+.doc .signature   { background: var(--code-bg); padding: 0.5rem; border-radius: 4px; }
+.doc .src-link    { color: var(--muted); font-size: 0.85rem; margin-top: 1rem; }
+.doc .see-also    { margin-top: 1rem; }

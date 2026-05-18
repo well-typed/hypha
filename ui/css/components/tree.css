@@ -1,0 +1,4 @@
+.tree { list-style: none; padding: 0; margin: 0; }
+.tree li { padding: 0.15rem 0; }
+.tree details > summary { cursor: pointer; }
+.tree .module-leaf a { display: block; padding: 0.1rem 0; }
