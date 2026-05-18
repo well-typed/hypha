@@ -53,6 +53,7 @@ library
     Hypha.Output.Outcome
     Hypha.Output.Actions
     Hypha.Output.Json
+    Hypha.Output.Human
     Hypha.Project.Discovery
     Hypha.Project.Plan
     Hypha.Project.Overrides
@@ -89,8 +90,12 @@ library
     , filepath           >= 1.4
     , http-client        >= 0.7
     , http-types         >= 0.12
+    , haddock-library     >= 1.11
     , hoogle             >= 5.0 && < 6
     , optparse-applicative >= 0.18
+    , prettyprinter         >= 1.7
+    , prettyprinter-ansi-terminal >= 1.1
+    , skylighting           >= 0.14
     , text                 >= 2.0
     , time                 >= 1.12
     , transformers         >= 0.6
@@ -111,6 +116,7 @@ test-suite hypha-tests
     Golden.Package
     Golden.Search
     Golden.Symbol
+    Golden.Human
     Golden.Versions
     Golden.Source
     Property.HackageCache
@@ -131,6 +137,8 @@ test-suite hypha-tests
     , directory
     , filepath
     , hypha
+    , prettyprinter
+    , prettyprinter-ansi-terminal
     , tasty
     , tasty-golden
     , tasty-hunit

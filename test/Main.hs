@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
+import qualified Golden.Human
 import qualified Golden.Package
 import qualified Golden.Search
 import qualified Golden.Source
@@ -19,7 +20,8 @@ import qualified Unit.Project
 
 main :: IO ()
 main = defaultMain (testGroup "hypha"
-  [ Golden.Package.tests
+  [ Golden.Human.tests
+  , Golden.Package.tests
   , Golden.Search.tests
   , Golden.Source.tests
   , Golden.Symbol.tests
