@@ -3,6 +3,8 @@
 module Hypha.Cli.Run
   ( -- * Execution
     runCli
+    -- * Helpers
+  , withPlan
   ) where
 
 import qualified Data.ByteString.Lazy as LBS
@@ -14,24 +16,31 @@ import qualified Data.Aeson as Aeson
 
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Command.Search (runSearch)
+import Hypha.Command.Versions (runVersions)
 import Hypha.Error (HyphaError (..), errorExitCode, errorMessage, errorCode, ExitCode (..))
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Outcome (Outcome (..), OutcomeError (..), failureOutcome)
 import Hypha.Output.Json (encodeEnvelope)
-import Hypha.Types.BuildPlan (emptyBuildPlan)
+import Hypha.Types.BuildPlan (BuildPlan (..), emptyBuildPlan)
+import Hypha.Types.PackageId (PackageName (..))
 
 -- | Run the CLI with the given flags and command.
 runCli :: GlobalFlags -> Command -> IO ()
 runCli flags cmd = do
   let tracer = if gfVerbose flags then verboseTracer else silentTracer
-      plan = emptyBuildPlan  -- TODO: Load from project
 
   tracer (LogInfo "Starting hypha")
+
+  -- For now, use emptyBuildPlan. In the future, this will load from project.
+  let plan = emptyBuildPlan
 
   result <- case cmd of
     SearchCommand query extras -> do
       tracer (LogDebug $ "Search: " <> query)
       pure $ runSearch plan query extras
+    VersionsCommand pkg -> do
+      tracer (LogDebug $ "Versions: " <> pkg)
+      pure $ runVersions plan (PackageName pkg)
     _ -> pure $ Left $ UserError "Command not yet implemented"
 
   case result of
@@ -43,6 +52,17 @@ runCli flags cmd = do
           outcome = failureOutcome errObj :: Outcome Aeson.Value
       emitOutcome flags (commandName cmd) outcome
       System.exitWith (toSystemExitCode (errorExitCode err))
+
+-- | Helper that runs an action with the build plan.
+--   Abstracts plan-root discovery and error handling.
+--
+--   In the future, this will:
+--   1. Discover project root
+--   2. Load build plan from plan.json
+--   3. Apply overrides
+--   4. Pass the plan to the action
+withPlan :: (BuildPlan -> Either HyphaError (Outcome Aeson.Value)) -> Either HyphaError (Outcome Aeson.Value)
+withPlan action = action emptyBuildPlan
 
 -- | Emit an outcome to stdout as JSON.
 emitOutcome :: GlobalFlags -> Text -> Outcome Aeson.Value -> IO ()

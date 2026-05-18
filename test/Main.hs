@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
 import qualified Golden.Search
+import qualified Golden.Versions
 import qualified Property.OutputJson
 import qualified Property.SymbolPath
 import qualified Property.HackageCache
@@ -14,6 +15,7 @@ import qualified Unit.Hoogle
 main :: IO ()
 main = defaultMain (testGroup "hypha"
   [ Golden.Search.tests
+  , Golden.Versions.tests
   , Property.SymbolPath.tests
   , Property.HackageCache.tests
   , Property.OutputJson.tests

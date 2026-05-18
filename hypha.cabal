@@ -64,6 +64,7 @@ library
     Hypha.Cli.Parser
     Hypha.Cli.Run
     Hypha.Command.Search
+    Hypha.Command.Versions
   build-depends:
     , aeson              >= 2.0
     , base               >= 4.18 && < 5
@@ -95,6 +96,7 @@ test-suite hypha-tests
   main-is:          Main.hs
   other-modules:
     Golden.Search
+    Golden.Versions
     Property.HackageCache
     Property.OutputJson
     Property.SymbolPath
