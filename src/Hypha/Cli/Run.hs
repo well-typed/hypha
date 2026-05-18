@@ -165,8 +165,7 @@ dispatch flags = \case
   WhatProvidesCommand _ ->
     pure (Left (notImplemented "whatprovides" "see issues/todo/016-whatprovides-command.md"))
   DoctorCommand ->
-    withPlan flags $ \_root plan ->
-      Doctor.runDoctor plan
+    Doctor.runDoctor >>= \outcome -> pure (Right outcome)
 
 notImplemented :: Text -> Text -> HyphaError
 notImplemented name hint =

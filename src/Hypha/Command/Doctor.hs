@@ -1,7 +1,15 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
+-- | Environment health check command.
+--
+-- The @doctor@ command diagnoses the Haskell development environment by checking:
+--   * GHC availability on PATH
+--   * Haddock availability on PATH
+--   * Presence of dist-newstyle/cache/plan.json
+--
+-- Returns a JSON envelope with check statuses (pass/warn/fail) and an
+-- @all_pass@ boolean summarizing the overall health.
 module Hypha.Command.Doctor
   ( -- * Field sets
     compactKeys
@@ -19,11 +27,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import System.Directory (doesFileExist, findExecutable)
 
-import Hypha.Error (HyphaError (..))
-import Hypha.Output.Outcome
-  ( Outcome (..)
-  )
-import Hypha.Types.BuildPlan (BuildPlan)
+import Hypha.Output.Outcome (Outcome (..))
 
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList ["checks", "all_pass"]
@@ -37,30 +41,29 @@ data CheckResult
   deriving stock (Show, Eq)
 
 -- | Run all environment checks.
-runDoctor :: BuildPlan -> IO (Either HyphaError (Outcome Value))
-runDoctor _plan = do
-  ghcResult  <- checkGhc
+--
+-- Note: This returns 'Outcome Value' directly (not 'Either HyphaError')
+-- because the checks themselves never fail at the IO boundary; they always
+-- produce a structured result (pass/warn/fail) in the outcome body.
+runDoctor :: IO (Outcome Value)
+runDoctor = do
+  ghcResult <- checkGhc
   haddockResult <- checkHaddock
   planResult <- checkPlanJson
 
   let allPass = case [ghcResult, haddockResult, planResult] of
         [] -> True
-        rs -> and [r == CheckPass "" | r <- rs]
-
+        rs -> and [case r of CheckPass _ -> True; _ -> False | r <- rs]
       checks = Aeson.object
         [ "ghc"       .= checkToJson ghcResult
         , "haddock"   .= checkToJson haddockResult
         , "plan_json" .= checkToJson planResult
         ]
-
-      outcome = OutcomeSuccess body allPass [] mempty mempty
-        where
-          body = Aeson.object
-            [ "checks"   .= checks
-            , "all_pass" .= allPass
-            ]
-
-  pure (Right outcome)
+      body = Aeson.object
+        [ "checks"   .= checks
+        , "all_pass" .= allPass
+        ]
+  pure $ OutcomeSuccess body allPass [] mempty mempty
 
 checkGhc :: IO CheckResult
 checkGhc = do
