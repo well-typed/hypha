@@ -216,6 +216,48 @@ Add `hypha-mcp` to your MCP client:
 }
 ```
 
+**opencode** (`opencode.json`):
+```json
+{
+  "mcp": {
+    "hypha": {
+      "type": "local",
+      "command": ["hypha-mcp"]
+    }
+  }
+}
+```
+
+**Generic MCP client** — point any MCP-compatible host at the `hypha-mcp`
+executable over stdio. It speaks JSON-RPC 2.0 and exposes every `hypha`
+subcommand as an MCP tool.
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `2` | User error (bad args, malformed path, non-loopback bind) |
+| `3` | Not found (symbol/package absent across plan → store → Hackage) |
+| `4` | Network error (offline cache miss, HTTP 429/503, transport failure) |
+| `5` | Cache / on-disk corruption |
+| `7` | Environment error (no `plan.json`, missing GHC/Haddock, unreachable store) |
+
+## Caching
+
+`hypha` aggressively caches everything network-shaped under
+`$XDG_CACHE_HOME/hypha/` (defaults to `~/.cache/hypha/`):
+
+| Cache | Layout | Freshness |
+|-------|--------|-----------|
+| Hackage HTTP responses | `hackage/<sha256>.json` | ETag + `If-Modified-Since` revalidation; 15 min TTL for mutable resources, immutable bodies cached forever |
+| Source tarballs | `source/<pkg>-<ver>/` | Immutable once extracted |
+| Haddock HTML | `haddock/<pkg>-<ver>/` | Built on demand, reused across runs |
+| Hoogle DB | `hoogle/<plan-hash>.hoo` | Rebuilt when `plan.json` changes |
+
+The fallback chain is automatic: **local HTTP cache → build plan → cabal
+store → Hackage**.  There is no `--any` flag — widening is seamless.
+
 ## Architecture
 
 ```
