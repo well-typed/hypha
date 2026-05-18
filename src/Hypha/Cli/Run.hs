@@ -20,7 +20,6 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
-import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -34,17 +33,19 @@ import qualified System.Exit as System
 
 import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import qualified Hypha.Command.Deps       as Deps
 import qualified Hypha.Command.Doctor   as Doctor
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
-import qualified Hypha.Command.Search   as Search
-import qualified Hypha.Command.Source   as Source
-import qualified Hypha.Command.Versions as Versions
+import qualified Hypha.Command.Search        as Search
+import qualified Hypha.Command.Source        as Source
+import qualified Hypha.Command.Symbol        as Symbol
+import qualified Hypha.Command.Versions      as Versions
+import qualified Hypha.Command.WhatProvides  as WhatProvides
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
 import Hypha.Exit (toSystemExitCode)
-import Hypha.Hoogle.Database (HoogleConfig (..))
-import Hypha.Hoogle.Query (mkGlobalHoogle, mkProjectHoogle)
+import Hypha.Hoogle.Query (mkHoogleForFlags)
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
 import Hypha.Output.Outcome
@@ -55,8 +56,8 @@ import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
 import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), CompilerId (..), PackageOverride (..), PlanPackage (..)
-  , ProjectRoot (..), applyOverrides
+  ( BuildPlan (..), CompilerId (..), PackageOverride (..), ProjectRoot (..)
+  , applyOverrides, lookupPackage
   )
 import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
 
@@ -127,49 +128,56 @@ dispatch flags = \case
     case Text.splitOn "/" arg of
       [pkg, modPath] ->
         withPlan flags $ \root plan ->
-          case Map.lookup (PackageName pkg) (bpPackages plan) of
+          case lookupPackage (PackageName pkg) plan of
             Nothing -> pure (Left (NotFound
               ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
-            Just pp -> do
+            Just ver -> do
               env <- mkBuildEnv root plan
               oc  <- Module.runModule env
-                        (Module.mkPid pkg (ppVersion pp)) modPath
+                        (Module.mkPid pkg ver) modPath
               pure (Right oc)
       _ -> pure (Left (UserError ("expected PKG/MOD (got: " <> arg <> ")")))
 
-  SymbolCommand _ ->
-    pure (Left (notImplemented "symbol" "see issues/todo/013-symbol-command.md"))
+  SymbolCommand arg ->
+    withPlan flags $ \root plan -> do
+      env <- mkBuildEnv root plan
+      Symbol.runSymbol env plan arg
+
   SourceCommand arg ->
     case Text.splitOn "/" arg of
       [pkg, modPath] ->
         withPlan flags $ \root plan ->
-          case Map.lookup (PackageName pkg) (bpPackages plan) of
+          case lookupPackage (PackageName pkg) plan of
             Nothing -> pure (Left (NotFound
               ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
-            Just pp -> do
+            Just ver -> do
               env <- mkBuildEnv root plan
-              let pid = PackageId (PackageName pkg) (ppVersion pp)
+              let pid = PackageId (PackageName pkg) ver
               Source.runSource env plan pid modPath Nothing
       [pkg, modPath, sym] ->
         withPlan flags $ \root plan ->
-          case Map.lookup (PackageName pkg) (bpPackages plan) of
+          case lookupPackage (PackageName pkg) plan of
             Nothing -> pure (Left (NotFound
               ("package '" <> pkg <> "' not in build plan (use --any to widen)")))
-            Just pp -> do
+            Just ver -> do
               env <- mkBuildEnv root plan
-              let pid = PackageId (PackageName pkg) (ppVersion pp)
+              let pid = PackageId (PackageName pkg) ver
               Source.runSource env plan pid modPath (Just sym)
       _ -> pure (Left (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")")))
-  DepsCommand _ _ _ ->
-    pure (Left (notImplemented "deps" "see issues/todo/015-deps-command.md"))
-  WhatProvidesCommand _ ->
-    pure (Left (notImplemented "whatprovides" "see issues/todo/016-whatprovides-command.md"))
+  DepsCommand pkgName reverseMode mDepth ->
+    withPlan flags $ \_root plan -> do
+      outcome <- Deps.runDeps plan (PackageName pkgName) reverseMode mDepth
+      pure (Right outcome)
+  WhatProvidesCommand sym -> do
+    result <- try @SomeException $ do
+      hoogle <- mkHoogleForFlags flags
+      WhatProvides.runWhatProvides hoogle sym
+    case result of
+      Left e  -> pure (Left (NetworkError (Text.pack (show e))))
+      Right o -> pure (Right o)
+
   DoctorCommand ->
     Doctor.runDoctor >>= \outcome -> pure (Right outcome)
-
-notImplemented :: Text -> Text -> HyphaError
-notImplemented name hint =
-  UserError ("command '" <> name <> "' not yet implemented (" <> hint <> ")")
 
 -- | Wire the @search@ command to a real Hoogle DB.  Search is the only
 -- command that can operate without a plan (it can fall back to the global
@@ -181,20 +189,7 @@ runSearchWithHoogle
   -> IO (Either HyphaError (Outcome Value))
 runSearchWithHoogle flags q extras = do
   result <- try @SomeException $ do
-    hoogle <-
-      if gfGlobal flags
-        then mkGlobalHoogle
-        else do
-          eRoot <- discoverProjectRoot (gfProjectDir flags)
-          case eRoot of
-            Left _  -> mkGlobalHoogle
-            Right root -> do
-              -- Use the (raw) plan.json contents as the staleness hash; if
-              -- loading fails we fall back to the global DB.
-              ePlan <- loadBuildPlan root
-              case ePlan of
-                Left _  -> mkGlobalHoogle
-                Right _ -> mkProjectHoogle (HoogleConfig root [] "alpha-stub")
+    hoogle <- mkHoogleForFlags flags
     Search.runSearchWith hoogle q extras
   case result of
     Left e  -> pure (Left (NetworkError (Text.pack (show e))))
@@ -257,21 +252,27 @@ errorOutcome err =
 -- distinction yet (alpha).
 compactKeysFor, fullKeysFor :: Text -> Set Text
 compactKeysFor = \case
-  "search"   -> Search.compactKeys
-  "package"  -> Package.compactKeys
-  "versions" -> Versions.compactKeys
-  "module"   -> Module.compactKeys
-  "source"   -> Source.compactKeys
-  "doctor"   -> Doctor.compactKeys
-  _          -> Set.empty
+  "search"       -> Search.compactKeys
+  "package"      -> Package.compactKeys
+  "versions"     -> Versions.compactKeys
+  "module"       -> Module.compactKeys
+  "source"       -> Source.compactKeys
+  "doctor"       -> Doctor.compactKeys
+  "deps"         -> Deps.compactKeys
+  "symbol"       -> Symbol.compactKeys
+  "whatprovides" -> WhatProvides.compactKeys
+  _              -> Set.empty
 fullKeysFor = \case
-  "search"   -> Search.fullKeys
-  "package"  -> Package.fullKeys
-  "versions" -> Versions.fullKeys
-  "module"   -> Module.fullKeys
-  "source"   -> Source.fullKeys
-  "doctor"   -> Doctor.fullKeys
-  _          -> Set.empty
+  "search"       -> Search.fullKeys
+  "package"      -> Package.fullKeys
+  "versions"     -> Versions.fullKeys
+  "module"       -> Module.fullKeys
+  "source"       -> Source.fullKeys
+  "doctor"       -> Doctor.fullKeys
+  "deps"         -> Deps.fullKeys
+  "symbol"       -> Symbol.fullKeys
+  "whatprovides" -> WhatProvides.fullKeys
+  _              -> Set.empty
 
 commandName :: Command -> Text
 commandName = \case

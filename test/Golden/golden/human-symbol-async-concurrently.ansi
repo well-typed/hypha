@@ -1,0 +1,6 @@
+[0;1mconcurrently[0m [0;96mfunction[0m
+  concurrently :: IO a -> IO b -> IO (a, b)
+
+  Run two IO actions concurrently.
+
+[0;93msrc/Control/Concurrent/Async.hs:42[0m

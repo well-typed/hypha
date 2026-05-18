@@ -4,6 +4,7 @@
 module Hypha.Types.BuildPlan
   ( -- * Core types
     BuildPlan (..)
+  , PlannedUnit (..)
   , PlanPackage (..)
   , ProjectRoot (..)
   , CompilerId (..)
@@ -13,15 +14,18 @@ module Hypha.Types.BuildPlan
   , emptyBuildPlan
     -- * Queries
   , lookupPackage
+  , lookupUnit
   , planPackages
   , applyOverrides
+  , forwardDepsOf
+  , reverseDepsOf
   ) where
 
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 
-import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
 
 -- | Absolute path to the project root (directory containing @cabal.project@).
 newtype ProjectRoot = ProjectRoot { unProjectRoot :: FilePath }
@@ -45,20 +49,26 @@ data PackageOverride = PackageOverride
   }
   deriving stock (Show, Eq, Ord)
 
--- | A single package entry in the build plan.
+-- | A single package entry in the build plan (legacy type; prefer 'PlannedUnit').
 data PlanPackage = PlanPackage
-  { ppVersion  :: !Version
-  , ppIsLocal  :: !Bool
-    -- ^ Whether the package is a local project package (not a dependency).
-  , ppDeps     :: !Int
-    -- ^ Number of library-level dependencies.
+  { ppName    :: !PackageName
+  , ppVersion :: !Version
   }
   deriving stock (Show, Eq, Ord)
+
+-- | A planned unit with its dependencies and metadata.
+data PlannedUnit = PlannedUnit
+  { puId      :: !PackageId
+  , puDeps    :: ![PackageId]
+  , puIsLocal :: !Bool
+    -- ^ Whether this is a local project package (not a dependency).
+  }
+  deriving stock (Show, Eq)
 
 -- | The resolved build plan: pinned package versions from @plan.json@.
 data BuildPlan = BuildPlan
   { bpCompiler  :: !CompilerId
-  , bpPackages  :: !(Map PackageName PlanPackage)
+  , bpUnits     :: !(Map PackageName PlannedUnit)
   , bpOverrides :: ![PackageOverride]
   }
   deriving stock (Show)
@@ -67,34 +77,47 @@ data BuildPlan = BuildPlan
 emptyBuildPlan :: BuildPlan
 emptyBuildPlan = BuildPlan
   { bpCompiler  = CompilerId "unknown"
-  , bpPackages  = Map.empty
+  , bpUnits     = Map.empty
   , bpOverrides = []
   }
 
--- | Look up a package in the plan.
-lookupPackage :: PackageName -> BuildPlan -> Maybe PlanPackage
-lookupPackage name = Map.lookup name . bpPackages
+-- | Look up a package version in the plan.
+lookupPackage :: PackageName -> BuildPlan -> Maybe Version
+lookupPackage name bp = pkgVersion . puId <$> Map.lookup name (bpUnits bp)
+
+-- | Look up a planned unit in the plan.
+lookupUnit :: PackageName -> BuildPlan -> Maybe PlannedUnit
+lookupUnit name = Map.lookup name . bpUnits
 
 -- | All packages in the plan, as a list.
 planPackages :: BuildPlan -> [PlanPackage]
-planPackages bp = Map.elems (bpPackages bp)
+planPackages bp =
+  [ PlanPackage (pkgName (puId u)) (pkgVersion (puId u))
+  | u <- Map.elems (bpUnits bp)
+  ]
 
 -- | Apply overrides to a build plan.
 --   Each override replaces (or inserts) the pinned version for its package.
---   The overridden entry keeps its original local/deps metadata if present,
---   or defaults to non-local with zero deps.
 applyOverrides :: [PackageOverride] -> BuildPlan -> BuildPlan
 applyOverrides overrides bp = bp
-  { bpPackages  = foldr applyOverride (bpPackages bp) overrides
+  { bpUnits     = foldr applyOverride (bpUnits bp) overrides
   , bpOverrides = overrides ++ bpOverrides bp
   }
   where
-    applyOverride :: PackageOverride -> Map PackageName PlanPackage -> Map PackageName PlanPackage
-    applyOverride (PackageOverride n v) m =
-      let existing = Map.lookup n m
-          pp = PlanPackage
-            { ppVersion  = v
-            , ppIsLocal  = maybe False ppIsLocal existing
-            , ppDeps     = maybe 0    ppDeps    existing
-            }
-      in Map.insert n pp m
+    applyOverride (PackageOverride n v) =
+      Map.insertWith (\_ old -> old { puId = (puId old) { pkgVersion = v } }) n
+        PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False }
+
+-- | Get forward dependencies of a package.
+forwardDepsOf :: PackageName -> BuildPlan -> [(PackageName, Version)]
+forwardDepsOf name bp = case Map.lookup name (bpUnits bp) of
+  Nothing -> []
+  Just u  -> [ (pkgName d, pkgVersion d) | d <- puDeps u ]
+
+-- | Get reverse dependencies of a package (packages that depend on it).
+reverseDepsOf :: PackageName -> BuildPlan -> [(PackageName, Version)]
+reverseDepsOf target bp =
+  [ (pkgName (puId u), pkgVersion (puId u))
+  | u <- Map.elems (bpUnits bp)
+  , any (\d -> pkgName d == target) (puDeps u)
+  ]

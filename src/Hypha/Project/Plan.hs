@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Hypha.Project.Plan
   ( -- * Types
     PlanError (..)
@@ -7,6 +8,7 @@ module Hypha.Project.Plan
   ) where
 
 import Control.Exception (IOException, try)
+import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as Text
@@ -14,8 +16,8 @@ import qualified Data.Text as Text
 import qualified Cabal.Plan as CP
 
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PlanPackage (..), CompilerId (..), ProjectRoot (..) )
-import Hypha.Types.PackageId (PackageName (..), Version (..))
+  ( BuildPlan (..), CompilerId (..), PlannedUnit (..), ProjectRoot (..) )
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | Errors that can occur when loading the build plan.
 data PlanError
@@ -40,7 +42,7 @@ loadBuildPlan (ProjectRoot root) = do
 cabalPlanToBuildPlan :: CP.PlanJson -> BuildPlan
 cabalPlanToBuildPlan pj = BuildPlan
   { bpCompiler  = compilerFromPlan pj
-  , bpPackages  = packagesFromPlan pj
+  , bpUnits     = unitsFromPlan pj
   , bpOverrides = []
   }
 
@@ -51,35 +53,39 @@ compilerFromPlan pj =
       verStr = Text.intercalate (Text.pack ".") (map (Text.pack . show) parts)
   in CompilerId (name <> Text.pack "-" <> verStr)
 
--- | Extract all packages from the build plan with metadata (local flag,
---   library dependency count).  Deduplicates by package name when multiple
---   units share the same package (e.g. library + executable).
-packagesFromPlan :: CP.PlanJson -> Map.Map PackageName PlanPackage
-packagesFromPlan pj =
-  Map.fromListWith mergePlanPackage
-    [ (PackageName pkgText, PlanPackage
-        { ppVersion  = Version (CP.dispVer ver)
-        , ppIsLocal  = utype == CP.UnitTypeLocal
-        , ppDeps     = libDepCount comps
-        })
-    | CP.Unit { CP.uPId  = CP.PkgId (CP.PkgName pkgText) ver
-              , CP.uType  = utype
-              , CP.uComps = comps
-              } <- Map.elems (CP.pjUnits pj)
+-- | Extract planned units with their dependencies from the plan.
+unitsFromPlan :: CP.PlanJson -> Map PackageName PlannedUnit
+unitsFromPlan pj =
+  let allUnits = Map.elems (CP.pjUnits pj)
+      -- Build a map from UnitId to PkgId for dependency resolution
+      unitIdToPkgId = Map.fromList
+        [ (CP.uId u, CP.uPId u)
+        | u <- allUnits
+        ]
+      -- Include all units (local, global, builtin, inplace).
+      -- Local packages (hypha itself) are included with puIsLocal = True.
+  in Map.fromList
+    [ (PackageName pkgText, toPlannedUnit unitIdToPkgId u)
+    | u <- allUnits
+    , let CP.PkgId (CP.PkgName pkgText) _ = CP.uPId u
     ]
-  where
-    -- | Count library-level dependencies from a component map.
-    libDepCount :: Map.Map CP.CompName CP.CompInfo -> Int
-    libDepCount comps = case Map.lookup CP.CompNameLib comps of
-      Just (CP.CompInfo { CP.ciLibDeps = deps }) -> Set.size deps
-      Nothing                                     -> 0
 
-    -- | Merge two entries for the same package name:
-    --   - local wins if either component is local
-    --   - take the larger deps count
-    mergePlanPackage :: PlanPackage -> PlanPackage -> PlanPackage
-    mergePlanPackage a b = PlanPackage
-      { ppVersion  = ppVersion a
-      , ppIsLocal  = ppIsLocal a || ppIsLocal b
-      , ppDeps     = max (ppDeps a) (ppDeps b)
-      }
+-- | Convert a cabal-plan Unit to our PlannedUnit type.
+toPlannedUnit :: Map CP.UnitId CP.PkgId -> CP.Unit -> PlannedUnit
+toPlannedUnit unitIdToPkgId u =
+  let CP.PkgId (CP.PkgName name) ver = CP.uPId u
+      pkgId = PackageId (PackageName name) (Version (CP.dispVer ver))
+      -- Get library dependencies from all components
+      libDeps = concatMap (Set.toList . CP.ciLibDeps) (Map.elems (CP.uComps u))
+      -- Resolve UnitIds to PackageIds
+      deps = [ toPackageId pid | uid <- libDeps, Just pid <- [Map.lookup uid unitIdToPkgId] ]
+  in PlannedUnit
+    { puId      = pkgId
+    , puDeps    = deps
+    , puIsLocal = (CP.uType u == CP.UnitTypeLocal)
+    }
+
+-- | Convert a cabal-plan PkgId to our PackageId type.
+toPackageId :: CP.PkgId -> PackageId
+toPackageId (CP.PkgId (CP.PkgName name) ver) =
+  PackageId (PackageName name) (Version (CP.dispVer ver))
