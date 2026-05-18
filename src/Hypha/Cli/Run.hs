@@ -40,6 +40,7 @@ import qualified Hypha.Command.Doctor   as Doctor
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
 import qualified Hypha.Command.Search        as Search
+import qualified Hypha.Command.Server        as Server
 import qualified Hypha.Command.Source        as Source
 import qualified Hypha.Command.Symbol        as Symbol
 import qualified Hypha.Command.Versions      as Versions
@@ -72,11 +73,15 @@ runCli :: GlobalFlags -> Command -> IO ()
 runCli flags cmd = do
   let tracer = if gfVerbose flags then verboseTracer else silentTracer
   tracer (LogInfo "starting hypha")
-  result <- dispatch flags cmd
-  emit flags (commandName cmd) result
-  case result of
-    Right{}  -> System.exitWith System.ExitSuccess
-    Left err -> System.exitWith (toSystemExitCode (errorExitCode err))
+  case cmd of
+    ServerCommand port mBind prebuild jobs ->
+      runServerInteractive flags port mBind prebuild jobs
+    _ -> do
+      result <- dispatch flags cmd
+      emit flags (commandName cmd) result
+      case result of
+        Right{}  -> System.exitWith System.ExitSuccess
+        Left err -> System.exitWith (toSystemExitCode (errorExitCode err))
 
 -- | Run the body action with the loaded build plan (project resolution +
 -- overrides applied).  Returns an environment error if no plan is reachable.
@@ -259,6 +264,52 @@ dispatch flags = \case
   DoctorCommand ->
     Doctor.runDoctor >>= \outcome -> pure (Right outcome)
 
+  ServerCommand{} ->
+    pure (Left (UserError "server command is handled in runCli; should not reach dispatch"))
+
+-- | Server interactive arm.  Refuses non-loopback binds with exit 2; on
+-- successful bind it blocks inside Warp until interrupted.
+runServerInteractive
+  :: GlobalFlags
+  -> Int
+  -> Maybe Text
+  -> Bool
+  -> Int
+  -> IO ()
+runServerInteractive flags port mBind prebuild jobs = do
+  case parseBindFromFlags port mBind of
+    Left be -> do
+      hPutStrLn stderr (renderBindError be)
+      System.exitWith (System.ExitFailure 2)
+    Right ba -> do
+      let opts = Server.ServerOpts ba prebuild jobs
+      e <- withResolver flags $ \(resolver, env) -> do
+        eRoot <- discoverProjectRoot (gfProjectDir flags)
+        plan  <- case eRoot of
+          Left _    -> pure emptyBuildPlan
+          Right rt  -> either (const emptyBuildPlan) id <$> loadBuildPlan rt
+        hclient <- mkHackageClientForFlags flags
+        hoogle  <- mkHoogleForFlags flags
+        r <- Server.runServer plan env hclient resolver hoogle opts
+        case r of
+          Left be   -> pure (Left (UserError (Text.pack (renderBindError be))))
+          Right ()  -> pure (Right ())
+      case e of
+        Left err -> do
+          hPutStrLn stderr (Text.unpack (errorMessage err))
+          System.exitWith (toSystemExitCode (errorExitCode err))
+        Right () -> System.exitWith System.ExitSuccess
+
+parseBindFromFlags :: Int -> Maybe Text -> Either Server.BindError Server.BindAddr
+parseBindFromFlags port = \case
+  Nothing   -> Right (Server.BindAddr "127.0.0.1" port)
+  Just raw  -> Server.parseBind raw
+
+renderBindError :: Server.BindError -> String
+renderBindError = \case
+  Server.BindMalformed raw   -> "malformed --bind value: " <> Text.unpack raw
+  Server.BindNonLoopback raw -> "refusing non-loopback bind: " <> Text.unpack raw
+
 -- | Source command arm: resolve package (plan → store → Hackage), locate
 -- source directory (local → Hackage tarball), then extract snippet.
 runSourceArm
@@ -397,6 +448,7 @@ commandName = \case
   DepsCommand _ _ _      -> "deps"
   WhatProvidesCommand _  -> "whatprovides"
   DoctorCommand          -> "doctor"
+  ServerCommand{}        -> "server"
 
 -- | A small, dependency-free human renderer used by @--human@.  Walks the
 -- envelope and prints a readable summary.  This is a stop-gap until the

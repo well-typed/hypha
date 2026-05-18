@@ -4,6 +4,7 @@ import Test.Tasty (defaultMain, testGroup)
 import qualified Golden.Human
 import qualified Golden.Package
 import qualified Golden.Search
+import qualified Golden.Server
 import qualified Golden.Source
 import qualified Golden.Symbol
 import qualified Golden.Versions
@@ -29,6 +30,7 @@ main = defaultMain (testGroup "hypha"
   [ Golden.Human.tests
   , Golden.Package.tests
   , Golden.Search.tests
+  , Golden.Server.tests
   , Golden.Source.tests
   , Golden.Symbol.tests
   , Golden.Versions.tests

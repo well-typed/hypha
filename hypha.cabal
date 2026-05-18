@@ -73,6 +73,7 @@ library
     Hypha.Command.Deps
     Hypha.Command.Package
     Hypha.Command.Search
+    Hypha.Command.Server
     Hypha.Command.Source
     Hypha.Command.Symbol
     Hypha.Command.Versions
@@ -118,6 +119,7 @@ library
     , servant               >= 0.20
     , servant-server        >= 0.20
     , process               >= 1.6
+    , warp                  >= 3.3
     , prettyprinter-ansi-terminal >= 1.1
     , skylighting           >= 0.14
     , tagsoup               >= 0.14
@@ -147,6 +149,7 @@ test-suite hypha-tests
   other-modules:
     Golden.Package
     Golden.Search
+    Golden.Server
     Golden.Symbol
     Golden.Human
     Golden.Versions
@@ -176,6 +179,7 @@ test-suite hypha-tests
     , directory
     , filepath
     , hypha
+    , lucid2
     , prettyprinter
     , prettyprinter-ansi-terminal
     , tasty

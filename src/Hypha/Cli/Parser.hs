@@ -55,6 +55,8 @@ data Command
     -- ^ @whatprovides <symbol>@
   | DoctorCommand
     -- ^ @doctor@
+  | ServerCommand !Int !(Maybe Text) !Bool !Int
+    -- ^ @server [--port N] [--bind HOST:PORT] [--prebuild] [--prebuild-jobs N]@
   deriving stock (Show, Eq)
 
 -- | Parse the CLI arguments.
@@ -129,6 +131,7 @@ commandParser = hsubparser
  <> command "deps" (info depsParser (progDesc "Dependencies"))
  <> command "whatprovides" (info whatProvidesParser (progDesc "Find symbol providers"))
  <> command "doctor" (info doctorParser (progDesc "Environment health check"))
+ <> command "server" (info serverParser (progDesc "Local Haddock/source browser"))
   )
 
 searchParser :: Parser Command
@@ -168,3 +171,29 @@ whatProvidesParser = WhatProvidesCommand
 
 doctorParser :: Parser Command
 doctorParser = pure DoctorCommand
+
+serverParser :: Parser Command
+serverParser = ServerCommand
+  <$> option auto
+        ( long "port"
+       <> metavar "N"
+       <> value 4287
+       <> showDefault
+       <> help "Port to bind to (default 4287)"
+        )
+  <*> optional (strOption
+        ( long "bind"
+       <> metavar "HOST:PORT"
+       <> help "Explicit bind address (loopback only)"
+        ))
+  <*> switch
+        ( long "prebuild"
+       <> help "Pre-render Haddocks for every package in the build plan"
+        )
+  <*> option auto
+        ( long "prebuild-jobs"
+       <> metavar "N"
+       <> value 4
+       <> showDefault
+       <> help "Maximum concurrent prebuild workers"
+        )
