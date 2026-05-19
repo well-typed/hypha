@@ -57,9 +57,12 @@ data SourceLoc = SourceLoc
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList
   [ "name", "kind", "package", "version", "module"
+  , "signature", "haddock_raw"
+  ]
+fullKeys = Set.fromList
+  [ "name", "kind", "package", "version", "module"
   , "signature", "haddock_raw", "source"
   ]
-fullKeys = compactKeys
 
 -- | Execute the @symbol@ command.
 --
