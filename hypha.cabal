@@ -98,6 +98,7 @@ library
     Hypha.Server.Ui.Search
     Hypha.Server.Ui.Tree
     Hypha.Server.Ui.Doc
+    Hypha.Server.Ui.Haddock
     Hypha.Server.Api
     Hypha.Server.App
     Hypha.Server.Ui.Source

@@ -25,7 +25,7 @@ import Lucid
 renderHaddockHtml :: Text -> Html ()
 renderHaddockHtml raw
   | Text.null cleaned = mempty
-  | otherwise         = fromDocH (HP.parseString (Text.unpack cleaned))
+  | otherwise         = fromDocH (HP.toRegular (HP.parseString (Text.unpack cleaned)))
   where
     cleaned = Text.strip (stripCommentMarkers raw)
 
@@ -53,17 +53,18 @@ stripCommentMarkers = Text.unlines . map stripOne . Text.lines
         Just ('^', rest) -> rest
         _                -> t
 
--- | Walk a Haddock 'DocH' AST into Lucid HTML.  The two type
--- parameters (@mod@ and @id@) come from the parser without us doing
--- anything fancier than rendering them as inline text/code.
-fromDocH :: HT.DocH mod ident -> Html ()
+-- | Walk a Haddock 'DocH' AST into Lucid HTML.  We collapse identifier
+-- references to their textual form via 'HP.toRegular' so the identifier
+-- type is plain 'String'; the module-name slot ('mod') is left
+-- polymorphic and ignored — the symbol card has nowhere to link it.
+fromDocH :: HT.DocH mod String -> Html ()
 fromDocH = \case
   HT.DocEmpty        -> mempty
   HT.DocAppend x y   -> fromDocH x <> fromDocH y
   HT.DocString s     -> toHtml (Text.pack s)
   HT.DocParagraph x  -> p_ (fromDocH x)
-  HT.DocIdentifier i ->
-    code_ (toHtml (identifierText (show i)))
+  HT.DocIdentifier s ->
+    code_ (toHtml (Text.pack s))
   HT.DocIdentifierUnchecked _ ->
     code_ (toHtml ("\x2026" :: Text))
   HT.DocModule m     -> code_ (toHtml (Text.pack (HT.modLinkName m)))
@@ -97,18 +98,3 @@ fromDocH = \case
   HT.DocMathDisplay s -> pre_ (code_ (toHtml (Text.pack s)))
   HT.DocWarning x     -> div_ [class_ "warn"] (fromDocH x)
 
--- | haddock-library exposes the identifier payload through whatever
--- type 'HP.parseString' was called with; rather than couple to its
--- internal 'Namespace' shape we 'show' the payload and pick the
--- quoted identifier out by string surgery — robust across versions.
-identifierText :: String -> Text
-identifierText shown =
-  let t = Text.pack shown
-      -- The Show output looks like either @\"name\"@ or
-      -- @(None,\"name\",None)@ depending on the haddock-library
-      -- version.  Grab the contents of the first double-quoted run.
-  in case Text.breakOn "\"" t of
-       (_, rest1) | not (Text.null rest1) ->
-         let rest = Text.drop 1 rest1
-         in fst (Text.breakOn "\"" rest)
-       _ -> t

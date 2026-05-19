@@ -7,6 +7,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Lucid
 
+import qualified Hypha.Server.Ui.Haddock as Haddock
+
 -- | Render a symbol documentation card with name, signature, rendered Haddock
 -- prose, and a link to the source view rooted at the package/module pair.
 -- The link omits the line anchor when no faithful source line could be
@@ -22,7 +24,7 @@ symbolCard
 symbolCard name sig haddockText pkg modPath mLine = div_ [class_ "doc"] $ do
   h2_ [class_ "symbol-name"] (toHtml name)
   pre_ [class_ "signature"] (code_ (toHtml sig))
-  div_ [class_ "haddock"] (toHtml haddockText)
+  div_ [class_ "haddock"] (Haddock.renderHaddockHtml haddockText)
   div_ [class_ "src-link"] $ do
     toHtml ("source: " :: Text)
     case mLine of
