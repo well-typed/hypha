@@ -52,6 +52,7 @@ library
   exposed-modules:
     Hypha.Prelude
     Hypha.Types.PackageId
+    Hypha.Types.ComponentName
     Hypha.Types.SymbolPath
     Hypha.Types.BuildPlan
     Hypha.Types.Doc
@@ -68,6 +69,7 @@ library
     Hypha.Output.Json
     Hypha.Output.Human
     Hypha.Project.Discovery
+    Hypha.Project.Components
     Hypha.Project.Plan
     Hypha.Project.Overrides
     Hypha.Cache
@@ -115,6 +117,7 @@ library
     , aeson-pretty       >= 0.8
     , base               >= 4.18 && < 5
     , bytestring         >= 0.11
+    , Cabal-syntax       >= 3.10 && < 3.20
     , cabal-plan         >= 0.7
     , containers         >= 0.6
     , cryptohash-sha256  >= 0.11
@@ -173,11 +176,13 @@ test-suite hypha-tests
     Golden.Human
     Golden.Versions
     Golden.Source
+    Property.ComponentName
     Property.HackageCache
     Property.OutputJson
     Property.SymbolPath
     Unit.BuildEnv
     Unit.BuildEnvCompose
+    Unit.Components
     Unit.Doctor
     Unit.Hackage
     Unit.Hoogle

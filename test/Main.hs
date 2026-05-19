@@ -8,12 +8,14 @@ import qualified Golden.Server
 import qualified Golden.Source
 import qualified Golden.Symbol
 import qualified Golden.Versions
+import qualified Property.ComponentName
 import qualified Property.HackageCache
 import qualified Property.HaddockRewrite
 import qualified Property.OutputJson
 import qualified Property.SymbolPath
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
+import qualified Unit.Components
 import qualified Unit.Deps
 import qualified Unit.Doctor
 import qualified Unit.Hackage
@@ -36,12 +38,14 @@ main = defaultMain (testGroup "hypha"
   , Golden.Source.tests
   , Golden.Symbol.tests
   , Golden.Versions.tests
+  , Property.ComponentName.tests
   , Property.HaddockRewrite.tests
   , Property.SymbolPath.tests
   , Property.HackageCache.tests
   , Property.OutputJson.tests
   , Unit.BuildEnv.tests
   , Unit.BuildEnvCompose.tests
+  , Unit.Components.tests
   , Unit.Deps.tests
   , Unit.Doctor.tests
   , Unit.Project.tests
