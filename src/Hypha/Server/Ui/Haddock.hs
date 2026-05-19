@@ -25,7 +25,10 @@ import Lucid
 renderHaddockHtml :: Text -> Html ()
 renderHaddockHtml raw
   | Text.null cleaned = mempty
-  | otherwise         = fromDocH (HP.toRegular (HP.parseString (Text.unpack cleaned)))
+  | otherwise         =
+      let meta    = HP.parseParas Nothing (Text.unpack cleaned)
+          regular = HP.toRegular (HT._doc meta)
+      in fromDocH regular
   where
     cleaned = Text.strip (stripCommentMarkers raw)
 

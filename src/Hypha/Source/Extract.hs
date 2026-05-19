@@ -51,9 +51,32 @@ extractSymbolInfo src sym =
 numberedLines :: Text -> [(Int, Text)]
 numberedLines = zip [1 :: Int ..] . Text.lines
 
--- | The first line that is a type signature for the given symbol.
+-- | The first line that begins a type signature for the given symbol,
+-- along with the full multi-line signature joined into a single
+-- whitespace-collapsed 'Text'.  Continuation lines are recognised by
+-- their indentation: anything starting with a space/tab after the
+-- @sym :: ...@ opener is treated as part of the same signature until we
+-- hit a blank line or a top-level line.
 findSignatureLine :: Text -> [(Int, Text)] -> Maybe (Int, Text)
-findSignatureLine sym = listToMaybe . filter (isSignatureLine sym . snd)
+findSignatureLine sym ls =
+  case dropWhile (not . isSignatureLine sym . snd) ls of
+    []                -> Nothing
+    (h@(i, _) : rest) ->
+      let continuation = takeWhile (isContinuation . snd) rest
+          full         = collapseSig (map snd (h : continuation))
+      in Just (i, full)
+  where
+    isContinuation :: Text -> Bool
+    isContinuation l
+      | Text.null l                         = False
+      | "--"     `Text.isPrefixOf` l        = False
+      | otherwise = case Text.uncons l of
+          Just (c, _) -> c == ' ' || c == '\t'
+          Nothing     -> False
+
+    collapseSig :: [Text] -> Text
+    collapseSig =
+      Text.unwords . filter (not . Text.null) . map (Text.strip)
 
 -- | Find the definition line for a symbol that appears after the given
 -- signature line index.
