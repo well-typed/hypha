@@ -19,6 +19,8 @@ module Hypha.Package.Resolver
   , PackageResolver (..)
     -- * Construction
   , mkPackageResolver
+    -- * Queries
+  , planSrcDir
   ) where
 
 import Data.Aeson (Value)
@@ -76,7 +78,7 @@ mkPackageResolver env hclient plan = do
   createDirectoryIfMissing True sourceCache
   pure PackageResolver
     { resolvePkg = resolvePackageWith env hclient plan
-    , resolveSrc = resolvePackageSourceWith env hclient sourceCache
+    , resolveSrc = resolvePackageSourceWith env hclient sourceCache plan
     , fetchVrs   = \pkgName -> do
         result <- fetchVersions hclient pkgName
         pure (either (Left . hackageErrorToHypha pkgName) Right result)
@@ -132,34 +134,58 @@ resolvePackageWith env hclient plan name = do
 
 -- | Resolve the source directory for a package, trying local sources first,
 --   then falling back to downloading from Hackage.
+--
+-- Resolution order:
+--   1. Local package source path from the build plan (puSrcDir, fast).
+--   2. Build environment's store lookup (locatePackageSource).
+--   3. Hackage source tarball download.
 resolvePackageSourceWith
   :: BuildEnv IO
   -> HackageClient IO
   -> FilePath     -- ^ source cache directory
+  -> BuildPlan    -- ^ build plan (for local package src dirs)
   -> PackageId
   -> IO (Either HyphaError FilePath)
-resolvePackageSourceWith env hclient sourceCache pid = do
-  -- Step 1: Try local source lookup (store, dist-newstyle, project sources).
-  mSrc <- locatePackageSource env pid
-  case mSrc of
-    Just dir -> pure (Right dir)
-    Nothing  -> do
-      -- Step 2: Download and extract from Hackage.
-      let nameStr = Text.unpack (unPackageName (pkgName pid))
-          verStr  = Text.unpack (unVersion (pkgVersion pid))
-          destDir = sourceCache </> (nameStr <> "-" <> verStr)
-      exists <- doesDirectoryExist destDir
-      if exists
-        then pure (Right destDir)
-        else do
-          result <- fetchAndExtractSource hclient pid destDir
-          case result of
-            Left _err ->
-              pure (Left (EnvError
-                ("source not found for "
-                  <> unPackageName (pkgName pid) <> "-" <> unVersion (pkgVersion pid)
-                  <> "; try `cabal build` first or check network connectivity")))
-            Right path -> pure (Right path)
+resolvePackageSourceWith env hclient sourceCache plan pid = do
+  -- Step 0: Local package source from plan (fast, no I/O beyond stat).
+  case planSrcDir plan (pkgName pid) of
+    Just dir -> do
+      exists <- doesDirectoryExist dir
+      if exists then pure (Right dir) else fallbackToEnv
+    Nothing -> fallbackToEnv
+  where
+    fallbackToEnv = do
+      -- Step 1: Try local source lookup (store, dist-newstyle, project sources).
+      mSrc <- locatePackageSource env pid
+      case mSrc of
+        Just dir -> pure (Right dir)
+        Nothing  -> do
+          -- Step 2: Download and extract from Hackage.
+          let nameStr = Text.unpack (unPackageName (pkgName pid))
+              verStr  = Text.unpack (unVersion (pkgVersion pid))
+              destDir = sourceCache </> (nameStr <> "-" <> verStr)
+          exists <- doesDirectoryExist destDir
+          if exists
+            then pure (Right destDir)
+            else do
+              result <- fetchAndExtractSource hclient pid destDir
+              case result of
+                Left _err ->
+                  pure (Left (EnvError
+                    ("source not found for "
+                      <> unPackageName (pkgName pid) <> "-" <> unVersion (pkgVersion pid)
+                      <> "; try `cabal build` first or check network connectivity")))
+                Right path -> pure (Right path)
+
+-- | Look up the package source directory from the build plan's 'puSrcDir'.
+-- Returns 'Just dir' only for local (inplace) packages that have a
+-- 'LocalUnpackedPackage' entry in the plan.  Returns 'Nothing' for
+-- store/Hackage packages.
+planSrcDir :: BuildPlan -> PackageName -> Maybe FilePath
+planSrcDir plan name =
+  case lookupUnit name plan of
+    Just pu | Just dir <- puSrcDir pu -> Just dir
+    _                                 -> Nothing
 
 -- | Extract the version field from a Hackage package JSON response.
 extractVersion :: Value -> Maybe Version
