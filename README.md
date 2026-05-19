@@ -39,8 +39,10 @@ follow-up question. Both are expensive.
   second one inherits the first one's work.
 - **Plan-aware, source-faithful.** Reads your `dist-newstyle/cache/plan.json`
   so answers reflect the exact versions you're building against — including
-  your **local project and its private libraries** — and points symbols to
-  the file:line where they're actually defined, not the re-export module.
+  your **local project**, and (in the doc-browser server) every cabal
+  `library NAME` sub-library of every package in the plan. Symbols point
+  to the file:line where they're actually defined, not the re-export
+  module — even across CPP `#ifdef` branches.
 - **One tool, two surfaces.** Same code powers the CLI/MCP shim and the
   local doc-browser server, so agents and humans see the same data.
 
@@ -49,11 +51,11 @@ follow-up question. Both are expensive.
 | Feature | Description |
 |---------|-------------|
 | **Project-aware queries** | Defaults to the versions pinned in `dist-newstyle/cache/plan.json`. No version guessing. |
-| **Local package + private libraries** | Indexes the package at the project root *and* every cabal `library NAME` sublib of every package in the plan. Sublibs surface as `pkg:sublib` entries everywhere. |
+| **Local package + private libraries** | The doc-browser server indexes the package at the project root *and* every cabal `library NAME` sublib of every package in the plan. Sublibs surface as `pkg:sublib` entries in the sidebar, URLs, and search index. (CLI/MCP sublib addressing is planned — see Identifier Syntax.) |
 | **Token-efficient JSON** | Compact JSON by default; opt into more fields with `--full`, opt out with `--select`. No HTML noise. |
 | **Aggressive caching** | ETag-revalidated Hackage cache, persistent SQLite search index, on-disk source + Haddock caches. Drastically reduces HTTP traffic and repeat work. |
 | **Faithful source pointers** | Signatures + Haddock are re-extracted at the re-export target. Source links land on the canonical declaration, even across CPP `#ifdef` branches. |
-| **MCP server** | Ships `hypha-mcp` as an stdio MCP shim for Claude Code, opencode, and any MCP client. Exposes every CLI subcommand as a tool. |
+| **MCP server** | Ships `hypha-mcp` as an stdio MCP shim for Claude Code, opencode, and any MCP client. Today it exposes a single `hypha.exec` tool that shells through to the CLI; per-subcommand tools are planned. |
 | **Local doc-browser server** | Optional HTTP server with a command-palette fuzzy search (FZF / Telescope style), shimmering "Building docs…" placeholder, top progress bar, and Haddock prose rendered to clean HTML. |
 
 ## Installation
@@ -123,17 +125,22 @@ hypha symbol async/Control.Concurrent.Async/concurrently --human
 ## Identifier Syntax
 
 ```
-<pkg>[:<sublib>][@<version>][/<Module.Path>][/<symbol>]
+<pkg>[@<version>][/<Module.Path>][/<symbol>]
 ```
 
 Examples:
 
 - `async` — package
 - `async@2.2.5` — version-pinned package
-- `happy-lib:frontend` — sub-library
 - `async/Control.Concurrent.Async` — module
 - `async/Control.Concurrent.Async/concurrently` — symbol
 - `my-project/MyProject.Internal/helper` — a symbol from the **local** project
+
+> **Sub-libraries:** The doc-browser server addresses sublibs as
+> `pkg:sublib` in URLs (e.g. `/pkg/happy-lib:frontend`). The CLI/MCP
+> path does **not** yet handle the `:<sublib>` suffix in identifier
+> arguments — that's planned. For now, query a sublib by browsing it
+> in the server UI.
 
 ## Global Flags
 
@@ -141,13 +148,14 @@ Examples:
 |------|-------------|
 | `--project-dir DIR` | Override project root |
 | `--package-override PKG=VER` | Replace a plan entry (repeatable) |
-| `--any` | Widen query outside build plan |
-| `--global` | Use global Hoogle DB instead of per-project |
+| `--global` | Widen Hoogle to the global stackage DB instead of per-project |
 | `--offline` | No network; fail closed |
 | `--human` | Pretty ANSI text instead of JSON |
 | `--pretty-json` | Indent JSON output |
 | `--full` | Include all fields (default: compact) |
 | `--select f1,f2,...` | Project only listed JSON fields |
+| `--quiet` / `-q` | Suppress informational output |
+| `--verbose` / `-v` | Show debug output |
 
 ## Subcommands
 
@@ -230,7 +238,12 @@ Endpoints:
 
 ## MCP Host Integration
 
-Add `hypha-mcp` to your MCP client:
+`hypha-mcp` is a thin JSON-RPC 2.0 stdio shim. Today it exposes a
+single MCP tool — `hypha.exec` — that takes a CLI argv array and
+shells out to the `hypha` binary, returning whatever JSON the CLI
+emits. Per-subcommand MCP tools are a planned follow-up.
+
+Add it to your MCP client:
 
 **Claude Code** (`~/.claude.json`):
 ```json
@@ -256,9 +269,9 @@ Add `hypha-mcp` to your MCP client:
 }
 ```
 
-**Generic MCP client** — point any MCP-compatible host at the `hypha-mcp`
-executable over stdio. It speaks JSON-RPC 2.0 and exposes every `hypha`
-subcommand as an MCP tool.
+**Generic MCP client** — point any MCP-compatible host at the
+`hypha-mcp` executable over stdio. It speaks JSON-RPC 2.0 and exposes
+the `hypha.exec` tool described above.
 
 ## Exit Codes
 
@@ -280,10 +293,10 @@ plan-shaped derived state as possible — under `$XDG_CACHE_HOME/hypha/`
 | Cache | Layout | Freshness |
 |-------|--------|-----------|
 | Search index | `hypha.db` (SQLite, WAL) | Keyed on `(pkg, version)` and shared across every project on the host |
-| Hackage HTTP responses | `hackage/<sha256>.json` | ETag + `If-Modified-Since` revalidation; 15 min TTL for mutable resources, immutable bodies cached forever |
+| Hackage HTTP responses | `hackage/<sha256>.json` | ETag + `If-Modified-Since` revalidation; 15 min TTL on every cached entry |
 | Source tarballs | `source/<pkg>-<ver>/` | Immutable once extracted |
 | Haddock HTML | `haddock/<pkg>-<ver>/` | Built on demand, reused across runs |
-| Hoogle DB | `hoogle/<plan-hash>.hoo` | Rebuilt when `plan.json` changes |
+| Hoogle DB | `<projectRoot>/.hypha/hoogle.hoo` (with `.hypha/plan-hash` sibling) | Rebuilt when `plan.json` changes |
 
 The fallback chain is automatic for network reads: **local HTTP cache →
 build plan → cabal store → Hackage**.
