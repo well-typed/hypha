@@ -17,6 +17,25 @@
       }
     },
     {
+      "type": "configured",
+      "id": "mylib-0.1.0-inplace",
+      "pkg-name": "mylib",
+      "pkg-version": "0.1.0",
+      "style": "local",
+      "pkg-src": {
+        "type": "local",
+        "path": "test/fixtures/tiny-project"
+      },
+      "dist-dir": "test/fixtures/tiny-project/dist-newstyle/build/x86_64-linux/ghc-9.6.7/mylib-0.1.0",
+      "components": {
+        "lib": {
+          "depends": [
+            "base-4.18.3.0"
+          ]
+        }
+      }
+    },
+    {
       "id": "base-4.18.3.0",
       "pkg-name": "base",
       "pkg-version": "4.18.3.0",
