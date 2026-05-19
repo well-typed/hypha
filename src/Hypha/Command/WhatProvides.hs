@@ -15,6 +15,7 @@ module Hypha.Command.WhatProvides
 import Data.Aeson (Value, object, (.=))
 import Data.Set (Set)
 import qualified Data.Set as Set
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 
 import Hypha.Hoogle.Type (Hoogle (..), HoogleHit (..), HoogleQuery (..))
@@ -40,21 +41,25 @@ compactKeys = Set.fromList ["symbol", "providers"]
 fullKeys    = compactKeys
 
 -- | Run @whatprovides@ against the supplied 'Hoogle' record.
-runWhatProvidesWith :: Monad m => Hoogle m -> Text -> m (Outcome Value)
-runWhatProvidesWith hoogle sym = do
+runWhatProvidesWith :: Monad m => Hoogle m -> Text -> Bool -> m (Outcome Value)
+runWhatProvidesWith hoogle sym wasGlobal = do
   hits <- searchHoogle hoogle (HoogleQuery ("is:exact " <> sym))
   let providers = map (fromHit sym) hits
       body      = WhatProvidesResult sym providers
+      actions = if null providers && not wasGlobal
+                  then Map.singleton "retry_with_global"
+                         ("hypha whatprovides " <> sym <> " --global")
+                  else mempty
       related   =
         [ Related (pPackage p <> "/" <> pModule p) (pFetch p)
         | p <- take 5 providers
         ]
-  pure (OutcomeSuccess (whatProvidesResultToJSON body) False [] mempty related)
+  pure (OutcomeSuccess (whatProvidesResultToJSON body) False [] actions related)
 
 -- | IO convenience wrapper: builds the query and delegates to
 -- 'runWhatProvidesWith'.  Kept for backward compatibility with the CLI
 -- dispatcher.
-runWhatProvides :: Hoogle IO -> Text -> IO (Outcome Value)
+runWhatProvides :: Hoogle IO -> Text -> Bool -> IO (Outcome Value)
 runWhatProvides = runWhatProvidesWith
 
 fromHit :: Text -> HoogleHit -> Provider

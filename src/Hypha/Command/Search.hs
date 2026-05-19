@@ -19,6 +19,7 @@ import Data.Aeson (Value, (.=))
 import qualified Data.Aeson as Aeson
 import Data.Set (Set)
 import qualified Data.Set as Set
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 
@@ -72,18 +73,22 @@ runSearch _plan _query _extraPkgs =
 --
 -- Builds a 'Related' list pointing at the first five hits so the agent can
 -- recurse into them with @hypha symbol …@ — the "doorway" principle.
-runSearchWith :: Monad m => Hoogle m -> Text -> [Text] -> m (Outcome Value)
-runSearchWith hoogle q extras = do
+runSearchWith :: Monad m => Hoogle m -> Text -> [Text] -> Bool -> m (Outcome Value)
+runSearchWith hoogle q extras wasGlobal = do
   let queryText = Text.intercalate " " (q : map ("+" <>) extras)
   hits <- searchHoogle hoogle (HoogleQuery queryText)
   let shits = map fromHoogle hits
       body  = SearchResult { srQuery = queryText, srHits = shits }
+      actions = if null shits && not wasGlobal
+                  then Map.singleton "retry_with_global"
+                         ("hypha search " <> queryText <> " --global")
+                  else mempty
       rel   =
         [ Related (shName h)
                   ("hypha symbol " <> shPackage h <> "/" <> shModule h <> "/" <> shName h)
         | h <- take 5 shits
         ]
-  pure (OutcomeSuccess (searchResultToJSON body) False [] mempty rel)
+  pure (OutcomeSuccess (searchResultToJSON body) False [] actions rel)
 
 fromHoogle :: HoogleHit -> SearchHit
 fromHoogle h = SearchHit

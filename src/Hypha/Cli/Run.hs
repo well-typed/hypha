@@ -263,7 +263,7 @@ dispatch flags = \case
   WhatProvidesCommand sym -> do
     result <- try @SomeException $ do
       hoogle <- mkHoogleForFlags flags
-      WhatProvides.runWhatProvides hoogle sym
+      WhatProvides.runWhatProvides hoogle sym (gfGlobal flags)
     case result of
       Left e  -> pure (Left (NetworkError (Text.pack (show e))))
       Right o -> pure (Right o)
@@ -350,7 +350,7 @@ runSearchWithHoogle
 runSearchWithHoogle flags q extras = do
   result <- try @SomeException $ do
     hoogle <- mkHoogleForFlags flags
-    Search.runSearchWith hoogle q extras
+    Search.runSearchWith hoogle q extras (gfGlobal flags)
   case result of
     Left e  -> pure (Left (NetworkError (Text.pack (show e))))
     Right o -> pure (Right o)
