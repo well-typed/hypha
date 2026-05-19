@@ -35,3 +35,13 @@
   font-size: 0.85em;
   margin-left: 0.1em;
 }
+
+/* Executable tag rendered after the parent package name in the
+ * sidebar (e.g. ":exe:nike-cli").  Reuses the muted treatment of
+ * .sublib-tag but borrows the secondary accent so executables stay
+ * visually distinct from sub-libraries at a glance. */
+.tree li a .exe-tag {
+  color: var(--accent-2);
+  font-size: 0.85em;
+  margin-left: 0.1em;
+}
