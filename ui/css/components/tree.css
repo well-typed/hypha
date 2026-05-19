@@ -27,3 +27,11 @@
   color: var(--muted);
   padding: 0.4rem 0.55rem 0.2rem;
 }
+
+/* Sub-library tag rendered after the parent package name in the
+ * sidebar (e.g. ":lib-foo").  Muted so the parent stays scannable. */
+.tree li a .sublib-tag {
+  color: var(--muted);
+  font-size: 0.85em;
+  margin-left: 0.1em;
+}

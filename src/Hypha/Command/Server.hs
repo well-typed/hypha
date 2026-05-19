@@ -151,8 +151,8 @@ buildServerConfig
   -> Hoogle IO
   -> IO App.ServerConfig
 buildServerConfig plan _env _hclient resolver _hoogle = do
-  let pids      = planPackageIds plan
-      packages  = map (unPackageName . pkgName) pids
+  let pids     = planPackageIds plan
+      packages = concatMap (componentNames plan) pids
   slots <- Slots.initialiseSlots pids
   -- Build a cheap in-memory index from the plan packages' module exports.
   -- Done once asynchronously after startup so the first request lands fast.
@@ -300,6 +300,16 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
 componentKey :: Text -> Maybe Text -> Text
 componentKey pkgT Nothing  = pkgT
 componentKey pkgT (Just s) = pkgT <> ":" <> s
+
+-- | Every renderable component name for a unit.  Falls back to a
+-- single @pkg@ entry when no components were parsed.
+componentNames :: BuildPlan -> PackageId -> [Text]
+componentNames plan pid =
+  let pkgT = unPackageName (pkgName pid)
+  in case lookupUnit (pkgName pid) plan of
+       Just pu | not (null (puLibComponents pu)) ->
+         [ componentKey pkgT (Comp.ciSublib c) | c <- puLibComponents pu ]
+       _ -> [pkgT]
 
 -- | Enumerate every component of a unit (main + sublibs) as
 -- @(sublib, sourceDirs)@ pairs.  Falls back to a single fallback
