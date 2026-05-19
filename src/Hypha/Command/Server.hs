@@ -53,6 +53,8 @@ import qualified Hypha.Source.Extract as Extract
 import qualified Hypha.Source.Locate as Locate
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PlannedUnit (..), lookupUnit )
+import Hypha.Types.ComponentName
+  ( ComponentName (..), parseComponentName )
 import Hypha.Types.Doc (DocText (..))
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), Version (..) )
@@ -202,47 +204,43 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                 ranked = map snd (sortOn (Down . fst) scored)
             pure (take 50 ranked)
     , App.scSymbolLookup = \pkgT modT symT -> do
-        ePid <- resolvePkg resolver (PackageName pkgT)
-        case ePid of
-          Left _ -> pure Nothing
-          Right rp -> do
-            eDir <- resolveSrc resolver (rpPkgId rp)
-            case eDir of
-              Left _  -> pure Nothing
-              Right d -> do
-                mFile <- Locate.findModuleFile d modT
-                case mFile of
-                  Nothing -> pure Nothing
-                  Just f  -> do
-                    src <- TIO.readFile f
-                    let info0 = Extract.extractSymbolInfo src symT
-                    -- Re-exports define the symbol elsewhere in the same
-                    -- package; locateSymbolDefinitionInDir sweeps the
-                    -- tree ranked by module-path prefix.  When the
-                    -- module we landed on doesn't actually contain the
-                    -- binding (sig/haddock came back empty), re-extract
-                    -- from the file that does so the symbol card isn't
-                    -- a blank cream box.  We prefer the signature line
-                    -- as the source anchor whenever it is available: it
-                    -- sits above any CPP @#ifdef@ branches, so it is
-                    -- the most faithful target for symbols whose body
-                    -- is fanned out across platform-specific branches.
-                    mLoc <- Locate.locateSymbolDefinitionInDir d modT symT
-                    (info, resolvedMod, lineOverride) <-
-                      case (Extract.siSignature info0, mLoc) of
-                        (Nothing, Just loc) | Locate.slPath loc /= f -> do
-                          src' <- TIO.readFile (Locate.slPath loc)
-                          let info' = Extract.extractSymbolInfo src' symT
-                              modT' = modulePathFromFile d (Locate.slPath loc)
-                          pure (info', modT', Just (Locate.slLine loc))
-                        _ -> pure (info0, modT, Nothing)
-                    let sig = maybe "" id (Extract.siSignature info)
-                        hd  = maybe "" unDocText (Extract.siHaddock  info)
-                        mLine = case (Extract.siSigLine info, Extract.siLine info, lineOverride) of
-                          (Just n, _, _)        -> Just n
-                          (Nothing, Just n, _)  -> Just n
-                          (Nothing, Nothing, l) -> l
-                    pure (Just (sig, hd, resolvedMod, mLine))
+        mDirs <- resolveComponentDirs plan resolver pkgT
+        case mDirs of
+          Nothing                -> pure Nothing
+          Just (parentDir, dirs) -> do
+            mFile <- Locate.findModuleFileIn dirs modT
+            case mFile of
+              Nothing -> pure Nothing
+              Just f  -> do
+                src <- TIO.readFile f
+                let info0 = Extract.extractSymbolInfo src symT
+                -- Re-exports define the symbol elsewhere in the same
+                -- package; locateSymbolDefinitionInDir sweeps the
+                -- tree ranked by module-path prefix.  When the
+                -- module we landed on doesn't actually contain the
+                -- binding (sig/haddock came back empty), re-extract
+                -- from the file that does so the symbol card isn't
+                -- a blank cream box.  We prefer the signature line
+                -- as the source anchor whenever it is available: it
+                -- sits above any CPP @#ifdef@ branches, so it is
+                -- the most faithful target for symbols whose body
+                -- is fanned out across platform-specific branches.
+                mLoc <- Locate.locateSymbolDefinitionInDir parentDir modT symT
+                (info, resolvedMod, lineOverride) <-
+                  case (Extract.siSignature info0, mLoc) of
+                    (Nothing, Just loc) | Locate.slPath loc /= f -> do
+                      src' <- TIO.readFile (Locate.slPath loc)
+                      let info' = Extract.extractSymbolInfo src' symT
+                          modT' = modulePathFromFile parentDir (Locate.slPath loc)
+                      pure (info', modT', Just (Locate.slLine loc))
+                    _ -> pure (info0, modT, Nothing)
+                let sig = maybe "" id (Extract.siSignature info)
+                    hd  = maybe "" unDocText (Extract.siHaddock  info)
+                    mLine = case (Extract.siSigLine info, Extract.siLine info, lineOverride) of
+                      (Just n, _, _)        -> Just n
+                      (Nothing, Just n, _)  -> Just n
+                      (Nothing, Nothing, l) -> l
+                pure (Just (sig, hd, resolvedMod, mLine))
     , App.scHaddockHtml  = \pkgVer segments -> do
         let pidM = parsePkgVer pkgVer
         case pidM of
@@ -258,42 +256,84 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                 let txt = Text.decodeUtf8 (LBS.toStrict bs)
                 pure (Just (LBS.fromStrict (Text.encodeUtf8 (Rewrite.rewriteHaddockHtml txt))))
     , App.scSourceText   = \pkgT modT -> do
-        ePid <- resolvePkg resolver (PackageName pkgT)
-        case ePid of
-          Left _ -> pure Nothing
-          Right rp -> do
-            let pid = rpPkgId rp
-            eDir <- resolveSrc resolver pid
-            case eDir of
-              Left _   -> pure Nothing
-              Right d  -> do
-                mFile <- Locate.findModuleFile d modT
-                case mFile of
-                  Nothing -> pure Nothing
-                  Just f  -> Just <$> TIO.readFile f
+        mDirs <- resolveComponentDirs plan resolver pkgT
+        case mDirs of
+          Nothing          -> pure Nothing
+          Just (_, dirs)   -> do
+            mFile <- Locate.findModuleFileIn dirs modT
+            case mFile of
+              Nothing -> pure Nothing
+              Just f  -> Just <$> TIO.readFile f
     , App.scPackageInfo  = \pkgT -> do
-        ePid <- resolvePkg resolver (PackageName pkgT)
+        let cn   = parseComponentName pkgT
+        ePid <- resolvePkg resolver (cnPackage cn)
         case ePid of
           Left _   -> pure Nothing
           Right rp -> do
             let pid = rpPkgId rp
                 ver = unVersion (pkgVersion pid)
-            mods <- listModulesFor resolver pid
-            pure (Just (ver, mods))
+            mDirs <- resolveComponentDirs plan resolver pkgT
+            case mDirs of
+              Nothing        -> pure (Just (ver, []))
+              Just (_, dirs) -> do
+                mods <- enumModulesIn dirs
+                pure (Just (ver, mods))
     , App.scModuleExports = \pkgT modT -> do
-        ePid <- resolvePkg resolver (PackageName pkgT)
-        case ePid of
-          Left _   -> pure []
-          Right rp -> do
-            eDir <- resolveSrc resolver (rpPkgId rp)
-            case eDir of
-              Left _  -> pure []
-              Right d -> do
-                mFile <- Locate.findModuleFile d modT
-                case mFile of
-                  Nothing -> pure []
-                  Just f  -> Locate.parseExports <$> TIO.readFile f
+        mDirs <- resolveComponentDirs plan resolver pkgT
+        case mDirs of
+          Nothing        -> pure []
+          Just (_, dirs) -> do
+            mFile <- Locate.findModuleFileIn dirs modT
+            case mFile of
+              Nothing -> pure []
+              Just f  -> Locate.parseExports <$> TIO.readFile f
     }
+
+-- | Resolve a composite component name (e.g. @nike:lib-foo@) into the
+-- parent package's source dir + the component's source-root list.  The
+-- parent dir is what 'Locate.locateSymbolDefinitionInDir' wants for
+-- re-export sweeps; the source roots are what 'findModuleFileIn' wants
+-- for the initial module lookup.  Returns 'Nothing' when the package
+-- can't be resolved or the named sublib doesn't exist.
+resolveComponentDirs
+  :: BuildPlan
+  -> PackageResolver IO
+  -> Text                          -- ^ raw composite name from URL
+  -> IO (Maybe (FilePath, [FilePath]))
+resolveComponentDirs plan resolver raw = do
+  let cn = parseComponentName raw
+  ePid <- resolvePkg resolver (cnPackage cn)
+  case ePid of
+    Left _   -> pure Nothing
+    Right rp -> do
+      eDir <- resolveSrc resolver (rpPkgId rp)
+      case eDir of
+        Left _  -> pure Nothing
+        Right d -> do
+          let mDirs = case lookupUnit (cnPackage cn) plan of
+                Just pu | not (null (puLibComponents pu)) ->
+                  case [ Comp.ciHsSourceDirs c
+                       | c <- puLibComponents pu
+                       , Comp.ciSublib c == cnSublib cn ] of
+                    (xs : _) -> Just xs
+                    []       -> Nothing
+                _ -> Nothing
+          case mDirs of
+            Just dirs -> pure (Just (d, dirs))
+            Nothing | cnSublib cn == Nothing -> do
+              -- Fallback for main-lib references in packages whose
+              -- cabal we couldn't parse.
+              roots <- chooseSourceRoots d
+              pure (Just (d, roots))
+            Nothing -> pure Nothing
+
+-- | Module-name enumeration over an explicit list of source roots.
+enumModulesIn :: [FilePath] -> IO [Text]
+enumModulesIn roots = do
+  paths <- concat <$> mapM
+    (\r -> map (drop (length r + 1)) <$> findHs r 4)
+    roots
+  pure (map (Text.pack . hsToModule) paths)
 
 -- | Compute the cache key for one library component.
 --   'Nothing' sublib → bare package name; 'Just s' → @pkg:s@.
@@ -440,25 +480,6 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
       let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
       ok <- Dir.doesFileExist candidate
       if ok then pure (Just candidate) else firstExistingModule rs modPath
-
-    enumModulesIn srcDirs = do
-      paths <- concat <$> mapM
-        (\r -> map (drop (length r + 1)) <$> findHs r 4)
-        srcDirs
-      pure (map (Text.pack . hsToModule) paths)
-
--- | Walk the resolved source tree and list every @.hs@ file as a dotted
--- module path.  Skips the standard build/test/bench directories so the
--- module index reflects the library's exposed-modules-shape closely enough.
-listModulesFor :: PackageResolver IO -> PackageId -> IO [Text]
-listModulesFor resolver pid = do
-  eDir <- resolveSrc resolver pid
-  case eDir of
-    Left _   -> pure []
-    Right d  -> do
-      roots <- chooseSourceRoots d
-      paths <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) roots
-      pure (map (Text.pack . hsToModule) paths)
 
 -- | Pick the source roots to scan for a package.  If any of the common
 -- @hs-source-dirs@ subdirectories exist we walk those exclusively;

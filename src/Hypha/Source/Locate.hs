@@ -5,6 +5,7 @@ module Hypha.Source.Locate
   , locateSymbolDefinition
   , locateSymbolDefinitionInDir
   , findModuleFile
+  , findModuleFileIn
   , SourceLocation (..)
     -- * Testing
   , parseExports
@@ -69,6 +70,16 @@ findModuleFile root modPath = do
   case m of
     Just p  -> pure (Just p)
     Nothing -> bfsFind root relFile 4
+
+-- | Resolve a module path against an explicit list of source-root
+-- candidates, in priority order.  The first existing file wins.
+-- Unlike 'findModuleFile' this does /not/ walk heuristic subdirs — the
+-- caller is expected to have already enumerated the component's
+-- @hs-source-dirs@.
+findModuleFileIn :: [FilePath] -> Text -> IO (Maybe FilePath)
+findModuleFileIn roots modPath =
+  let rel = modulePathToFile modPath
+  in firstExisting [ r </> rel | r <- roots ]
 
 firstExisting :: [FilePath] -> IO (Maybe FilePath)
 firstExisting []     = pure Nothing
