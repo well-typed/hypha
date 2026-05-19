@@ -36,7 +36,6 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
         UITree.packageTree pkgs
       div_ [class_ "main"] $ do
         breadcrumbs crumbs
-        ul_ [class_ "results", id_ "results"] (pure ())
         body
 
 -- | Render a breadcrumb trail. Each entry is a (label, href) pair.

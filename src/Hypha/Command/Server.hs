@@ -43,6 +43,7 @@ import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..) )
 import Data.List (sortOn)
 import Data.Ord (Down (..))
+import qualified Hypha.Search.Cache as Cache
 import qualified Hypha.Search.Fuzzy as Fuzzy
 import qualified Hypha.Server.App as App
 import qualified Hypha.Server.Haddock.Rewrite as Rewrite
@@ -158,12 +159,22 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
   -- library deadlocks under concurrent retry.
   indexRef <- IORef.newIORef ([] :: [Fuzzy.IndexedRow])
   readyRef <- IORef.newIORef False
-  _ <- forkIO $ do
-    r <- try (buildFallbackIndex resolver pids indexRef)
-    case r :: Either SomeException () of
-      Left _  -> pure ()
-      Right _ -> pure ()
-    IORef.writeIORef readyRef True
+  cache    <- Cache.defaultCachePath >>= Cache.openIndexCache
+  -- Hydrate from the on-disk cache synchronously before the server
+  -- accepts requests so the common (warm) path renders results
+  -- immediately on the first keystroke.  Anything not yet cached gets
+  -- built in the background and persisted for next time.
+  missing  <- hydrateFromCache cache pids indexRef
+  case missing of
+    [] -> IORef.writeIORef readyRef True
+    _  -> do
+      _ <- forkIO $ do
+        r <- try (buildAndCacheIndex cache resolver missing indexRef)
+        case r :: Either SomeException () of
+          Left e  -> hPutStrLn stderr ("hypha index build failed: " <> show e)
+          Right _ -> pure ()
+        IORef.writeIORef readyRef True
+      pure ()
   pure App.ServerConfig
     { App.scProjectName  = projectName plan
     , App.scPackages     = packages
@@ -269,15 +280,48 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                   Just f  -> Locate.parseExports <$> TIO.readFile f
     }
 
--- | Populate an in-memory @(pkg, module, name, signature)@ index from the
--- plan packages' module exports.  Skips any package whose source can't be
--- resolved — the index is a best-effort fallback.
-buildFallbackIndex
-  :: PackageResolver IO
+-- | Pull every cached package index into the in-memory ref.  Returns the
+-- 'PackageId's that had no cached entry yet, so the caller can build
+-- them in the background.
+hydrateFromCache
+  :: Cache.IndexCache
+  -> [PackageId]
+  -> IORef.IORef [Fuzzy.IndexedRow]
+  -> IO [PackageId]
+hydrateFromCache cache pids ref = go [] pids
+  where
+    go missing [] = pure (reverse missing)
+    go missing (pid : rest) = do
+      let pkgT = unPackageName (pkgName pid)
+          verT = unVersion    (pkgVersion pid)
+      hit <- Cache.haveIndex cache pkgT verT
+      if hit
+        then do
+          rows <- Cache.readIndex cache pkgT verT
+          let indexed =
+                [ Fuzzy.mkIndexedRow p m n s
+                | (p, m, n, s) <- rows
+                ]
+          indexed `seq`
+            IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+          go missing rest
+        else go (pid : missing) rest
+
+-- | Walk the source trees of the given packages, extract their module
+-- exports, persist the result to the cache, and prepend them to the
+-- in-memory ref.  Packages whose source cannot be resolved are silently
+-- skipped — the index is a best-effort fallback.
+--
+-- Per-module rows are built fully /outside/ the atomicModifyIORef'
+-- critical section; prepending makes each insert O(|rows|) instead of
+-- the O(|index|) behaviour of @old ++ rows@.
+buildAndCacheIndex
+  :: Cache.IndexCache
+  -> PackageResolver IO
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
   -> IO ()
-buildFallbackIndex resolver pids ref = mapM_ indexPkg pids
+buildAndCacheIndex cache resolver pids ref = mapM_ indexPkg pids
   where
     indexPkg pid = do
       eDir <- resolveSrc resolver pid
@@ -285,30 +329,34 @@ buildFallbackIndex resolver pids ref = mapM_ indexPkg pids
         Left _  -> pure ()
         Right d -> do
           mods <- enumModules d
-          mapM_ (indexMod pid d) mods
+          rowChunks <- mapM (collectMod pid d) mods
+          let pkgT     = unPackageName (pkgName    pid)
+              verT     = unVersion    (pkgVersion pid)
+              flatRows = concat rowChunks
+              indexed  = [ Fuzzy.mkIndexedRow p m n s
+                         | (p, m, n, s) <- flatRows
+                         ]
+          -- Persist before publishing into memory so a crash mid-stream
+          -- never leaves the in-memory view ahead of the cache.
+          Cache.writeIndex cache pkgT verT flatRows
+          indexed `seq`
+            IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
-    -- Build the rows for this module fully /outside/ the atomicModifyIORef'
-    -- critical section, and prepend to the existing list — prepending is
-    -- O(|rows|), whereas the previous @old ++ rows@ was O(|index|) per
-    -- module and turned indexing into an O(n\x00B2) bottleneck on large
-    -- build plans.
-    indexMod pid d modPath = do
+    collectMod pid d modPath = do
       mFile <- Locate.findModuleFile d modPath
       case mFile of
-        Nothing -> pure ()
+        Nothing -> pure []
         Just f  -> do
           exps <- Locate.parseExports <$> TIO.readFile f
           let pkgT = unPackageName (pkgName pid)
-              rows = [ Fuzzy.mkIndexedRow pkgT modPath e ""
-                     | e <- exps
-                     , not (Text.null e)
-                     ]
-          rows `seq` IORef.atomicModifyIORef' ref (\old -> (rows ++ old, ()))
+          pure [ (pkgT, modPath, e, "")
+               | e <- exps
+               , not (Text.null e)
+               ]
 
     enumModules d = do
-      let roots = [d, d FP.</> "src", d FP.</> "library", d FP.</> "lib"]
-      existing <- filterExisting roots
-      paths    <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) existing
+      roots <- chooseSourceRoots d
+      paths <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) roots
       pure (map (Text.pack . hsToModule) paths)
 
 -- | Walk the resolved source tree and list every @.hs@ file as a dotted
@@ -320,10 +368,21 @@ listModulesFor resolver pid = do
   case eDir of
     Left _   -> pure []
     Right d  -> do
-      let roots = [d, d FP.</> "src", d FP.</> "library", d FP.</> "lib"]
-      existing <- filterExisting roots
-      paths    <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) existing
+      roots <- chooseSourceRoots d
+      paths <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) roots
       pure (map (Text.pack . hsToModule) paths)
+
+-- | Pick the source roots to scan for a package.  If any of the common
+-- @hs-source-dirs@ subdirectories exist we walk those exclusively;
+-- otherwise we fall back to the package root.  Walking both root /and/
+-- the @src/@ subtree double-counts modules and produces duplicate
+-- "src.Foo.Bar" / "Foo.Bar" rows in the search index.
+chooseSourceRoots :: FilePath -> IO [FilePath]
+chooseSourceRoots d = do
+  let candidates = [ d FP.</> sub
+                   | sub <- ["src", "library", "lib", "Library", "source", "Source"] ]
+  existingSubs <- filterExisting candidates
+  pure (if null existingSubs then [d] else existingSubs)
 
 filterExisting :: [FilePath] -> IO [FilePath]
 filterExisting [] = pure []

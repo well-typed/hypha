@@ -91,6 +91,7 @@ library
     Hypha.Server.App
     Hypha.Server.Ui.Source
     Hypha.Package.Resolver
+    Hypha.Search.Cache
     Hypha.Search.Fuzzy
     Hypha.Source.Extract
     Hypha.Source.Locate
@@ -124,6 +125,7 @@ library
     , warp                  >= 3.3
     , prettyprinter-ansi-terminal >= 1.1
     , skylighting           >= 0.14
+    , sqlite-simple         >= 0.4
     , tagsoup               >= 0.14
     , text                  >= 2.0
     , time                  >= 1.12

@@ -3,6 +3,7 @@ module Hypha.Server.Ui.Search
   ( searchInput
   , searchPanel
   , resultsFragment
+  , emptyResults
   , buildingFragment
   ) where
 
@@ -35,11 +36,23 @@ searchInput = do
       , makeAttributes "hx-get"       "/search"
       , makeAttributes "hx-trigger"   "keyup changed delay:120ms"
       , makeAttributes "hx-target"    "#results"
+      , makeAttributes "hx-swap"      "outerHTML"
+        -- Server returns a full <ul id="results"> fragment, so we must
+        -- replace the element itself.  The default innerHTML swap would
+        -- nest a second <ul.results> inside the existing one, and the
+        -- absolute-positioned dropdown styling would shrink to its
+        -- (now-tiny) parent.
       , makeAttributes "hx-indicator" ".search-indicator"
       ]
+    -- Results render as a floating dropdown anchored to the input, so
+    -- search works the same on every page — including the symbol and
+    -- source views where the main pane is already filled with content.
+    ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | Render search results as an unordered list.
 -- Each row carries (package, module path, symbol name, signature).
+-- An empty hit list still produces a visible "No matches." row — use
+-- 'emptyResults' for the truly-empty case (no query in flight).
 resultsFragment :: [(Text, Text, Text, Text)] -> Html ()
 resultsFragment rows = ul_ [class_ "results", id_ "results"] $
   if null rows
@@ -52,6 +65,11 @@ resultsFragment rows = ul_ [class_ "results", id_ "results"] $
         span_ [class_ "name"]   (toHtml name)
         span_ [class_ "sig"]    (toHtml sig)
         span_ [class_ "pkgmod"] (toHtml (pkg <> " \183 " <> modPath))
+
+-- | Empty results UL — used when there is no query in flight so the
+-- floating dropdown collapses (CSS @.results:empty { display: none; }@).
+emptyResults :: Html ()
+emptyResults = ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | Friendly placeholder shown while the in-memory index is still being
 -- populated in the background.  Re-issues the request shortly after so the

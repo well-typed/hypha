@@ -97,7 +97,7 @@ searchPage :: ServerConfig -> Maybe String -> Handler (Html ())
 searchPage cfg mq = do
   let q = Text.strip (maybe "" Text.pack mq)
   if Text.null q
-    then pure (UISearch.resultsFragment [])
+    then pure UISearch.emptyResults
     else do
       ready <- liftIO (scIndexReady cfg)
       if not ready
