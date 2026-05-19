@@ -1,0 +1,86 @@
+/* Top-of-page indexer progress bar.  Slim, modern, accent-coloured.
+ * Sits above the topbar (z-index higher than the sticky bar) so the
+ * progress is always visible regardless of scroll position. */
+
+.progress-host {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  pointer-events: none;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transform-origin: top;
+  transform: scaleY(1);
+  transition: transform 240ms ease, opacity 240ms ease;
+}
+
+/* When the indexer is done we collapse the host out of layout with a
+ * smooth slide-up animation. */
+.progress-host.done {
+  transform: scaleY(0);
+  opacity: 0;
+  border-bottom-color: transparent;
+}
+
+.progress-host.live {
+  display: grid;
+  grid-template-rows: 3px auto;
+}
+
+/* The bar proper: thin coloured track with an animated fill.  The
+ * fill width is set inline via @style@ so the back-end keeps full
+ * control of the percentage; the keyframe animation only adds a
+ * subtle "indeterminate" pulse on top. */
+.progress-bar {
+  height: 3px;
+  width: 100%;
+  background: linear-gradient(to right,
+    rgba(0,0,0,0) 0%, var(--border) 50%, rgba(0,0,0,0) 100%);
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg,
+    var(--accent-2) 0%, var(--accent) 50%, var(--accent-2) 100%);
+  background-size: 200% 100%;
+  animation: progress-pulse 1.4s linear infinite;
+  transition: width 280ms ease;
+}
+@keyframes progress-pulse {
+  0%   { background-position:   0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+.progress-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  padding: 0.18rem 1rem 0.22rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  pointer-events: auto;
+}
+.progress-label strong {
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.01em;
+}
+.progress-pct {
+  margin-left: auto;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Shift the topbar down so the progress strip doesn't overlap it
+ * while it's live.  Once .done collapses, the spacer collapses too. */
+.progress-host.live ~ .app .topbar { top: 1.6rem; }
+.progress-host.live ~ .app          { padding-top: 1.6rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar-fill { animation: none; }
+  .progress-host     { transition: none; }
+}

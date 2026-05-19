@@ -32,6 +32,10 @@ data ServerConfig = ServerConfig
       -- ^ Whether the in-memory search index has finished populating.
       -- Lets the search handler show a "Building the docs live\x2026"
       -- placeholder while the background indexer is still running.
+  , scIndexProgress :: !(IO (Int, Int))
+      -- ^ @(indexed, total)@ snapshot of the background indexer.  Drives
+      -- the topbar progress bar.  Both are @0@ when nothing needed
+      -- building (warm cache hit on every package).
   , scHumanSearch  :: !(Text -> IO [(Text, Text, Text, Text)])
       -- ^ Given a query string, return (package, module, name, signature)
   , scSymbolLookup :: !(Text -> Text -> Text -> IO (Maybe (Text, Text, Text, Maybe Int)))
@@ -70,6 +74,7 @@ server :: ServerConfig -> Server HyphaApi
 server cfg =
        homePage cfg
   :<|> searchPage cfg
+  :<|> progressPage cfg
   :<|> pkgPage cfg
   :<|> modPage cfg
   :<|> symPage cfg
@@ -91,6 +96,15 @@ homePage cfg = pure $ UI.shellPage (scProjectName cfg) [] (scPackages cfg) $
       toHtml (" packages from your build plan." :: Text)
     p_  [class_ "hint"]
       (toHtml ("Start typing in the search bar above to jump to a symbol, module, or package." :: Text))
+
+-- | Progress fragment polled by the topbar progress bar (HTMX target).
+-- The fragment carries its own @hx-trigger="every 1s"@ as long as the
+-- indexer is still working, and stops polling once we're done.
+progressPage :: ServerConfig -> Handler (Html ())
+progressPage cfg = do
+  ready          <- liftIO (scIndexReady cfg)
+  (done, total)  <- liftIO (scIndexProgress cfg)
+  pure (UI.progressFragment ready done total)
 
 -- | Search results fragment (HTMX target).
 searchPage :: ServerConfig -> Maybe String -> Handler (Html ())

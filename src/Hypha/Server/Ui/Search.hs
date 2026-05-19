@@ -72,18 +72,22 @@ emptyResults :: Html ()
 emptyResults = ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | Friendly placeholder shown while the in-memory index is still being
--- populated in the background.  Re-issues the request shortly after so the
--- UI catches up without user action.
+-- populated in the background.  The auto re-fetch uses @outerHTML@
+-- because the response is itself a full @\<ul id=\"results\"\>@; the
+-- default @innerHTML@ swap would nest a fresh @\<ul\>@ inside the
+-- existing one on every tick, producing duplicated IDs and broken
+-- layout after a handful of refreshes.
 buildingFragment :: Html ()
 buildingFragment = ul_ [class_ "results", id_ "results"]
   $ li_ [ class_ "building"
         , makeAttributes "hx-get"     "/search"
-        , makeAttributes "hx-trigger" "load delay:600ms"
+        , makeAttributes "hx-trigger" "load delay:800ms"
         , makeAttributes "hx-target"  "#results"
+        , makeAttributes "hx-swap"    "outerHTML"
         , makeAttributes "hx-include" ".search-input"
         ] $ do
       span_ [class_ "spinner big"] (pure ())
       div_  [class_ "building-text"] $ do
-        strong_ "Building the docs live\x2026"
+        strong_ "Building the docs\x2026"
         span_ [class_ "building-sub"]
           "Indexing your build plan. Results appear as they come in."

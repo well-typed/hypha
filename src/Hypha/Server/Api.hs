@@ -56,6 +56,7 @@ instance MimeRender JS BL.ByteString where
 type HyphaApi
   =    Get '[HTML] (Html ())
   :<|> "search"  :> QueryParam "q" String :> Get '[HTML] (Html ())
+  :<|> "progress" :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Capture "sym" String :> Get '[HTML] (Html ())

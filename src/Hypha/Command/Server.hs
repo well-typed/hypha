@@ -157,19 +157,22 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
   -- We deliberately do NOT consult Hoogle for live search: the per-project
   -- DB generation step fails when no @.txt@ inputs exist and the upstream
   -- library deadlocks under concurrent retry.
-  indexRef <- IORef.newIORef ([] :: [Fuzzy.IndexedRow])
-  readyRef <- IORef.newIORef False
-  cache    <- Cache.defaultCachePath >>= Cache.openIndexCache
+  indexRef    <- IORef.newIORef ([] :: [Fuzzy.IndexedRow])
+  readyRef    <- IORef.newIORef False
+  doneRef     <- IORef.newIORef (0 :: Int)
+  totalRef    <- IORef.newIORef (0 :: Int)
+  cache       <- Cache.defaultCachePath >>= Cache.openIndexCache
   -- Hydrate from the on-disk cache synchronously before the server
   -- accepts requests so the common (warm) path renders results
   -- immediately on the first keystroke.  Anything not yet cached gets
   -- built in the background and persisted for next time.
   missing  <- hydrateFromCache cache pids indexRef
+  IORef.writeIORef totalRef (length missing)
   case missing of
     [] -> IORef.writeIORef readyRef True
     _  -> do
       _ <- forkIO $ do
-        r <- try (buildAndCacheIndex cache resolver missing indexRef)
+        r <- try (buildAndCacheIndex cache resolver missing indexRef doneRef)
         case r :: Either SomeException () of
           Left e  -> hPutStrLn stderr ("hypha index build failed: " <> show e)
           Right _ -> pure ()
@@ -180,6 +183,9 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
     , App.scPackages     = packages
     , App.scSlots        = slots
     , App.scIndexReady   = IORef.readIORef readyRef
+    , App.scIndexProgress = (,)
+        <$> IORef.readIORef doneRef
+        <*> IORef.readIORef totalRef
     , App.scHumanSearch  = \q -> do
         let tokens = Fuzzy.tokenize q
         if null tokens
@@ -327,13 +333,16 @@ buildAndCacheIndex
   -> PackageResolver IO
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
+  -> IORef.IORef Int                    -- ^ packages-done counter
   -> IO ()
-buildAndCacheIndex cache resolver pids ref = mapM_ indexPkg pids
+buildAndCacheIndex cache resolver pids ref doneRef = mapM_ indexPkg pids
   where
+    bump = IORef.atomicModifyIORef' doneRef (\n -> (n + 1, ()))
+
     indexPkg pid = do
       eDir <- resolveSrc resolver pid
       case eDir of
-        Left _  -> pure ()
+        Left _  -> bump
         Right d -> do
           mods <- enumModules d
           rowChunks <- mapM (collectMod pid d) mods
@@ -348,6 +357,7 @@ buildAndCacheIndex cache resolver pids ref = mapM_ indexPkg pids
           Cache.writeIndex cache pkgT verT flatRows
           indexed `seq`
             IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+          bump
 
     collectMod pid d modPath = do
       mFile <- Locate.findModuleFile d modPath

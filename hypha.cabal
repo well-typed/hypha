@@ -19,6 +19,7 @@ data-files:
   ui/css/base.css
   ui/css/layout.css
   ui/css/components/doc.css
+  ui/css/components/progress.css
   ui/css/components/search.css
   ui/css/components/tree.css
   ui/js/htmx.min.js

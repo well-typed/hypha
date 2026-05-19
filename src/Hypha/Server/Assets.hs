@@ -19,6 +19,7 @@ cssBundle =
   <> "\n" <> $(embedFile "ui/css/components/search.css")
   <> "\n" <> $(embedFile "ui/css/components/tree.css")
   <> "\n" <> $(embedFile "ui/css/components/doc.css")
+  <> "\n" <> $(embedFile "ui/css/components/progress.css")
 
 htmxJs, keybindingsJs :: ByteString
 htmxJs        = $(embedFile "ui/js/htmx.min.js")
