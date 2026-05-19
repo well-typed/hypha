@@ -41,6 +41,9 @@ import Hypha.Haddock.Generate (ensureHaddockFor, haddockDirFor)
 import Hypha.Hoogle.Type (Hoogle)
 import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..) )
+import Data.List (sortOn)
+import Data.Ord (Down (..))
+import qualified Hypha.Search.Fuzzy as Fuzzy
 import qualified Hypha.Server.App as App
 import qualified Hypha.Server.Haddock.Rewrite as Rewrite
 import qualified Hypha.Server.Slots as Slots
@@ -153,23 +156,32 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
   -- We deliberately do NOT consult Hoogle for live search: the per-project
   -- DB generation step fails when no @.txt@ inputs exist and the upstream
   -- library deadlocks under concurrent retry.
-  indexRef <- IORef.newIORef ([] :: [(Text, Text, Text, Text)])
+  indexRef <- IORef.newIORef ([] :: [Fuzzy.IndexedRow])
+  readyRef <- IORef.newIORef False
   _ <- forkIO $ do
     r <- try (buildFallbackIndex resolver pids indexRef)
     case r :: Either SomeException () of
       Left _  -> pure ()
       Right _ -> pure ()
+    IORef.writeIORef readyRef True
   pure App.ServerConfig
     { App.scProjectName  = projectName plan
     , App.scPackages     = packages
     , App.scSlots        = slots
+    , App.scIndexReady   = IORef.readIORef readyRef
     , App.scHumanSearch  = \q -> do
-        let q' = Text.toLower (Text.strip q)
-        if Text.null q'
+        let tokens = Fuzzy.tokenize q
+        if null tokens
           then pure []
           else do
             idx <- IORef.readIORef indexRef
-            pure (take 50 (filter (matchRow q') idx))
+            let scored =
+                  [ (s, Fuzzy.displayRow row)
+                  | row <- idx
+                  , Just s <- [Fuzzy.scoreRow tokens row]
+                  ]
+                ranked = map snd (sortOn (Down . fst) scored)
+            pure (take 50 ranked)
     , App.scSymbolLookup = \pkgT modT symT -> do
         ePid <- resolvePkg resolver (PackageName pkgT)
         case ePid of
@@ -190,14 +202,21 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                     -- Re-exports define the symbol elsewhere in the same
                     -- package; locateSymbolDefinitionInDir sweeps the tree
                     -- ranked by module-path prefix, so the URL points at
-                    -- the file that actually contains the binding.
+                    -- the file that actually contains the binding.  We
+                    -- prefer the signature line whenever it is available:
+                    -- it sits above any CPP conditional, so it is the most
+                    -- faithful anchor for symbols whose body is fanned out
+                    -- across @#ifdef@ branches (e.g. @Control.Concurrent.Async.race@).
                     mLoc <- Locate.locateSymbolDefinitionInDir d modT symT
-                    let (resolvedMod, ln) = case (Extract.siLine info, mLoc) of
-                          (Just n, _)         -> (modT, n)
-                          (Nothing, Just loc) ->
-                            (modulePathFromFile d (Locate.slPath loc), Locate.slLine loc)
-                          (Nothing, Nothing)  -> (modT, 1)
-                    pure (Just (sig, hd, resolvedMod, ln))
+                    let (resolvedMod, mLine) = case (Extract.siSigLine info, Extract.siLine info, mLoc) of
+                          (Just n, _, _)           -> (modT, Just n)
+                          (Nothing, Just n, _)     -> (modT, Just n)
+                          (Nothing, Nothing, Just loc) ->
+                            ( modulePathFromFile d (Locate.slPath loc)
+                            , Just (Locate.slLine loc)
+                            )
+                          (Nothing, Nothing, Nothing) -> (modT, Nothing)
+                    pure (Just (sig, hd, resolvedMod, mLine))
     , App.scHaddockHtml  = \pkgVer segments -> do
         let pidM = parsePkgVer pkgVer
         case pidM of
@@ -250,20 +269,13 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                   Just f  -> Locate.parseExports <$> TIO.readFile f
     }
 
--- | Match a query against a fallback-index row.  Currently a case-insensitive
--- substring across name/module/package — good enough for live filtering.
-matchRow :: Text -> (Text, Text, Text, Text) -> Bool
-matchRow q (pkg, modPath, name, _sig) =
-  let hay = Text.toLower (Text.unwords [pkg, modPath, name])
-  in q `Text.isInfixOf` hay
-
 -- | Populate an in-memory @(pkg, module, name, signature)@ index from the
 -- plan packages' module exports.  Skips any package whose source can't be
 -- resolved — the index is a best-effort fallback.
 buildFallbackIndex
   :: PackageResolver IO
   -> [PackageId]
-  -> IORef.IORef [(Text, Text, Text, Text)]
+  -> IORef.IORef [Fuzzy.IndexedRow]
   -> IO ()
 buildFallbackIndex resolver pids ref = mapM_ indexPkg pids
   where
@@ -275,17 +287,23 @@ buildFallbackIndex resolver pids ref = mapM_ indexPkg pids
           mods <- enumModules d
           mapM_ (indexMod pid d) mods
 
+    -- Build the rows for this module fully /outside/ the atomicModifyIORef'
+    -- critical section, and prepend to the existing list — prepending is
+    -- O(|rows|), whereas the previous @old ++ rows@ was O(|index|) per
+    -- module and turned indexing into an O(n\x00B2) bottleneck on large
+    -- build plans.
     indexMod pid d modPath = do
       mFile <- Locate.findModuleFile d modPath
       case mFile of
         Nothing -> pure ()
         Just f  -> do
           exps <- Locate.parseExports <$> TIO.readFile f
-          let rows = [ (unPackageName (pkgName pid), modPath, e, "")
+          let pkgT = unPackageName (pkgName pid)
+              rows = [ Fuzzy.mkIndexedRow pkgT modPath e ""
                      | e <- exps
                      , not (Text.null e)
                      ]
-          IORef.atomicModifyIORef' ref (\old -> (old ++ rows, ()))
+          rows `seq` IORef.atomicModifyIORef' ref (\old -> (rows ++ old, ()))
 
     enumModules d = do
       let roots = [d, d FP.</> "src", d FP.</> "library", d FP.</> "lib"]

@@ -1,6 +1,13 @@
+.search-wrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .search-input {
   flex: 1;
-  padding: 0.5rem 0.8rem;
+  padding: 0.5rem 0.9rem 0.5rem 2.4rem;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
@@ -8,6 +15,53 @@
   font-family: var(--sans);
   font-size: 0.95rem;
   transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* Inline progress indicator — htmx toggles the `htmx-request` class on
+ * the request initiator (the input) while a request is inflight.  The
+ * spinner lives at the left of the input where the eye naturally lands
+ * when typing, so it is hard to miss. */
+.search-indicator {
+  position: absolute;
+  left: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 500;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+  z-index: 1;
+}
+.htmx-request .search-indicator,
+.htmx-request.search-indicator { opacity: 1; }
+.search-indicator .indicator-label { display: none; }
+@media (min-width: 720px) {
+  .search-indicator .indicator-label { display: inline; }
+}
+/* Make room for "Searching\x2026" label on wider viewports. */
+@media (min-width: 720px) {
+  .htmx-request .search-input,
+  .htmx-request.search-input { padding-left: 6.5rem; }
+}
+
+/* CSS-only spinner — no JS, no external libs. */
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+.spinner.big { width: 22px; height: 22px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
 }
 .search-input:focus {
   outline: none;
@@ -43,4 +97,34 @@
   font-size: 0.85rem;
   margin-left: 0.6rem;
 }
-.results .empty           { color: var(--muted); padding: 0.5rem 0.75rem; }
+.results .empty           { color: var(--muted); padding: 0.5rem 0.75rem; font-style: italic; }
+
+/* Friendly placeholder while the in-memory index is still warming up. */
+.results .building {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem 1.1rem;
+  border-radius: 8px;
+  background: linear-gradient(
+    100deg,
+    var(--code-bg) 0%,
+    var(--panel)  45%,
+    var(--code-bg) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border: 1px solid var(--border);
+  cursor: default;
+}
+.results .building .building-text { display: flex; flex-direction: column; }
+.results .building .building-text strong { font-weight: 600; }
+.results .building .building-sub {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.15rem;
+}
+@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .results .building { animation: none; }
+}

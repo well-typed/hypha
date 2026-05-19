@@ -91,6 +91,7 @@ library
     Hypha.Server.App
     Hypha.Server.Ui.Source
     Hypha.Package.Resolver
+    Hypha.Search.Fuzzy
     Hypha.Source.Extract
     Hypha.Source.Locate
     Hypha.Hackage.Source

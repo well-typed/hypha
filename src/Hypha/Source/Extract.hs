@@ -15,7 +15,14 @@ import Hypha.Types.Doc (DocText (..))
 data SymbolInfo = SymbolInfo
   { siSignature :: !(Maybe Text)
   , siHaddock   :: !(Maybe DocText)
+  , siSigLine   :: !(Maybe Int)
+    -- ^ Line of the bare @sym :: ...@ signature, when present.  This is
+    -- the most faithful source anchor: it sits above any CPP @#ifdef@
+    -- branches and never moves with platform-specific bodies.
   , siLine      :: !(Maybe Int)
+    -- ^ First top-level definition line for the symbol after its
+    -- signature.  Falls back to the signature line when the symbol has no
+    -- visible definition (e.g. in a re-export module).
   }
   deriving stock (Show, Eq)
 
@@ -36,6 +43,7 @@ extractSymbolInfo src sym =
   in SymbolInfo
        { siSignature = snd <$> mSigLine
        , siHaddock   = mSigLine >>= haddockForLine ls
+       , siSigLine   = fst <$> mSigLine
        , siLine      = mSigLine >>= definitionAfter ls sym
        }
 

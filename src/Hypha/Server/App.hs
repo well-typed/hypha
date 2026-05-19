@@ -28,10 +28,16 @@ data ServerConfig = ServerConfig
   { scProjectName  :: !Text
   , scPackages     :: ![Text]
   , scSlots        :: !BuildSlots
+  , scIndexReady   :: !(IO Bool)
+      -- ^ Whether the in-memory search index has finished populating.
+      -- Lets the search handler show a "Building the docs live\x2026"
+      -- placeholder while the background indexer is still running.
   , scHumanSearch  :: !(Text -> IO [(Text, Text, Text, Text)])
       -- ^ Given a query string, return (package, module, name, signature)
-  , scSymbolLookup :: !(Text -> Text -> Text -> IO (Maybe (Text, Text, Text, Int)))
+  , scSymbolLookup :: !(Text -> Text -> Text -> IO (Maybe (Text, Text, Text, Maybe Int)))
       -- ^ pkg → mod → sym → (signature, haddockHtml, resolvedModule, srcLine).
+      -- @srcLine@ is 'Nothing' when no faithful source line can be
+      -- determined (instead of falling back to a bogus @:1@).
       -- @resolvedModule@ is the module that actually defines the symbol
       -- (re-exports collapse: @Data.Map.Strict.lookup@ → @Data.Map.Internal@).
   , scHaddockHtml  :: !(Text -> [String] -> IO (Maybe BL.ByteString))
@@ -83,21 +89,22 @@ homePage cfg = pure $ UI.shellPage (scProjectName cfg) [] (scPackages cfg) $
       toHtml ("Browsing " :: Text)
       strong_ (toHtml (Text.pack (show (length (scPackages cfg)))))
       toHtml (" packages from your build plan." :: Text)
-    p_  [class_ "hint"] $ do
-      toHtml ("Press " :: Text)
-      kbd_ "s"
-      toHtml (" or " :: Text)
-      kbd_ "/"
-      toHtml (" to search. Press " :: Text)
-      kbd_ "?"
-      toHtml (" for all keybindings." :: Text)
+    p_  [class_ "hint"]
+      (toHtml ("Start typing in the search bar above to jump to a symbol, module, or package." :: Text))
 
 -- | Search results fragment (HTMX target).
 searchPage :: ServerConfig -> Maybe String -> Handler (Html ())
 searchPage cfg mq = do
-  let q = maybe "" Text.pack mq
-  rows <- liftIO (scHumanSearch cfg q)
-  pure (UISearch.resultsFragment rows)
+  let q = Text.strip (maybe "" Text.pack mq)
+  if Text.null q
+    then pure (UISearch.resultsFragment [])
+    else do
+      ready <- liftIO (scIndexReady cfg)
+      if not ready
+        then pure UISearch.buildingFragment
+        else do
+          rows <- liftIO (scHumanSearch cfg q)
+          pure (UISearch.resultsFragment rows)
 
 -- | Package overview page — show pinned version + linked module index.
 pkgPage :: ServerConfig -> String -> Handler (Html ())
@@ -161,9 +168,9 @@ symPage cfg pkg modPath sym = do
   case m of
     Nothing -> pure $ UI.shellPage symT crumbs (scPackages cfg) $
       p_ [class_ "warn"] "Symbol not found."
-    Just (sig, hd, resolvedMod, srcLine) ->
+    Just (sig, hd, resolvedMod, mLine) ->
       pure $ UI.shellPage symT crumbs (scPackages cfg)
-                (UIDoc.symbolCard symT sig hd pkgT resolvedMod srcLine)
+                (UIDoc.symbolCard symT sig hd pkgT resolvedMod mLine)
 
 -- | Serve rewritten Haddock HTML.
 haddockPage :: ServerConfig -> String -> [String] -> Handler (Html ())
