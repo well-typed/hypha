@@ -1,12 +1,17 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings  #-}
--- | A cabal-style component reference: a package name with an optional
--- sub-library qualifier.
+-- | A cabal-style component reference: a package name with an
+-- optional sub-library or executable qualifier.
 --
--- @nike@ refers to the main library; @nike:lib-breakdown@ refers to the
--- @lib-breakdown@ sub-library.  The composite form is what cabal-install
--- uses on the command line, and what we put in the @pkg@ column of the
--- SQLite search cache so sublibs don't need a schema migration.
+-- Encoded form:
+--
+-- * @nike@                 — main library.
+-- * @nike:lib-breakdown@   — sub-library @lib-breakdown@.
+-- * @nike:exe:nike-cli@    — executable @nike-cli@.
+--
+-- The composite form is what cabal-install uses on the command line,
+-- and what we put in the @pkg@ column of the SQLite search cache so
+-- sublibs and executables don't need a schema migration.
 module Hypha.Types.ComponentName
   ( ComponentName (..)
   , parseComponentName
@@ -16,30 +21,45 @@ module Hypha.Types.ComponentName
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Types.PackageId (PackageName (..))
+import Hypha.Project.Components (ComponentKind (..))
+import Hypha.Types.PackageId    (PackageName (..))
 
--- | Reference to a single library component in the build plan.
+-- | Reference to a single library or executable component.
 data ComponentName = ComponentName
   { cnPackage :: !PackageName
-  , cnSublib  :: !(Maybe Text)
-    -- ^ 'Nothing' for the main library; 'Just' for a sub-library.
+  , cnKind    :: !ComponentKind
   }
   deriving stock (Show, Eq, Ord)
 
--- | Split a textual reference on the first @:@.  An empty sub-library
--- suffix (e.g. @"pkg:"@) collapses to 'Nothing' so it round-trips with
--- the plain @"pkg"@ form.
+-- | Split a textual reference on @:@.  The grammar is:
+--
+-- * @pkg@               → 'MainLib'
+-- * @pkg:exe:name@      → 'Exe name'
+-- * @pkg:name@          → 'SubLib name'
+--
+-- Empty suffixes (@pkg:@, @pkg:exe:@) collapse to 'MainLib' so they
+-- round-trip cleanly with the bare @pkg@ form.
 parseComponentName :: Text -> ComponentName
 parseComponentName raw =
   case Text.breakOn ":" raw of
     (pkg, rest)
-      | Text.null rest -> ComponentName (PackageName pkg) Nothing
+      | Text.null rest -> ComponentName (PackageName pkg) MainLib
       | otherwise      ->
-          let sublib = Text.drop 1 rest
-          in ComponentName (PackageName pkg)
-               (if Text.null sublib then Nothing else Just sublib)
+          let afterColon = Text.drop 1 rest
+          in case Text.stripPrefix "exe:" afterColon of
+               Just exeName
+                 | Text.null exeName ->
+                     ComponentName (PackageName pkg) MainLib
+                 | otherwise         ->
+                     ComponentName (PackageName pkg) (Exe exeName)
+               Nothing
+                 | Text.null afterColon ->
+                     ComponentName (PackageName pkg) MainLib
+                 | otherwise            ->
+                     ComponentName (PackageName pkg) (SubLib afterColon)
 
 -- | Inverse of 'parseComponentName'.
 renderComponentName :: ComponentName -> Text
-renderComponentName (ComponentName (PackageName p) Nothing)  = p
-renderComponentName (ComponentName (PackageName p) (Just s)) = p <> ":" <> s
+renderComponentName (ComponentName (PackageName p) MainLib)    = p
+renderComponentName (ComponentName (PackageName p) (SubLib s)) = p <> ":" <> s
+renderComponentName (ComponentName (PackageName p) (Exe    s)) = p <> ":exe:" <> s

@@ -54,7 +54,7 @@ import qualified Hypha.Source.Locate as Locate
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PlannedUnit (..), lookupUnit )
 import Hypha.Types.ComponentName
-  ( ComponentName (..), parseComponentName )
+  ( ComponentName (..), cnKind, cnPackage, parseComponentName )
 import Hypha.Types.Doc (DocText (..))
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), Version (..) )
@@ -314,13 +314,13 @@ resolveComponentDirs plan resolver raw = do
                 Just pu | not (null (puLibComponents pu)) ->
                   case [ Comp.ciHsSourceDirs c
                        | c <- puLibComponents pu
-                       , Comp.ciKind c == cnKindOfCN cn ] of
+                       , Comp.ciKind c == cnKind cn ] of
                     (xs : _) -> Just xs
                     []       -> Nothing
                 _ -> Nothing
           case mDirs of
             Just dirs -> pure (Just (d, dirs))
-            Nothing | cnKindOfCN cn == Comp.MainLib -> do
+            Nothing | cnKind cn == Comp.MainLib -> do
               -- Fallback for main-lib references in packages whose
               -- cabal we couldn't parse.
               roots <- chooseSourceRoots d
@@ -345,12 +345,6 @@ componentKey pkgT Comp.MainLib    = pkgT
 componentKey pkgT (Comp.SubLib s) = pkgT <> ":" <> s
 componentKey pkgT (Comp.Exe    s) = pkgT <> ":exe:" <> s
 
--- | Temporary shim: until Task 2 swaps 'ComponentName' onto
--- 'ComponentKind', map the old @Maybe Text@ shape onto the kind sum.
-cnKindOfCN :: ComponentName -> Comp.ComponentKind
-cnKindOfCN cn = case cnSublib cn of
-  Nothing -> Comp.MainLib
-  Just s  -> Comp.SubLib s
 
 -- | Every renderable component name for a unit.  Falls back to a
 -- single @pkg@ entry when no components were parsed.
