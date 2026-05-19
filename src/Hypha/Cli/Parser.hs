@@ -122,16 +122,26 @@ globalFlagsParser = GlobalFlags
 
 commandParser :: Parser Command
 commandParser = hsubparser
-  ( command "search" (info searchParser (progDesc "Hoogle search scoped to plan"))
- <> command "package" (info packageParser (progDesc "Package metadata"))
- <> command "module" (info moduleParser (progDesc "Module exports"))
- <> command "symbol" (info symbolParser (progDesc "Symbol details"))
- <> command "source" (info sourceParser (progDesc "Source code"))
- <> command "versions" (info versionsParser (progDesc "Version history"))
- <> command "deps" (info depsParser (progDesc "Dependencies"))
- <> command "whatprovides" (info whatProvidesParser (progDesc "Find symbol providers"))
- <> command "doctor" (info doctorParser (progDesc "Environment health check"))
- <> command "server" (info serverParser (progDesc "Local Haddock/source browser"))
+  ( command "search" (info searchParser
+        (progDesc "Search Hoogle (scoped to plan)\ne.g. hypha search Concurrent"))
+ <> command "package" (info packageParser
+        (progDesc "Package metadata (name, version, exposed modules)\ne.g. hypha package async"))
+ <> command "module" (info moduleParser
+        (progDesc "List module exports\ne.g. hypha module async/Control.Concurrent.Async"))
+ <> command "symbol" (info symbolParser
+        (progDesc "Symbol signature + haddock\ne.g. hypha symbol async/Control.Concurrent.Async/concurrently\nFormat: PKG/MOD/SYM"))
+ <> command "source" (info sourceParser
+        (progDesc "Source snippet for a symbol or module\ne.g. hypha source async/Control.Concurrent.Async/concurrently\nFormat: PKG/MOD[/SYM]"))
+ <> command "versions" (info versionsParser
+        (progDesc "Version history on Hackage\ne.g. hypha versions async"))
+ <> command "deps" (info depsParser
+        (progDesc "Dependencies of a package\ne.g. hypha deps async\nUse --reverse for reverse dependencies"))
+ <> command "whatprovides" (info whatProvidesParser
+        (progDesc "Find which packages/modules export a symbol\ne.g. hypha whatprovides concurrently"))
+ <> command "doctor" (info doctorParser
+        (progDesc "Diagnose the environment"))
+ <> command "server" (info serverParser
+        (progDesc "Browse docs/source in the browser\ne.g. hypha server --port 4287"))
   )
 
 searchParser :: Parser Command
