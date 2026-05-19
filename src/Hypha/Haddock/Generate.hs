@@ -12,7 +12,8 @@ import qualified Data.Text as Text
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cache (haddockCacheRoot)
-import Hypha.Types.PackageId (PackageId (..), renderPackageId)
+import Hypha.Types.BuildPlan (BuildPlan, PlannedUnit (..), lookupUnit)
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), renderPackageId)
 
 -- | Return the per-package Haddock cache directory.
 --
@@ -34,11 +35,11 @@ haddockCacheExists pid = do
 -- Resolution order:
 --
 -- 1. Check the hypha Haddock cache (@~/.cache/hypha/haddock/...@).
--- 2. Fall back to the build environment's store location.
--- 3. Return 'Nothing' if neither has it (best-effort build is future
---    work; callers should treat this as "no docs available yet").
-ensureHaddockFor :: BuildEnv IO -> PackageId -> IO (Maybe FilePath)
-ensureHaddockFor env pid = do
+-- 2. For local packages, check the build plan's dist-dir (NEW).
+-- 3. Fall back to the build environment's store location.
+-- 4. Return 'Nothing' if none has it.
+ensureHaddockFor :: BuildPlan -> BuildEnv IO -> PackageId -> IO (Maybe FilePath)
+ensureHaddockFor plan env pid = do
   inCache <- haddockCacheExists pid
   if inCache
     then do
@@ -46,4 +47,21 @@ ensureHaddockFor env pid = do
       let idx = dir </> "index.html"
       ok <- doesFileExist idx
       pure (if ok then Just idx else Nothing)
-    else locateHaddockHtml env pid
+    else do
+      mDist <- distDirHaddock plan pid
+      case mDist of
+        Just idx -> pure (Just idx)
+        Nothing  -> locateHaddockHtml env pid
+
+-- | Check the build plan's dist-dir for a pre-built Haddock HTML index.
+-- This is used for local (inplace) packages whose Haddock is under
+-- @<distDir>/doc/html/<pkg>/index.html@ (the standard cabal-install layout).
+distDirHaddock :: BuildPlan -> PackageId -> IO (Maybe FilePath)
+distDirHaddock plan pid =
+  case lookupUnit (pkgName pid) plan of
+    Just pu | Just d <- puDistDir pu -> do
+      let pkgNameStr = Text.unpack (unPackageName (pkgName pid))
+          idx = d </> "doc" </> "html" </> pkgNameStr </> "index.html"
+      ok <- doesFileExist idx
+      if ok then pure (Just idx) else pure Nothing
+    _ -> pure Nothing

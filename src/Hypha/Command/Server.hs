@@ -115,7 +115,7 @@ runServer plan env hclient resolver hoogle opts = do
     )
   case soPrebuild opts of
     False -> pure ()
-    True  -> prebuildAll env (soPrebuildJobs opts) (planPackageIds plan)
+    True  -> prebuildAll plan env (soPrebuildJobs opts) (planPackageIds plan)
   let settings = setHost (String.fromString (baHost (soBind opts)))
                $ setPort (baPort (soBind opts))
                  defaultSettings
@@ -123,13 +123,13 @@ runServer plan env hclient resolver hoogle opts = do
   pure (Right ())
 
 -- | Concurrently warm the Haddock cache for every package in the plan.
-prebuildAll :: BuildEnv IO -> Int -> [PackageId] -> IO ()
-prebuildAll env jobs pids = do
+prebuildAll :: BuildPlan -> BuildEnv IO -> Int -> [PackageId] -> IO ()
+prebuildAll plan env jobs pids = do
   sem <- newQSem (max 1 jobs)
   mapConcurrently_ (withSem sem . ensureOne) pids
   where
     ensureOne pid = do
-      r <- try (ensureHaddockFor env pid) :: IO (Either SomeException (Maybe FilePath))
+      r <- try (ensureHaddockFor plan env pid) :: IO (Either SomeException (Maybe FilePath))
       case r of
         Right (Just _) -> pure ()
         _              -> pure ()
