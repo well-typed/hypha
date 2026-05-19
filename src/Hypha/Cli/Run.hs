@@ -39,6 +39,7 @@ import qualified Hypha.Command.Deps       as Deps
 import qualified Hypha.Command.Doctor   as Doctor
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
+import qualified Hypha.Source.Modules   as SourceModules
 import qualified Hypha.Command.Search        as Search
 import qualified Hypha.Command.Server        as Server
 import qualified Hypha.Command.Source        as Source
@@ -200,17 +201,19 @@ dispatch flags = \case
     runSearchWithHoogle flags q extras
 
   PackageCommand rawArg ->
-    withResolver flags $ \(resolver, _env) -> do
+    withResolver flags $ \(resolver, env) -> do
       let (rawName, _mVerHint) = splitVersionHint rawArg
       result <- resolvePkg resolver (PackageName rawName)
       case result of
         Left hyErr -> pure (Left hyErr)
-        Right rp ->
+        Right rp -> do
+          modules0 <- resolveExposedModules resolver env (rpPkgId rp)
           pure (Right (Package.mkSuccessOutcome
             rawName
             (pkgVersion (rpPkgId rp))
             (rpIsLocal rp)
-            (rpDepsCount rp)))
+            (rpDepsCount rp)
+            modules0))
 
   VersionsCommand pkg ->
     withResolver flags $ \(resolver, _env) -> do
@@ -374,6 +377,31 @@ offlineNullBuildEnv = BuildEnv
   , locateHaddockHtml         = \_ -> pure Nothing
   , ghcVersion                = pure (Version "unknown")
   }
+
+-- | Resolve the list of exposed modules for a package.
+--
+--   Tries to find the package source on disk first (via 'locatePackageSource'
+--   from the 'BuildEnv'); if that succeeds, parses the @.cabal@ file for the
+--   @exposed-modules@ stanza.  If the source is not available locally, falls
+--   back to downloading via 'resolveSrc' (which fetches from Hackage).
+--   Returns an empty list on any error or when source is truly unavailable.
+resolveExposedModules
+  :: PackageResolver IO -> BuildEnv IO -> PackageId -> IO [Text.Text]
+resolveExposedModules resolver env pid = do
+  -- Try local source first (fast, no network).
+  mLocal <- locatePackageSource env pid
+  case mLocal of
+    Just dir -> do
+      modules <- SourceModules.getExposedModules dir
+      if null modules then trySrcResolver else pure modules
+    Nothing -> trySrcResolver
+  where
+    trySrcResolver :: IO [Text.Text]
+    trySrcResolver = do
+      eDir <- resolveSrc resolver pid
+      case eDir of
+        Left _err  -> pure []
+        Right dir -> SourceModules.getExposedModules dir
 
 -- | Emit the outcome to stdout, honouring all output-shaping flags.
 emit :: GlobalFlags -> Text -> Either HyphaError (Outcome Value) -> IO ()

@@ -29,16 +29,19 @@ import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
 
 -- | Metadata for a single package, as returned by the @package@ command.
 data PackageResult = PackageResult
-  { prName       :: !Text
-  , prVersion    :: !Text
-  , prInPlan     :: !Bool
-  , prIsLocal    :: !Bool
-  , prDepsCount  :: !Int
+  { prName           :: !Text
+  , prVersion        :: !Text
+  , prInPlan         :: !Bool
+  , prIsLocal        :: !Bool
+  , prDepsCount      :: !Int
+  , prExposedModules :: ![Text]
+    -- ^ Exposed modules parsed from the package's .cabal file, or empty if
+    -- not yet resolved / source unavailable.
   }
   deriving stock (Show, Eq)
 
 compactKeys, fullKeys :: Set Text
-compactKeys = Set.fromList ["name", "version", "in_plan", "is_local", "deps_count"]
+compactKeys = Set.fromList ["name", "version", "in_plan", "is_local", "deps_count", "exposed_modules"]
 fullKeys    = compactKeys
 
 -- | Plan-only variant of the @package@ command, used by golden tests for the
@@ -50,7 +53,7 @@ runPackage plan rawArg =
   let (rawName, _mVerHint) = splitVersionHint rawArg
       pkgName              = PackageName rawName
   in case lookupUnit pkgName plan of
-       Just pu -> Right (mkSuccessOutcome rawName (pkgVersion (puId pu)) (puIsLocal pu) (length (puDeps pu)))
+       Just pu -> Right (mkSuccessOutcome rawName (pkgVersion (puId pu)) (puIsLocal pu) (length (puDeps pu)) [])
        Nothing -> Left $ NotFound
          ("package '" <> rawName <> "' not in build plan")
 
@@ -73,30 +76,39 @@ splitVersionHint raw =
     (n:_)  -> (n, Nothing)
     []     -> ("", Nothing)
 
-mkSuccessOutcome :: Text -> Version -> Bool -> Int -> Outcome Value
-mkSuccessOutcome rawName ver isLocal depsCount =
+-- | Build a success outcome from package metadata and a (possibly empty)
+-- list of exposed modules.  When modules are provided, per-module related
+-- actions are included so an agent can drill in immediately.
+mkSuccessOutcome :: Text -> Version -> Bool -> Int -> [Text] -> Outcome Value
+mkSuccessOutcome rawName ver isLocal depsCount modules =
   let result = PackageResult
-        { prName      = rawName
-        , prVersion   = unVersion ver
-        , prInPlan    = True
-        , prIsLocal   = isLocal
-        , prDepsCount = depsCount
+        { prName           = rawName
+        , prVersion        = unVersion ver
+        , prInPlan         = True
+        , prIsLocal        = isLocal
+        , prDepsCount      = depsCount
+        , prExposedModules = modules
         }
       body = packageResultToJSON result
       actions = Map.fromList
         [ ("version_history", "hypha versions " <> rawName)
         , ("reverse_deps",    "hypha deps " <> rawName <> " --reverse")
         ]
-  in OutcomeSuccess body False [] actions
-       [ Related "versions" ("hypha versions " <> rawName)
-       , Related "module_index_hint" ("hypha module " <> rawName <> "/<Module>")
-       ]
+      moduleRelated = [ Related nm ("hypha module " <> rawName <> "/" <> nm)
+                      | nm <- modules
+                      ]
+      generalRelated =
+        [ Related "versions" ("hypha versions " <> rawName)
+        , Related "module_index_hint" ("hypha module " <> rawName <> "/<Module>")
+        ]
+  in OutcomeSuccess body False [] actions (generalRelated ++ moduleRelated)
 
 packageResultToJSON :: PackageResult -> Value
 packageResultToJSON r = Aeson.object
-  [ "name"       .= prName r
-  , "version"    .= prVersion r
-  , "in_plan"    .= prInPlan r
-  , "is_local"   .= prIsLocal r
-  , "deps_count" .= prDepsCount r
+  [ "name"           .= prName r
+  , "version"        .= prVersion r
+  , "in_plan"        .= prInPlan r
+  , "is_local"       .= prIsLocal r
+  , "deps_count"     .= prDepsCount r
+  , "exposed_modules" .= prExposedModules r
   ]

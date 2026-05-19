@@ -15,6 +15,17 @@ copyright:          2026 Well-Typed LLP
 category:           Development
 build-type:         Simple
 tested-with:        GHC == 9.6.*, GHC == 9.8.*, GHC == 9.10.*
+data-files:
+  ui/css/base.css
+  ui/css/layout.css
+  ui/css/components/doc.css
+  ui/css/components/search.css
+  ui/css/components/tree.css
+  ui/js/htmx.min.js
+  ui/js/keybindings.js
+  ui/icons/module.svg
+  ui/icons/package.svg
+  ui/icons/search.svg
 
 common warnings
   ghc-options:
@@ -95,6 +106,7 @@ library
     Hypha.Search.Fuzzy
     Hypha.Source.Extract
     Hypha.Source.Locate
+    Hypha.Source.Modules
     Hypha.Hackage.Source
   build-depends:
     , aeson              >= 2.0
@@ -168,6 +180,7 @@ test-suite hypha-tests
     Unit.Hackage
     Unit.Hoogle
     Unit.Module
+    Unit.Modules
     Unit.Deps
     Unit.Project
     Unit.WhatProvides
