@@ -21,3 +21,15 @@ library bench
   hs-source-dirs:   bench-src
   exposed-modules:  Nike.Bench.Suite
   build-depends:    base
+
+executable nike-cli
+  default-language: Haskell2010
+  hs-source-dirs:   app
+  main-is:          Main.hs
+  build-depends:    base
+
+executable wrap
+  default-language: Haskell2010
+  hs-source-dirs:   app/wrap
+  main-is:          Main.hs
+  build-depends:    base

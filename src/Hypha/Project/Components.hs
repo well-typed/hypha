@@ -82,7 +82,12 @@ parseLibComponents cabalPath pkgRoot = do
                   (PD.libBuildInfo (PD.condTreeData ct))
               | (n, ct) <- PD.condSubLibraries gpd
               ]
-        in pure (mainComp ++ subComps)
+            exeComps =
+              [ toComponent (Exe (Text.pack (UC.unUnqualComponentName n)))
+                  (PD.buildInfo (PD.condTreeData ct))
+              | (n, ct) <- PD.condExecutables gpd
+              ]
+        in pure (mainComp ++ subComps ++ exeComps)
   where
     toComponent kind bi =
       let raw  = map UP.getSymbolicPath (PD.hsSourceDirs bi)

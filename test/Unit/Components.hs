@@ -12,25 +12,29 @@ import Hypha.Project.Components
 
 tests :: TestTree
 tests = testGroup "Unit.Components"
-  [ testCase "parses main lib + two sublibs from fixture" $ do
+  [ testCase "parses main lib + two sublibs + two exes from fixture" $ do
       let root  = "test" </> "fixtures" </> "cabal"
           cabal = root </> "nike.cabal"
       comps <- parseLibComponents cabal root
-      let toSublib MainLib    = Nothing
-          toSublib (SubLib s) = Just (Text.unpack s)
-          toSublib (Exe _)    = Nothing
-          summary =
-            sort [ ( toSublib (ciKind c)
+      let summary =
+            sort [ ( renderKind (ciKind c)
                    , sort (ciHsSourceDirs c)
                    )
                  | c <- comps
                  ]
       summary @?=
-        [ ( Nothing,         [root </> "src"] )
-        , ( Just "bench",    [root </> "bench-src"] )
-        , ( Just "internal", [root </> "internal-src"] )
+        [ ( "exe:nike-cli",     [root </> "app"] )
+        , ( "exe:wrap",         [root </> "app/wrap"] )
+        , ( "lib",              [root </> "src"] )
+        , ( "sublib:bench",     [root </> "bench-src"] )
+        , ( "sublib:internal",  [root </> "internal-src"] )
         ]
   , testCase "missing cabal file returns []" $ do
       res <- parseLibComponents "/does/not/exist.cabal" "/does/not"
       res @?= []
   ]
+  where
+    renderKind :: ComponentKind -> String
+    renderKind MainLib     = "lib"
+    renderKind (SubLib s)  = "sublib:" <> Text.unpack s
+    renderKind (Exe    s)  = "exe:"    <> Text.unpack s
