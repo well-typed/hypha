@@ -207,26 +207,33 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                   Nothing -> pure Nothing
                   Just f  -> do
                     src <- TIO.readFile f
-                    let info = Extract.extractSymbolInfo src symT
-                        sig  = maybe "" id (Extract.siSignature info)
-                        hd   = maybe "" unDocText (Extract.siHaddock info)
+                    let info0 = Extract.extractSymbolInfo src symT
                     -- Re-exports define the symbol elsewhere in the same
-                    -- package; locateSymbolDefinitionInDir sweeps the tree
-                    -- ranked by module-path prefix, so the URL points at
-                    -- the file that actually contains the binding.  We
-                    -- prefer the signature line whenever it is available:
-                    -- it sits above any CPP conditional, so it is the most
-                    -- faithful anchor for symbols whose body is fanned out
-                    -- across @#ifdef@ branches (e.g. @Control.Concurrent.Async.race@).
+                    -- package; locateSymbolDefinitionInDir sweeps the
+                    -- tree ranked by module-path prefix.  When the
+                    -- module we landed on doesn't actually contain the
+                    -- binding (sig/haddock came back empty), re-extract
+                    -- from the file that does so the symbol card isn't
+                    -- a blank cream box.  We prefer the signature line
+                    -- as the source anchor whenever it is available: it
+                    -- sits above any CPP @#ifdef@ branches, so it is
+                    -- the most faithful target for symbols whose body
+                    -- is fanned out across platform-specific branches.
                     mLoc <- Locate.locateSymbolDefinitionInDir d modT symT
-                    let (resolvedMod, mLine) = case (Extract.siSigLine info, Extract.siLine info, mLoc) of
-                          (Just n, _, _)           -> (modT, Just n)
-                          (Nothing, Just n, _)     -> (modT, Just n)
-                          (Nothing, Nothing, Just loc) ->
-                            ( modulePathFromFile d (Locate.slPath loc)
-                            , Just (Locate.slLine loc)
-                            )
-                          (Nothing, Nothing, Nothing) -> (modT, Nothing)
+                    (info, resolvedMod, lineOverride) <-
+                      case (Extract.siSignature info0, mLoc) of
+                        (Nothing, Just loc) | Locate.slPath loc /= f -> do
+                          src' <- TIO.readFile (Locate.slPath loc)
+                          let info' = Extract.extractSymbolInfo src' symT
+                              modT' = modulePathFromFile d (Locate.slPath loc)
+                          pure (info', modT', Just (Locate.slLine loc))
+                        _ -> pure (info0, modT, Nothing)
+                    let sig = maybe "" id (Extract.siSignature info)
+                        hd  = maybe "" unDocText (Extract.siHaddock  info)
+                        mLine = case (Extract.siSigLine info, Extract.siLine info, lineOverride) of
+                          (Just n, _, _)        -> Just n
+                          (Nothing, Just n, _)  -> Just n
+                          (Nothing, Nothing, l) -> l
                     pure (Just (sig, hd, resolvedMod, mLine))
     , App.scHaddockHtml  = \pkgVer segments -> do
         let pidM = parsePkgVer pkgVer
