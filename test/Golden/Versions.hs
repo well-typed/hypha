@@ -32,11 +32,15 @@ runVersionsCommand = do
                 { puId = PackageId (PackageName "async") (Version "2.2.5")
                 , puDeps = []
                 , puIsLocal = False
+                , puSrcDir  = Nothing
+                , puDistDir = Nothing
                 })
             , (PackageName "base", PlannedUnit
                 { puId = PackageId (PackageName "base") (Version "4.18.3.0")
                 , puDeps = []
                 , puIsLocal = False
+                , puSrcDir  = Nothing
+                , puDistDir = Nothing
                 })
             ]
         }

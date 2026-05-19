@@ -83,7 +83,16 @@ toPlannedUnit unitIdToPkgId u =
     { puId      = pkgId
     , puDeps    = deps
     , puIsLocal = (CP.uType u == CP.UnitTypeLocal)
+    , puSrcDir  = extractSrcDir (CP.uPkgSrc u)
+    , puDistDir = CP.uDistDir u
     }
+
+-- | Extract the source directory from a @PkgLoc@ value.
+-- Returns 'Just p' for 'LocalUnpackedPackage' (inplace/local packages),
+-- 'Nothing' for all other package source types.
+extractSrcDir :: Maybe CP.PkgLoc -> Maybe FilePath
+extractSrcDir (Just (CP.LocalUnpackedPackage p)) = Just p
+extractSrcDir _                                   = Nothing
 
 -- | Convert a cabal-plan PkgId to our PackageId type.
 toPackageId :: CP.PkgId -> PackageId

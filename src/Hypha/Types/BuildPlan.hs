@@ -62,6 +62,12 @@ data PlannedUnit = PlannedUnit
   , puDeps    :: ![PackageId]
   , puIsLocal :: !Bool
     -- ^ Whether this is a local project package (not a dependency).
+  , puSrcDir  :: !(Maybe FilePath)
+    -- ^ Source root from plan.json (pkg-src.path).
+    -- 'Just p' for inplace/local packages, 'Nothing' otherwise.
+  , puDistDir :: !(Maybe FilePath)
+    -- ^ Build directory from plan.json (dist-dir).
+    -- Used to locate pre-built Haddock HTML for local packages.
   }
   deriving stock (Show, Eq)
 
@@ -106,7 +112,8 @@ applyOverrides overrides bp = bp
   where
     applyOverride (PackageOverride n v) =
       Map.insertWith (\_ old -> old { puId = (puId old) { pkgVersion = v } }) n
-        PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False }
+        PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False
+                    , puSrcDir = Nothing, puDistDir = Nothing }
 
 -- | Get forward dependencies of a package.
 forwardDepsOf :: PackageName -> BuildPlan -> [(PackageName, Version)]

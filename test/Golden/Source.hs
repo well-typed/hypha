@@ -44,6 +44,8 @@ runSourceCommand = do
                 { puId = PackageId (PackageName "async") (Version "2.2.5")
                 , puDeps = []
                 , puIsLocal = False
+                , puSrcDir  = Nothing
+                , puDistDir = Nothing
                 })
             ]
         }
