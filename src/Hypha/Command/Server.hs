@@ -43,6 +43,7 @@ import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..) )
 import Data.List (sortOn)
 import Data.Ord (Down (..))
+import qualified Hypha.Project.Components as Comp
 import qualified Hypha.Search.Cache as Cache
 import qualified Hypha.Search.Fuzzy as Fuzzy
 import qualified Hypha.Server.App as App
@@ -50,7 +51,8 @@ import qualified Hypha.Server.Haddock.Rewrite as Rewrite
 import qualified Hypha.Server.Slots as Slots
 import qualified Hypha.Source.Extract as Extract
 import qualified Hypha.Source.Locate as Locate
-import Hypha.Types.BuildPlan (BuildPlan (..), PlannedUnit (..))
+import Hypha.Types.BuildPlan
+  ( BuildPlan (..), PlannedUnit (..), lookupUnit )
 import Hypha.Types.Doc (DocText (..))
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), Version (..) )
@@ -166,13 +168,13 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
   -- accepts requests so the common (warm) path renders results
   -- immediately on the first keystroke.  Anything not yet cached gets
   -- built in the background and persisted for next time.
-  missing  <- hydrateFromCache cache pids indexRef
+  missing  <- hydrateFromCache plan cache pids indexRef
   IORef.writeIORef totalRef (length missing)
   case missing of
     [] -> IORef.writeIORef readyRef True
     _  -> do
       _ <- forkIO $ do
-        r <- try (buildAndCacheIndex cache resolver missing indexRef doneRef)
+        r <- try (buildAndCacheIndex plan cache resolver missing indexRef doneRef)
         case r :: Either SomeException () of
           Left e  -> hPutStrLn stderr ("hypha index build failed: " <> show e)
           Right _ -> pure ()
@@ -293,32 +295,74 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
                   Just f  -> Locate.parseExports <$> TIO.readFile f
     }
 
--- | Pull every cached package index into the in-memory ref.  Returns the
--- 'PackageId's that had no cached entry yet, so the caller can build
--- them in the background.
+-- | Compute the cache key for one library component.
+--   'Nothing' sublib → bare package name; 'Just s' → @pkg:s@.
+componentKey :: Text -> Maybe Text -> Text
+componentKey pkgT Nothing  = pkgT
+componentKey pkgT (Just s) = pkgT <> ":" <> s
+
+-- | Enumerate every component of a unit (main + sublibs) as
+-- @(sublib, sourceDirs)@ pairs.  Falls back to a single fallback
+-- entry using the heuristic root walk when the unit has no parsed
+-- components.
+componentsForUnit
+  :: BuildPlan -> PackageId -> FilePath
+  -> IO [(Maybe Text, [FilePath])]
+componentsForUnit plan pid d =
+  case lookupUnit (pkgName pid) plan of
+    Just pu | not (null (puLibComponents pu)) ->
+      pure
+        [ (Comp.ciSublib c, Comp.ciHsSourceDirs c)
+        | c <- puLibComponents pu
+        ]
+    _ -> do
+      roots <- chooseSourceRoots d
+      pure [(Nothing, roots)]
+
+-- | Pull every cached component index into the in-memory ref.  A unit
+-- counts as "fully hydrated" only when /every/ one of its components
+-- has cached rows; otherwise it's reported as missing so the
+-- background indexer rebuilds the whole set.
 hydrateFromCache
-  :: Cache.IndexCache
+  :: BuildPlan
+  -> Cache.IndexCache
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
   -> IO [PackageId]
-hydrateFromCache cache pids ref = go [] pids
+hydrateFromCache plan cache pids ref = go [] pids
   where
     go missing [] = pure (reverse missing)
     go missing (pid : rest) = do
-      let pkgT = unPackageName (pkgName pid)
-          verT = unVersion    (pkgVersion pid)
-      hit <- Cache.haveIndex cache pkgT verT
-      if hit
-        then do
-          rows <- Cache.readIndex cache pkgT verT
-          let indexed =
-                [ Fuzzy.mkIndexedRow p m n s
-                | (p, m, n, s) <- rows
-                ]
-          indexed `seq`
-            IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
-          go missing rest
-        else go (pid : missing) rest
+      let pkgT  = unPackageName (pkgName pid)
+          verT  = unVersion    (pkgVersion pid)
+      sublibs <- componentSublibs plan pid
+      case sublibs of
+        []  -> go (pid : missing) rest
+        _   -> do
+          let keys = [ componentKey pkgT s | s <- sublibs ]
+          hits <- mapM (\k -> Cache.haveIndex cache k verT) keys
+          if and hits
+            then do
+              mapM_ (loadKey verT) keys
+              go missing rest
+            else go (pid : missing) rest
+
+    loadKey verT k = do
+      rows <- Cache.readIndex cache k verT
+      let indexed =
+            [ Fuzzy.mkIndexedRow p m n s | (p, m, n, s) <- rows ]
+      indexed `seq`
+        IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+
+    -- | Just the sublib names for a unit, mirroring the structure
+    -- 'componentsForUnit' would emit.  We avoid needing a source dir
+    -- here because hydrate works off the cache alone.
+    componentSublibs :: BuildPlan -> PackageId -> IO [Maybe Text]
+    componentSublibs p pid =
+      case lookupUnit (pkgName pid) p of
+        Just pu | not (null (puLibComponents pu)) ->
+          pure [ Comp.ciSublib c | c <- puLibComponents pu ]
+        _ -> pure [Nothing]
 
 -- | Walk the source trees of the given packages, extract their module
 -- exports, persist the result to the cache, and prepend them to the
@@ -329,51 +373,68 @@ hydrateFromCache cache pids ref = go [] pids
 -- critical section; prepending makes each insert O(|rows|) instead of
 -- the O(|index|) behaviour of @old ++ rows@.
 buildAndCacheIndex
-  :: Cache.IndexCache
+  :: BuildPlan
+  -> Cache.IndexCache
   -> PackageResolver IO
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
   -> IORef.IORef Int                    -- ^ packages-done counter
   -> IO ()
-buildAndCacheIndex cache resolver pids ref doneRef = mapM_ indexPkg pids
+buildAndCacheIndex plan cache resolver pids ref doneRef =
+  mapM_ indexUnit pids
   where
+    -- The done counter bumps once per /unit/, not per component, so
+    -- the progress bar continues to read in package units.
     bump = IORef.atomicModifyIORef' doneRef (\n -> (n + 1, ()))
 
-    indexPkg pid = do
+    indexUnit pid = do
       eDir <- resolveSrc resolver pid
       case eDir of
         Left _  -> bump
         Right d -> do
-          mods <- enumModules d
-          rowChunks <- mapM (collectMod pid d) mods
-          let pkgT     = unPackageName (pkgName    pid)
-              verT     = unVersion    (pkgVersion pid)
-              flatRows = concat rowChunks
-              indexed  = [ Fuzzy.mkIndexedRow p m n s
-                         | (p, m, n, s) <- flatRows
-                         ]
-          -- Persist before publishing into memory so a crash mid-stream
-          -- never leaves the in-memory view ahead of the cache.
-          Cache.writeIndex cache pkgT verT flatRows
-          indexed `seq`
-            IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+          comps <- componentsForUnit plan pid d
+          mapM_ (indexComponent pid) comps
           bump
 
-    collectMod pid d modPath = do
-      mFile <- Locate.findModuleFile d modPath
+    indexComponent pid (sublib, srcDirs) = do
+      let pkgT    = unPackageName (pkgName    pid)
+          verT    = unVersion    (pkgVersion pid)
+          compKey = componentKey pkgT sublib
+      mods <- enumModulesIn srcDirs
+      rowChunks <- mapM (collectMod compKey srcDirs) mods
+      let flatRows = concat rowChunks
+          indexed  = [ Fuzzy.mkIndexedRow p m n s
+                     | (p, m, n, s) <- flatRows
+                     ]
+      -- Persist before publishing into memory so a crash mid-stream
+      -- never leaves the in-memory view ahead of the cache.
+      Cache.writeIndex cache compKey verT flatRows
+      indexed `seq`
+        IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+
+    -- | Resolve a module file against an explicit list of source roots,
+    -- in priority order.
+    collectMod compKey srcDirs modPath = do
+      mFile <- firstExistingModule srcDirs modPath
       case mFile of
         Nothing -> pure []
         Just f  -> do
           exps <- Locate.parseExports <$> TIO.readFile f
-          let pkgT = unPackageName (pkgName pid)
-          pure [ (pkgT, modPath, e, "")
+          pure [ (compKey, modPath, e, "")
                | e <- exps
                , not (Text.null e)
                ]
 
-    enumModules d = do
-      roots <- chooseSourceRoots d
-      paths <- concat <$> mapM (\r -> map (drop (length r + 1)) <$> findHs r 4) roots
+    firstExistingModule [] _ = pure Nothing
+    firstExistingModule (r:rs) modPath = do
+      let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
+      ok <- Dir.doesFileExist candidate
+      if ok then pure (Just candidate) else firstExistingModule rs modPath
+
+    enumModulesIn srcDirs = do
+      paths <- concat <$> mapM
+        (\r -> map (drop (length r + 1)) <$> findHs r 4)
+        srcDirs
       pure (map (Text.pack . hsToModule) paths)
 
 -- | Walk the resolved source tree and list every @.hs@ file as a dotted
