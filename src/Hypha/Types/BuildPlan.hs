@@ -25,6 +25,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 
+import Hypha.Project.Components (ComponentInfo)
 import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
 
 -- | Absolute path to the project root (directory containing @cabal.project@).
@@ -68,6 +69,11 @@ data PlannedUnit = PlannedUnit
   , puDistDir :: !(Maybe FilePath)
     -- ^ Build directory from plan.json (dist-dir).
     -- Used to locate pre-built Haddock HTML for local packages.
+  , puLibComponents :: ![ComponentInfo]
+    -- ^ Library components (main + sublibs) discovered by parsing
+    -- this unit's @.cabal@ file.  An empty list means "no cabal file
+    -- found / parse failed" — callers fall back to the heuristic
+    -- source-root walk.
   }
   deriving stock (Show, Eq)
 
@@ -113,7 +119,8 @@ applyOverrides overrides bp = bp
     applyOverride (PackageOverride n v) =
       Map.insertWith (\_ old -> old { puId = (puId old) { pkgVersion = v } }) n
         PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False
-                    , puSrcDir = Nothing, puDistDir = Nothing }
+                    , puSrcDir = Nothing, puDistDir = Nothing
+                    , puLibComponents = [] }
 
 -- | Get forward dependencies of a package.
 forwardDepsOf :: PackageName -> BuildPlan -> [(PackageName, Version)]

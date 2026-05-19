@@ -34,6 +34,7 @@ runVersionsCommand = do
                 , puIsLocal = False
                 , puSrcDir  = Nothing
                 , puDistDir = Nothing
+          , puLibComponents = []
                 })
             , (PackageName "base", PlannedUnit
                 { puId = PackageId (PackageName "base") (Version "4.18.3.0")
@@ -41,6 +42,7 @@ runVersionsCommand = do
                 , puIsLocal = False
                 , puSrcDir  = Nothing
                 , puDistDir = Nothing
+          , puLibComponents = []
                 })
             ]
         }

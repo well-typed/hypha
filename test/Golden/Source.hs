@@ -46,6 +46,7 @@ runSourceCommand = do
                 , puIsLocal = False
                 , puSrcDir  = Nothing
                 , puDistDir = Nothing
+          , puLibComponents = []
                 })
             ]
         }

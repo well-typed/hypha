@@ -15,6 +15,7 @@ import qualified Data.Text as Text
 
 import qualified Cabal.Plan as CP
 
+import qualified Hypha.Project.Components as Comp
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PlannedUnit (..), ProjectRoot (..) )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
@@ -31,20 +32,24 @@ data PlanError
 --   relative to the project root.
 --
 --   Uses @cabal-plan@'s @findAndDecodePlanJson@ for robust discovery.
+--   For every unit whose source directory is known (either inplace via
+--   @pkg-src.path@, or — see 'Hypha.Project.Plan' Task 5 — resolved
+--   through the source cache) we read its @.cabal@ file and stash the
+--   list of library components on the 'PlannedUnit'.  This drives
+--   sub-library indexing in @hypha server@.
 loadBuildPlan :: ProjectRoot -> IO (Either PlanError BuildPlan)
 loadBuildPlan (ProjectRoot root) = do
-  result <- try @IOException (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
+  result <- try @IOException
+              (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
   case result of
-    Left e  -> pure (Left (PlanNotFound (show e)))
-    Right pj -> pure (Right (cabalPlanToBuildPlan pj))
-
--- | Convert a @cabal-plan@ 'CP.PlanJson' to our simplified 'BuildPlan'.
-cabalPlanToBuildPlan :: CP.PlanJson -> BuildPlan
-cabalPlanToBuildPlan pj = BuildPlan
-  { bpCompiler  = compilerFromPlan pj
-  , bpUnits     = unitsFromPlan pj
-  , bpOverrides = []
-  }
+    Left e   -> pure (Left (PlanNotFound (show e)))
+    Right pj -> do
+      units <- unitsFromPlan pj Map.empty
+      pure (Right (BuildPlan
+        { bpCompiler  = compilerFromPlan pj
+        , bpUnits     = units
+        , bpOverrides = []
+        }))
 
 -- | Extract compiler identifier from the plan.
 compilerFromPlan :: CP.PlanJson -> CompilerId
@@ -54,38 +59,63 @@ compilerFromPlan pj =
   in CompilerId (name <> Text.pack "-" <> verStr)
 
 -- | Extract planned units with their dependencies from the plan.
-unitsFromPlan :: CP.PlanJson -> Map PackageName PlannedUnit
-unitsFromPlan pj =
-  let allUnits = Map.elems (CP.pjUnits pj)
-      -- Build a map from UnitId to PkgId for dependency resolution
+unitsFromPlan
+  :: CP.PlanJson
+  -> Map FilePath FilePath
+     -- ^ @\"pkg-ver\" -> sourceDir@ for dependency packages.  Empty in
+     -- this task; Task 5 populates it from the source cache.
+  -> IO (Map PackageName PlannedUnit)
+unitsFromPlan pj sourceCacheLookup = do
+  let allUnits     = Map.elems (CP.pjUnits pj)
       unitIdToPkgId = Map.fromList
-        [ (CP.uId u, CP.uPId u)
-        | u <- allUnits
-        ]
-      -- Include all units (local, global, builtin, inplace).
-      -- Local packages (hypha itself) are included with puIsLocal = True.
-  in Map.fromList
-    [ (PackageName pkgText, toPlannedUnit unitIdToPkgId u)
-    | u <- allUnits
-    , let CP.PkgId (CP.PkgName pkgText) _ = CP.uPId u
-    ]
+        [ (CP.uId u, CP.uPId u) | u <- allUnits ]
+  pairs <- mapM
+    (\u -> do
+       pu <- toPlannedUnit unitIdToPkgId sourceCacheLookup u
+       let CP.PkgId (CP.PkgName pkgText) _ = CP.uPId u
+       pure (PackageName pkgText, pu))
+    allUnits
+  pure (Map.fromList pairs)
 
 -- | Convert a cabal-plan Unit to our PlannedUnit type.
-toPlannedUnit :: Map CP.UnitId CP.PkgId -> CP.Unit -> PlannedUnit
-toPlannedUnit unitIdToPkgId u =
+toPlannedUnit
+  :: Map CP.UnitId CP.PkgId
+  -> Map FilePath FilePath
+  -> CP.Unit
+  -> IO PlannedUnit
+toPlannedUnit unitIdToPkgId sourceCacheLookup u = do
   let CP.PkgId (CP.PkgName name) ver = CP.uPId u
-      pkgId = PackageId (PackageName name) (Version (CP.dispVer ver))
-      -- Get library dependencies from all components
+      pkgId   = PackageId (PackageName name) (Version (CP.dispVer ver))
       libDeps = concatMap (Set.toList . CP.ciLibDeps) (Map.elems (CP.uComps u))
-      -- Resolve UnitIds to PackageIds
-      deps = [ toPackageId pid | uid <- libDeps, Just pid <- [Map.lookup uid unitIdToPkgId] ]
-  in PlannedUnit
-    { puId      = pkgId
-    , puDeps    = deps
-    , puIsLocal = (CP.uType u == CP.UnitTypeLocal)
-    , puSrcDir  = extractSrcDir (CP.uPkgSrc u)
-    , puDistDir = CP.uDistDir u
+      deps    = [ toPackageId pid
+                | uid <- libDeps
+                , Just pid <- [Map.lookup uid unitIdToPkgId]
+                ]
+      srcDir  = extractSrcDir (CP.uPkgSrc u)
+      depKey  = Text.unpack name <> "-" <> Text.unpack (CP.dispVer ver)
+      sourceDir = case srcDir of
+        Just d  -> Just d
+        Nothing -> Map.lookup depKey sourceCacheLookup
+  comps <- case sourceDir of
+    Just d  -> componentsFor d
+    Nothing -> pure []
+  pure PlannedUnit
+    { puId            = pkgId
+    , puDeps          = deps
+    , puIsLocal       = (CP.uType u == CP.UnitTypeLocal)
+    , puSrcDir        = srcDir
+    , puDistDir       = CP.uDistDir u
+    , puLibComponents = comps
     }
+
+-- | Parse the @.cabal@ file in a directory and return its library
+-- components.  Silent fallback to @[]@ on any kind of failure.
+componentsFor :: FilePath -> IO [Comp.ComponentInfo]
+componentsFor d = do
+  mCabal <- Comp.findCabalFile d
+  case mCabal of
+    Just c  -> Comp.parseLibComponents c d
+    Nothing -> pure []
 
 -- | Extract the source directory from a @PkgLoc@ value.
 -- Returns 'Just p' for 'LocalUnpackedPackage' (inplace/local packages),
