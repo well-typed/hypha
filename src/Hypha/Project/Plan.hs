@@ -15,6 +15,7 @@ import qualified Data.Text as Text
 
 import qualified Cabal.Plan as CP
 
+import qualified Hypha.Hackage.Source as Src
 import qualified Hypha.Project.Components as Comp
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PlannedUnit (..), ProjectRoot (..) )
@@ -44,7 +45,8 @@ loadBuildPlan (ProjectRoot root) = do
   case result of
     Left e   -> pure (Left (PlanNotFound (show e)))
     Right pj -> do
-      units <- unitsFromPlan pj Map.empty
+      cache <- Src.enumerateSourceCache
+      units <- unitsFromPlan pj cache
       pure (Right (BuildPlan
         { bpCompiler  = compilerFromPlan pj
         , bpUnits     = units

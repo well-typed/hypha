@@ -2,10 +2,13 @@
 -- | Download and extract package source tarballs from Hackage.
 module Hypha.Hackage.Source
   ( fetchAndExtractSource
+  , enumerateSourceCache
   ) where
 
 import Control.Exception (IOException, try)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Network.HTTP.Client
   ( Response, httpLbs, newManager, parseRequest, requestHeaders
   , responseStatus, responseBody
@@ -13,11 +16,13 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Header (hUserAgent)
 import Network.HTTP.Types.Status (statusCode)
-import System.Directory (createDirectoryIfMissing, removeFile)
+import System.Directory
+  ( createDirectoryIfMissing, doesDirectoryExist, listDirectory, removeFile )
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Process (system)
 
+import Hypha.Cache (sourceCacheRoot)
 import Hypha.Hackage.Api (HackageClient (..), HackageError (..), sourceTarballUrl, userAgent)
 import Hypha.Types.PackageId (PackageId (..))
 
@@ -49,3 +54,17 @@ fetchAndExtractSource _hclient pid destDir = do
             ExitSuccess   -> pure (Right destDir)
             ExitFailure c -> pure (Left (NetworkError ("tar extraction failed with code " ++ show c)))
         else pure (Left (HttpError status))
+
+-- | List every cached package-source directory under
+-- @$XDG_CACHE_HOME/hypha/source/@.  Each entry is keyed by the
+-- @\"pkg-ver\"@ directory name and maps to the absolute path on disk.
+-- Returns 'Map.empty' when the cache directory doesn't exist yet.
+enumerateSourceCache :: IO (Map FilePath FilePath)
+enumerateSourceCache = do
+  dir <- sourceCacheRoot
+  ok  <- doesDirectoryExist dir
+  if not ok
+    then pure Map.empty
+    else do
+      entries <- listDirectory dir
+      pure (Map.fromList [ (e, dir </> e) | e <- entries ])
