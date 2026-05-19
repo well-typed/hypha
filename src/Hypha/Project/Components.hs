@@ -10,6 +10,7 @@
 -- indexer falls back to its heuristic source-root walk in that case.
 module Hypha.Project.Components
   ( ComponentInfo (..)
+  , ComponentKind (..)
   , parseLibComponents
   , findCabalFile
   ) where
@@ -25,10 +26,19 @@ import qualified Distribution.Utils.Path as UP
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>), takeExtension)
 
--- | One library component of a package.
+-- | The kind of library or executable component we discovered in a
+-- cabal file.  'MainLib' represents the unnamed @library@ stanza;
+-- 'SubLib' is a named @library NAME@ stanza; 'Exe' is an
+-- @executable NAME@ stanza.
+data ComponentKind
+  = MainLib
+  | SubLib !Text
+  | Exe    !Text
+  deriving stock (Show, Eq, Ord)
+
+-- | One library or executable component of a package.
 data ComponentInfo = ComponentInfo
-  { ciSublib       :: !(Maybe Text)
-    -- ^ 'Nothing' for the main library; 'Just' for a sub-library.
+  { ciKind         :: !ComponentKind
   , ciHsSourceDirs :: ![FilePath]
     -- ^ Absolute paths.  Falls back to the package root when the
     -- stanza omits @hs-source-dirs@ (cabal default).
@@ -63,20 +73,20 @@ parseLibComponents cabalPath pkgRoot = do
       Nothing  -> pure []
       Just gpd ->
         let mainComp =
-              [ toComponent Nothing
+              [ toComponent MainLib
                   (PD.libBuildInfo (PD.condTreeData ct))
               | ct <- maybe [] (:[]) (PD.condLibrary gpd)
               ]
             subComps =
-              [ toComponent (Just (Text.pack (UC.unUnqualComponentName n)))
+              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n)))
                   (PD.libBuildInfo (PD.condTreeData ct))
               | (n, ct) <- PD.condSubLibraries gpd
               ]
         in pure (mainComp ++ subComps)
   where
-    toComponent name bi =
+    toComponent kind bi =
       let raw  = map UP.getSymbolicPath (PD.hsSourceDirs bi)
           dirs = if null raw
                    then [pkgRoot]
                    else map (pkgRoot </>) raw
-      in ComponentInfo name dirs
+      in ComponentInfo kind dirs

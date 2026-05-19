@@ -314,13 +314,13 @@ resolveComponentDirs plan resolver raw = do
                 Just pu | not (null (puLibComponents pu)) ->
                   case [ Comp.ciHsSourceDirs c
                        | c <- puLibComponents pu
-                       , Comp.ciSublib c == cnSublib cn ] of
+                       , Comp.ciKind c == cnKindOfCN cn ] of
                     (xs : _) -> Just xs
                     []       -> Nothing
                 _ -> Nothing
           case mDirs of
             Just dirs -> pure (Just (d, dirs))
-            Nothing | cnSublib cn == Nothing -> do
+            Nothing | cnKindOfCN cn == Comp.MainLib -> do
               -- Fallback for main-lib references in packages whose
               -- cabal we couldn't parse.
               roots <- chooseSourceRoots d
@@ -335,11 +335,22 @@ enumModulesIn roots = do
     roots
   pure (map (Text.pack . hsToModule) paths)
 
--- | Compute the cache key for one library component.
---   'Nothing' sublib → bare package name; 'Just s' → @pkg:s@.
-componentKey :: Text -> Maybe Text -> Text
-componentKey pkgT Nothing  = pkgT
-componentKey pkgT (Just s) = pkgT <> ":" <> s
+-- | Compute the cache key for one library or executable component.
+--
+--   * 'MainLib' → bare package name.
+--   * 'SubLib s' → @pkg:s@.
+--   * 'Exe s'    → @pkg:exe:s@.
+componentKey :: Text -> Comp.ComponentKind -> Text
+componentKey pkgT Comp.MainLib    = pkgT
+componentKey pkgT (Comp.SubLib s) = pkgT <> ":" <> s
+componentKey pkgT (Comp.Exe    s) = pkgT <> ":exe:" <> s
+
+-- | Temporary shim: until Task 2 swaps 'ComponentName' onto
+-- 'ComponentKind', map the old @Maybe Text@ shape onto the kind sum.
+cnKindOfCN :: ComponentName -> Comp.ComponentKind
+cnKindOfCN cn = case cnSublib cn of
+  Nothing -> Comp.MainLib
+  Just s  -> Comp.SubLib s
 
 -- | Every renderable component name for a unit.  Falls back to a
 -- single @pkg@ entry when no components were parsed.
@@ -348,26 +359,26 @@ componentNames plan pid =
   let pkgT = unPackageName (pkgName pid)
   in case lookupUnit (pkgName pid) plan of
        Just pu | not (null (puLibComponents pu)) ->
-         [ componentKey pkgT (Comp.ciSublib c) | c <- puLibComponents pu ]
+         [ componentKey pkgT (Comp.ciKind c) | c <- puLibComponents pu ]
        _ -> [pkgT]
 
--- | Enumerate every component of a unit (main + sublibs) as
--- @(sublib, sourceDirs)@ pairs.  Falls back to a single fallback
--- entry using the heuristic root walk when the unit has no parsed
+-- | Enumerate every component of a unit (main + sublibs + exes) as
+-- @(kind, sourceDirs)@ pairs.  Falls back to a single fallback entry
+-- using the heuristic root walk when the unit has no parsed
 -- components.
 componentsForUnit
   :: BuildPlan -> PackageId -> FilePath
-  -> IO [(Maybe Text, [FilePath])]
+  -> IO [(Comp.ComponentKind, [FilePath])]
 componentsForUnit plan pid d =
   case lookupUnit (pkgName pid) plan of
     Just pu | not (null (puLibComponents pu)) ->
       pure
-        [ (Comp.ciSublib c, Comp.ciHsSourceDirs c)
+        [ (Comp.ciKind c, Comp.ciHsSourceDirs c)
         | c <- puLibComponents pu
         ]
     _ -> do
       roots <- chooseSourceRoots d
-      pure [(Nothing, roots)]
+      pure [(Comp.MainLib, roots)]
 
 -- | Pull every cached component index into the in-memory ref.  A unit
 -- counts as "fully hydrated" only when /every/ one of its components
@@ -385,11 +396,11 @@ hydrateFromCache plan cache pids ref = go [] pids
     go missing (pid : rest) = do
       let pkgT  = unPackageName (pkgName pid)
           verT  = unVersion    (pkgVersion pid)
-      sublibs <- componentSublibs plan pid
-      case sublibs of
+      kinds <- componentKinds plan pid
+      case kinds of
         []  -> go (pid : missing) rest
         _   -> do
-          let keys = [ componentKey pkgT s | s <- sublibs ]
+          let keys = [ componentKey pkgT k | k <- kinds ]
           hits <- mapM (\k -> Cache.haveIndex cache k verT) keys
           if and hits
             then do
@@ -404,15 +415,15 @@ hydrateFromCache plan cache pids ref = go [] pids
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
-    -- | Just the sublib names for a unit, mirroring the structure
-    -- 'componentsForUnit' would emit.  We avoid needing a source dir
-    -- here because hydrate works off the cache alone.
-    componentSublibs :: BuildPlan -> PackageId -> IO [Maybe Text]
-    componentSublibs p pid =
+    -- | Just the component kinds for a unit, mirroring the
+    -- structure 'componentsForUnit' would emit.  We avoid needing a
+    -- source dir here because hydrate works off the cache alone.
+    componentKinds :: BuildPlan -> PackageId -> IO [Comp.ComponentKind]
+    componentKinds p pid =
       case lookupUnit (pkgName pid) p of
         Just pu | not (null (puLibComponents pu)) ->
-          pure [ Comp.ciSublib c | c <- puLibComponents pu ]
-        _ -> pure [Nothing]
+          pure [ Comp.ciKind c | c <- puLibComponents pu ]
+        _ -> pure [Comp.MainLib]
 
 -- | Walk the source trees of the given packages, extract their module
 -- exports, persist the result to the cache, and prepend them to the
@@ -446,10 +457,10 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
           mapM_ (indexComponent pid) comps
           bump
 
-    indexComponent pid (sublib, srcDirs) = do
+    indexComponent pid (kind, srcDirs) = do
       let pkgT    = unPackageName (pkgName    pid)
           verT    = unVersion    (pkgVersion pid)
-          compKey = componentKey pkgT sublib
+          compKey = componentKey pkgT kind
       mods <- enumModulesIn srcDirs
       rowChunks <- mapM (collectMod compKey srcDirs) mods
       let flatRows = concat rowChunks

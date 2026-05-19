@@ -8,7 +8,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Project.Components
-  ( ComponentInfo (..), parseLibComponents )
+  ( ComponentInfo (..), ComponentKind (..), parseLibComponents )
 
 tests :: TestTree
 tests = testGroup "Unit.Components"
@@ -16,8 +16,11 @@ tests = testGroup "Unit.Components"
       let root  = "test" </> "fixtures" </> "cabal"
           cabal = root </> "nike.cabal"
       comps <- parseLibComponents cabal root
-      let summary =
-            sort [ ( fmap Text.unpack (ciSublib c)
+      let toSublib MainLib    = Nothing
+          toSublib (SubLib s) = Just (Text.unpack s)
+          toSublib (Exe _)    = Nothing
+          summary =
+            sort [ ( toSublib (ciKind c)
                    , sort (ciHsSourceDirs c)
                    )
                  | c <- comps
