@@ -30,8 +30,8 @@ import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Monad (void)
 import Data.Text (Text)
 import Database.SQLite.Simple
-  ( Connection, NamedParam ((:=)), Only (..), Query, execute, executeMany
-  , executeNamed, execute_, open, queryNamed )
+  ( Connection, NamedParam ((:=)), Only (..), Query (..), execute, executeMany
+  , executeNamed, execute_, open, query_, queryNamed )
 import qualified Database.SQLite.Simple as Sql
 import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
 import System.FilePath ((</>))
@@ -61,6 +61,7 @@ openIndexCache path = do
   execute_ conn "PRAGMA journal_mode = WAL"
   execute_ conn "PRAGMA synchronous = NORMAL"
   mapM_ (execute_ conn) schema
+  migrateAddColumn conn "pkg_index_meta" "fingerprint" "TEXT"
   lock <- newMVar ()
   pure (IndexCache conn lock)
 
@@ -70,6 +71,7 @@ schema =
     \  ( pkg     TEXT NOT NULL \
     \  , version TEXT NOT NULL \
     \  , indexed_at INTEGER NOT NULL \
+    \  , fingerprint TEXT \
     \  , PRIMARY KEY (pkg, version) )"
   , "CREATE TABLE IF NOT EXISTS pkg_index \
     \  ( pkg     TEXT NOT NULL \
@@ -86,6 +88,24 @@ schema =
 
 withWrite :: IndexCache -> IO a -> IO a
 withWrite c io = withMVar (icLock c) (\_ -> io)
+
+-- | Add a column to an existing table if it is not already present.
+-- SQLite has no @ADD COLUMN IF NOT EXISTS@, so we probe
+-- @PRAGMA table_info@ first.  Used to migrate caches created before
+-- the fingerprint column existed.
+migrateAddColumn :: Connection -> Text -> Text -> Text -> IO ()
+migrateAddColumn conn table column colType = do
+  cols <- query_ conn
+            (Query ("PRAGMA table_info(" <> table <> ")"))
+            :: IO [(Int, Text, Text, Int, Maybe Text, Int)]
+  let names = [n | (_, n, _, _, _, _) <- cols]
+  if column `elem` names
+    then pure ()
+    else execute_ conn
+           (Query
+             ("ALTER TABLE " <> table
+              <> " ADD COLUMN " <> column
+              <> " " <> colType))
 
 -- | Is there already a cached index for this @(pkg, version)@?
 haveIndex :: IndexCache -> Text -> Text -> IO Bool
