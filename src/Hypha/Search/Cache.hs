@@ -22,6 +22,8 @@ module Hypha.Search.Cache
   , haveIndex
   , readIndex
   , lookupRowsByName
+  , readFingerprint
+  , writeFingerprint
   , writeIndex
   , readBlob
   , writeBlob
@@ -86,6 +88,28 @@ schema =
     \  ( k TEXT PRIMARY KEY NOT NULL \
     \  , v BLOB NOT NULL )"
   ]
+
+-- | Read the stored fingerprint for a @(pkg, version)@ pair.
+readFingerprint :: IndexCache -> Text -> Text -> IO (Maybe Text)
+readFingerprint c pkg ver = do
+  rs <- queryNamed (icConn c)
+          "SELECT fingerprint FROM pkg_index_meta \
+          \WHERE pkg = :p AND version = :v LIMIT 1"
+          [":p" := pkg, ":v" := ver]
+          :: IO [Only (Maybe Text)]
+  pure (case rs of
+          (Only mfp : _) -> mfp
+          _              -> Nothing)
+
+-- | Stamp the fingerprint for an existing @pkg_index_meta@ row,
+-- inserting a placeholder row with @indexed_at = 0@ when none yet
+-- exists (the real value is written by 'writeIndex').
+writeFingerprint :: IndexCache -> Text -> Text -> Text -> IO ()
+writeFingerprint c pkg ver fp = withWrite c $ executeNamed (icConn c)
+  "INSERT INTO pkg_index_meta (pkg, version, indexed_at, fingerprint) \
+  \VALUES (:p, :v, 0, :f) \
+  \ON CONFLICT(pkg, version) DO UPDATE SET fingerprint = :f"
+  [":p" := pkg, ":v" := ver, ":f" := fp]
 
 -- | Look up every row whose @name@ matches the given symbol.  When
 -- the caller supplies a module qualifier, filter by @mod@ too.  This

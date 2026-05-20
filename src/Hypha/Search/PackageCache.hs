@@ -19,6 +19,8 @@ module Hypha.Search.PackageCache
   , haveCachedIndex
   , readCachedIndex
   , lookupByName
+  , readCachedFingerprint
+  , writeCachedFingerprint
   , writeCachedIndex
   , readCachedBlob
   , writeCachedBlob
@@ -32,7 +34,8 @@ import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Search.Cache
   ( IndexCache, defaultCachePath, haveIndex, lookupRowsByName
-  , openIndexCache, readBlob, readIndex, writeBlob, writeIndex )
+  , openIndexCache, readBlob, readFingerprint, readIndex
+  , writeBlob, writeFingerprint, writeIndex )
 import Hypha.Types.BuildPlan (ProjectRoot (..))
 
 -- | Tells writers which DB to target.  Reads do not take an origin —
@@ -151,6 +154,20 @@ writeCachedIndex
   -> IO ()
 writeCachedIndex c origin pkg ver rows =
   writeIndex (selectWrite c origin) pkg ver rows
+
+-- | Read the per-component fingerprint stored alongside the cache
+-- rows for a @(pkg, version)@ pair.  The origin tells which DB to
+-- consult.
+readCachedFingerprint
+  :: HyphaPackageCache -> CacheOrigin -> Text -> Text -> IO (Maybe Text)
+readCachedFingerprint c origin pkg ver =
+  readFingerprint (selectWrite c origin) pkg ver
+
+-- | Stamp the per-component fingerprint, routed by 'CacheOrigin'.
+writeCachedFingerprint
+  :: HyphaPackageCache -> CacheOrigin -> Text -> Text -> Text -> IO ()
+writeCachedFingerprint c origin pkg ver fp =
+  writeFingerprint (selectWrite c origin) pkg ver fp
 
 -- | Generic blob get.  Blobs are global-only for now: they hold
 -- cross-project state (plan hashes, embedding fingerprints) and have
