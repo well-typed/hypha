@@ -45,6 +45,7 @@ tests = testGroup "Unit.HoogleLocalGen"
             lu = LocalUnit
                   { luPkgId   = PackageId (PackageName "foo") (Version "0.1")
                   , luSrcDirs = [tmp </> "src"]
+                  , luIsLocal = True
                   }
         createDirectoryIfMissing True (tmp </> "src")
         writeFile (tmp </> "src" </> "Foo.hs") "module Foo where"
@@ -85,7 +86,7 @@ tests = testGroup "Unit.HoogleLocalGen"
               modifyIORef called (req :)
               pure (Left (HaddockError "must not be called"))
         result <- collectTxtForUnit runner tmp
-                    (LocalUnit pid [tmp </> "src"])
+                    (LocalUnit pid [tmp </> "src"] False)
         case result of
           Right p -> p @?= (docDir </> "bar.txt")
           Left e  -> fail (show e)

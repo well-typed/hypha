@@ -112,6 +112,11 @@ data LocalUnit = LocalUnit
   , luSrcDirs :: ![FilePath]
     -- ^ @hs-source-dirs@ entries to feed @haddock@ when no store
     -- @.txt@ is available.
+  , luIsLocal :: !Bool
+    -- ^ When 'False' we only scavenge the store @.txt@; missing
+    -- entries are skipped silently rather than invoking @haddock@
+    -- (running @haddock@ on a non-built store dep is slow and
+    -- usually impossible without further plumbing).
   }
   deriving stock (Show, Eq)
 
@@ -144,13 +149,16 @@ collectTxtForUnit runner storeRoot lu = do
   scavenged <- scavengeStoreTxt storeRoot (luPkgId lu)
   case scavenged of
     Just p  -> pure (Right p)
-    Nothing -> do
-      out <- haddockOutputPath (luPkgId lu)
-      runHaddock runner HaddockRequest
-        { hrPkgId   = luPkgId lu
-        , hrSrcDirs = luSrcDirs lu
-        , hrOutput  = out
-        }
+    Nothing
+      | not (luIsLocal lu) ->
+          pure (Left (HaddockError "no store .txt and unit is not local"))
+      | otherwise -> do
+          out <- haddockOutputPath (luPkgId lu)
+          runHaddock runner HaddockRequest
+            { hrPkgId   = luPkgId lu
+            , hrSrcDirs = luSrcDirs lu
+            , hrOutput  = out
+            }
 
 -- | Where to put @haddock@-generated @.txt@ files.  We co-locate
 -- them under @\<XDG_CACHE\>/hypha/hoogle-txt@ so the

@@ -51,7 +51,16 @@ import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
 import Hypha.Exit (toSystemExitCode)
 import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
+import qualified Crypto.Hash.SHA256          as SHA256
+import qualified Data.ByteString.Base16      as Base16
+import Data.Maybe                            (maybeToList)
+import qualified Data.Map.Strict             as Map
+import qualified Data.Text.Encoding          as Text
 import qualified Hypha.Hoogle.Local          as HogLocal
+import qualified Hypha.Project.Components    as Comp
+import qualified Hypha.Project.Fingerprint   as Fingerprint
+import Hypha.Project.Plan                    (planHash)
+import Hypha.Types.BuildPlan                 (PlannedUnit (..))
 import qualified Hypha.Hoogle.Remote         as HogRemote
 import qualified Hypha.Search.PackageCache   as PC
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
@@ -360,6 +369,14 @@ runLookupCommand flags q = do
         pure d
     storeRoot <- defaultStoreRoot
     hoogleLocal <- HogLocal.openLocalHoogle dotHypha storeRoot
+
+    -- Bring the local Hoogle DB up to date before the cascade runs.
+    -- Without this, Tier 2 always opens an empty/missing .hoo and
+    -- every type-signature query falls through to remote Hoogle.
+    case mRoot of
+      Nothing   -> pure ()                  -- no plan, nothing to feed
+      Just root -> ensureProjectHoogle storeRoot dotHypha hoogleLocal root
+
     let opts = Lookup.LookupOptions
           { Lookup.loOffline = gfOffline flags
           , Lookup.loRemote  =
@@ -370,6 +387,63 @@ runLookupCommand flags q = do
   case result of
     Left e  -> pure (Left (NetworkError (Text.pack (show e))))
     Right o -> pure (Right o)
+
+-- | Materialise the project Hoogle DB: load the plan, derive a
+-- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),
+-- enumerate the units, and call 'ensureFresh'.  Failures along the
+-- way are swallowed silently — Tier 2 is best-effort, the cascade
+-- still works without it.
+ensureProjectHoogle
+  :: FilePath          -- ^ store root
+  -> FilePath          -- ^ project @.hypha@ directory
+  -> HogLocal.HyphaHoogle
+  -> ProjectRoot
+  -> IO ()
+ensureProjectHoogle storeRoot dotHypha _ root = do
+  ePlan <- loadBuildPlan root
+  case ePlan of
+    Left _     -> pure ()
+    Right plan -> do
+      let units = planToLocalUnits plan
+          ph    = planHash plan
+      fp <- aggregateFingerprint units
+      let stamp = HogLocal.HoogleStamp ph fp
+      HogLocal.ensureFresh HogLocal.defaultHaddockRunner
+                           storeRoot dotHypha stamp units
+
+planToLocalUnits :: BuildPlan -> [HogLocal.LocalUnit]
+planToLocalUnits plan =
+  [ HogLocal.LocalUnit
+      { HogLocal.luPkgId   = puId u
+      , HogLocal.luSrcDirs = unitSrcDirs u
+      , HogLocal.luIsLocal = puIsLocal u
+      }
+  | u <- Map.elems (bpUnits plan)
+  ]
+  where
+    unitSrcDirs u = case puLibComponents u of
+      []   -> maybeToList (puSrcDir u)
+      cs   -> concatMap Comp.ciHsSourceDirs cs
+
+-- | Aggregate fingerprint across every /local/ unit's source roots.
+-- Non-local units don't contribute because their bytes are immutable.
+aggregateFingerprint :: [HogLocal.LocalUnit] -> IO Text
+aggregateFingerprint units = do
+  -- Per-unit fingerprints in deterministic order, joined into one
+  -- payload before a final SHA-256.  Cost: walks the source tree of
+  -- each local unit once.  Cheap on small projects, acceptable on
+  -- big ones (still under 100ms for ~10k files).
+  perUnit <- mapM unitFp localUnits
+  let payload = Text.unlines perUnit
+  pure (planHashFromText payload)
+  where
+    localUnits = [ u | u <- units, HogLocal.luIsLocal u ]
+    unitFp u   = Fingerprint.componentFingerprint (HogLocal.luSrcDirs u)
+
+planHashFromText :: Text -> Text
+planHashFromText t =
+  Text.decodeUtf8
+    (Base16.encode (SHA256.hash (Text.encodeUtf8 t)))
 
 -- | Best-effort lookup of the active GHC's cabal store.  When the
 -- environment is non-standard we return @\"\"@; 'scavengeStoreTxt'
