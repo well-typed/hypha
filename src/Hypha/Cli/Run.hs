@@ -28,7 +28,9 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Vector as V
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
-import System.Directory (getHomeDirectory)
+import System.Directory
+  ( XdgDirectory (..), createDirectoryIfMissing, doesDirectoryExist
+  , getHomeDirectory, getXdgDirectory, listDirectory )
 import System.FilePath ((</>))
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import qualified System.Exit as System
@@ -40,17 +42,18 @@ import qualified Hypha.Command.Doctor   as Doctor
 import qualified Hypha.Command.Module   as Module
 import qualified Hypha.Command.Package  as Package
 import qualified Hypha.Source.Modules   as SourceModules
-import qualified Hypha.Command.Search        as Search
+import qualified Hypha.Command.Lookup        as Lookup
 import qualified Hypha.Command.Server        as Server
 import qualified Hypha.Command.Source        as Source
 import qualified Hypha.Command.Symbol        as Symbol
 import qualified Hypha.Command.Versions      as Versions
-import qualified Hypha.Command.WhatProvides  as WhatProvides
 import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
 import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
 import Hypha.Exit (toSystemExitCode)
 import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
-import Hypha.Hoogle.Query (mkHoogleForFlags)
+import qualified Hypha.Hoogle.Local          as HogLocal
+import qualified Hypha.Hoogle.Remote         as HogRemote
+import qualified Hypha.Search.PackageCache   as PC
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
 import Hypha.Output.Outcome
@@ -197,8 +200,8 @@ mkPlanFromPlanJson = do
 -- outcome.
 dispatch :: GlobalFlags -> Command -> IO (Either HyphaError (Outcome Value))
 dispatch flags = \case
-  SearchCommand q extras ->
-    runSearchWithHoogle flags q extras
+  LookupCommand q ->
+    runLookupCommand flags q
 
   PackageCommand rawArg ->
     withResolver flags $ \(resolver, env) -> do
@@ -261,14 +264,6 @@ dispatch flags = \case
       outcome <- Deps.runDeps plan (PackageName pkgName) reverseMode mDepth
       pure (Right outcome)
 
-  WhatProvidesCommand sym -> do
-    result <- try @SomeException $ do
-      hoogle <- mkHoogleForFlags flags
-      WhatProvides.runWhatProvides hoogle sym (gfGlobal flags)
-    case result of
-      Left e  -> pure (Left (NetworkError (Text.pack (show e))))
-      Right o -> pure (Right o)
-
   DoctorCommand ->
     Doctor.runDoctor >>= \outcome -> pure (Right outcome)
 
@@ -298,8 +293,7 @@ runServerInteractive flags port mBind prebuild jobs = do
           Left _    -> pure emptyBuildPlan
           Right rt  -> either (const emptyBuildPlan) id <$> loadBuildPlan rt
         hclient <- mkHackageClientForFlags flags
-        hoogle  <- mkHoogleForFlags flags
-        r <- Server.runServer mRoot plan env hclient resolver hoogle opts
+        r <- Server.runServer mRoot plan env hclient resolver opts
         case r of
           Left be   -> pure (Left (UserError (Text.pack (renderBindError be))))
           Right ()  -> pure (Right ())
@@ -341,21 +335,58 @@ runSourceArm flags pkg modPath mSym =
             oc <- Source.runSourceFromDir env pid dir modPath mSym
             pure (fmap (`tagOutsidePlan` rpIsOutsidePlan rp) oc)
 
--- | Wire the @search@ command to a real Hoogle DB.  Search is the only
--- command that can operate without a plan (it can fall back to the global
--- DB), so we don't go through 'withPlan' here.
-runSearchWithHoogle
+-- | Drive the tiered @lookup@ command.  Builds the package cache
+-- and project Hoogle handle, then runs the cascade.  Project root
+-- discovery is best-effort: outside a cabal project, only the global
+-- cache and remote Hoogle are consulted.
+runLookupCommand
   :: GlobalFlags
   -> Text
-  -> [Text]
   -> IO (Either HyphaError (Outcome Value))
-runSearchWithHoogle flags q extras = do
+runLookupCommand flags q = do
   result <- try @SomeException $ do
-    hoogle <- mkHoogleForFlags flags
-    Search.runSearchWith hoogle q extras (gfGlobal flags)
+    eRoot <- discoverProjectRoot (gfProjectDir flags)
+    let mRoot = either (const Nothing) Just eRoot
+    cache <- PC.openPackageCache mRoot
+    dotHypha <- case mRoot of
+      Just (ProjectRoot r) -> do
+        let d = r </> ".hypha"
+        createDirectoryIfMissing True d
+        pure d
+      Nothing -> do
+        x <- getXdgDirectory XdgCache "hypha"
+        let d = x </> "no-project"
+        createDirectoryIfMissing True d
+        pure d
+    storeRoot <- defaultStoreRoot
+    hoogleLocal <- HogLocal.openLocalHoogle dotHypha storeRoot
+    let opts = Lookup.LookupOptions
+          { Lookup.loOffline = gfOffline flags
+          , Lookup.loRemote  =
+              HogRemote.defaultRemoteOptions
+                { HogRemote.roOffline = gfOffline flags }
+          }
+    Lookup.runLookup cache hoogleLocal opts q
   case result of
     Left e  -> pure (Left (NetworkError (Text.pack (show e))))
     Right o -> pure (Right o)
+
+-- | Best-effort lookup of the active GHC's cabal store.  When the
+-- environment is non-standard we return @\"\"@; 'scavengeStoreTxt'
+-- treats that as \"no scavenging available\" and falls back to
+-- 'defaultHaddockRunner'.
+defaultStoreRoot :: IO FilePath
+defaultStoreRoot = do
+  home <- getHomeDirectory
+  let base = home </> ".cabal" </> "store"
+  ok <- doesDirectoryExist base
+  if not ok
+    then pure ""
+    else do
+      entries <- listDirectory base
+      case [ e | e <- entries, "ghc-" `Text.isPrefixOf` Text.pack e ] of
+        (e:_) -> pure (base </> e)
+        []    -> pure ""
 
 -- | Construct a BuildEnv IO from a project root and its build plan.
 mkBuildEnv :: ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
@@ -449,7 +480,7 @@ splitVersionHint raw =
 -- distinction yet (alpha).
 compactKeysFor, fullKeysFor :: Text -> Set Text
 compactKeysFor = \case
-  "search"       -> Search.compactKeys
+  "lookup"       -> Set.fromList ["query", "providers", "tiers_consulted"]
   "package"      -> Package.compactKeys
   "versions"     -> Versions.compactKeys
   "module"       -> Module.compactKeys
@@ -457,10 +488,9 @@ compactKeysFor = \case
   "doctor"       -> Doctor.compactKeys
   "deps"         -> Deps.compactKeys
   "symbol"       -> Symbol.compactKeys
-  "whatprovides" -> WhatProvides.compactKeys
   _              -> Set.empty
 fullKeysFor = \case
-  "search"       -> Search.fullKeys
+  "lookup"       -> Set.fromList ["query", "providers", "tiers_consulted"]
   "package"      -> Package.fullKeys
   "versions"     -> Versions.fullKeys
   "module"       -> Module.fullKeys
@@ -468,19 +498,17 @@ fullKeysFor = \case
   "doctor"       -> Doctor.fullKeys
   "deps"         -> Deps.fullKeys
   "symbol"       -> Symbol.fullKeys
-  "whatprovides" -> WhatProvides.fullKeys
   _              -> Set.empty
 
 commandName :: Command -> Text
 commandName = \case
-  SearchCommand _ _      -> "search"
+  LookupCommand _        -> "lookup"
   PackageCommand _       -> "package"
   ModuleCommand _        -> "module"
   SymbolCommand _        -> "symbol"
   SourceCommand _        -> "source"
   VersionsCommand _      -> "versions"
   DepsCommand _ _ _      -> "deps"
-  WhatProvidesCommand _  -> "whatprovides"
   DoctorCommand          -> "doctor"
   ServerCommand{}        -> "server"
 

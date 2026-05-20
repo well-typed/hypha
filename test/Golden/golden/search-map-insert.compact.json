@@ -1,1 +1,0 @@
-{"actions":{},"command":"search","error":{"code":"USER_ERROR","exit_code":2,"message":"search requires a Hoogle DB; call runSearchWith via the CLI dispatcher"},"ok":false,"schema":"hypha/v0"}

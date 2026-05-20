@@ -38,7 +38,6 @@ import System.IO (hPutStrLn, stderr)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Hackage.Api (HackageClient (..))
 import Hypha.Haddock.Generate (ensureHaddockFor, haddockDirFor)
-import Hypha.Hoogle.Type (Hoogle)
 import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..) )
 import Data.List (sortOn)
@@ -111,11 +110,10 @@ runServer
   -> BuildEnv IO
   -> HackageClient IO
   -> PackageResolver IO
-  -> Hoogle IO
   -> ServerOpts
   -> IO (Either BindError ())
-runServer mRoot plan env hclient resolver hoogle opts = do
-  cfg <- buildServerConfig mRoot plan env hclient resolver hoogle
+runServer mRoot plan env hclient resolver opts = do
+  cfg <- buildServerConfig mRoot plan env hclient resolver
   hPutStrLn stderr
     ( "hypha server listening on http://" <> baHost (soBind opts)
    <> ":" <> show (baPort (soBind opts))
@@ -154,9 +152,8 @@ buildServerConfig
   -> BuildEnv IO
   -> HackageClient IO
   -> PackageResolver IO
-  -> Hoogle IO
   -> IO App.ServerConfig
-buildServerConfig mRoot plan _env _hclient resolver _hoogle = do
+buildServerConfig mRoot plan _env _hclient resolver = do
   let pids     = planPackageIds plan
       packages = concatMap (componentNames plan) pids
   slots <- Slots.initialiseSlots pids

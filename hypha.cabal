@@ -77,8 +77,6 @@ library
     Hypha.Hackage.Cache
     Hypha.Hackage.Api
     Hypha.Hoogle.Type
-    Hypha.Hoogle.Database
-    Hypha.Hoogle.Query
     Hypha.Haddock.Generate
     Hypha.Cli.Parser
     Hypha.Cli.Run
@@ -86,13 +84,11 @@ library
     Hypha.Command.Module
     Hypha.Command.Deps
     Hypha.Command.Package
-    Hypha.Command.Search
     Hypha.Command.Lookup
     Hypha.Command.Server
     Hypha.Command.Source
     Hypha.Command.Symbol
     Hypha.Command.Versions
-    Hypha.Command.WhatProvides
     Hypha.Haddock.Interface
     Hypha.Logging
     Hypha.Server.Assets
@@ -176,7 +172,6 @@ test-suite hypha-tests
   main-is:          Main.hs
   other-modules:
     Golden.Package
-    Golden.Search
     Golden.Server
     Golden.Symbol
     Golden.Human
@@ -193,12 +188,10 @@ test-suite hypha-tests
     Unit.Components
     Unit.Doctor
     Unit.Hackage
-    Unit.Hoogle
     Unit.Module
     Unit.Modules
     Unit.Deps
     Unit.Project
-    Unit.WhatProvides
     Unit.Haddock
     Unit.Server
     Unit.ServerSlots

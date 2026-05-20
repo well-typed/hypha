@@ -16,10 +16,9 @@ data GlobalFlags = GlobalFlags
     -- ^ Override project root.
   , gfPackageOverrides :: ![Text]
     -- ^ @PKG=VER@ overrides (repeatable).
-  , gfGlobal            :: !Bool
-    -- ^ Widen Hoogle to global stackage DB.
   , gfOffline           :: !Bool
-    -- ^ No network, fail closed.
+    -- ^ No network, fail closed.  Honored by 'LookupCommand' (skips
+    -- the remote Hoogle tier).
   , gfHuman             :: !Bool
     -- ^ Pretty ANSI text instead of JSON.
   , gfPrettyJson        :: !Bool
@@ -37,8 +36,8 @@ data GlobalFlags = GlobalFlags
 
 -- | Subcommands.
 data Command
-  = SearchCommand !Text ![Text]
-    -- ^ @search QUERY [+pkg ...]@
+  = LookupCommand !Text
+    -- ^ @lookup QUERY@ — tiered symbol resolution.
   | PackageCommand !Text
     -- ^ @package <pkg>[@ver]@
   | ModuleCommand !Text
@@ -51,8 +50,6 @@ data Command
     -- ^ @versions <pkg>@
   | DepsCommand !Text !Bool !(Maybe Int)
     -- ^ @deps <pkg> [--reverse] [--depth N]@
-  | WhatProvidesCommand !Text
-    -- ^ @whatprovides <symbol>@
   | DoctorCommand
     -- ^ @doctor@
   | ServerCommand !Int !(Maybe Text) !Bool !Int
@@ -84,10 +81,6 @@ globalFlagsParser = GlobalFlags
        <> metavar "PKG=VER"
        <> help "Replace plan entry (repeatable)"
         ))
-  <*> switch
-        ( long "global"
-       <> help "Widen Hoogle to global stackage DB"
-        )
   <*> switch
         ( long "offline"
        <> help "No network, fail closed"
@@ -122,8 +115,8 @@ globalFlagsParser = GlobalFlags
 
 commandParser :: Parser Command
 commandParser = hsubparser
-  ( command "search" (info searchParser
-        (progDesc "Search Hoogle (scoped to plan)\ne.g. hypha search Concurrent"))
+  ( command "lookup" (info lookupParser
+        (progDesc "Tiered symbol resolution: cache → local Hoogle → remote\ne.g. hypha lookup lookup, hypha lookup 'a -> Maybe a'"))
  <> command "package" (info packageParser
         (progDesc "Package metadata (name, version, exposed modules)\ne.g. hypha package async"))
  <> command "module" (info moduleParser
@@ -136,18 +129,17 @@ commandParser = hsubparser
         (progDesc "Version history on Hackage\ne.g. hypha versions async"))
  <> command "deps" (info depsParser
         (progDesc "Dependencies of a package\ne.g. hypha deps async\nUse --reverse for reverse dependencies"))
- <> command "whatprovides" (info whatProvidesParser
-        (progDesc "Find which packages/modules export a symbol\ne.g. hypha whatprovides concurrently"))
  <> command "doctor" (info doctorParser
         (progDesc "Diagnose the environment"))
  <> command "server" (info serverParser
         (progDesc "Browse docs/source in the browser\ne.g. hypha server --port 4287"))
   )
 
-searchParser :: Parser Command
-searchParser = SearchCommand
-  <$> strArgument (metavar "QUERY" <> help "Search query")
-  <*> many (strArgument (metavar "+PKG" <> help "Additional packages to search"))
+lookupParser :: Parser Command
+lookupParser = LookupCommand
+  <$> strArgument
+        ( metavar "QUERY"
+       <> help "Symbol name, qualified name, or type signature" )
 
 packageParser :: Parser Command
 packageParser = PackageCommand
@@ -174,10 +166,6 @@ depsParser = DepsCommand
   <$> strArgument (metavar "PKG" <> help "Package name")
   <*> switch (long "reverse" <> help "Show reverse dependencies")
   <*> optional (option auto (long "depth" <> metavar "N" <> help "Limit dependency depth"))
-
-whatProvidesParser :: Parser Command
-whatProvidesParser = WhatProvidesCommand
-  <$> strArgument (metavar "SYM" <> help "Symbol name")
 
 doctorParser :: Parser Command
 doctorParser = pure DoctorCommand
