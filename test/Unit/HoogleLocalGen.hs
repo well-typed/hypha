@@ -49,7 +49,7 @@ tests = testGroup "Unit.HoogleLocalGen"
                   }
         createDirectoryIfMissing True (tmp </> "src")
         writeFile (tmp </> "src" </> "Foo.hs") "module Foo where"
-        result <- collectTxtForUnit runner tmp lu
+        result <- collectTxtForUnit runner tmp "" lu
         case result of
           Right p -> doesFileExist p >>= (@?= True)
           Left (HaddockError e) -> fail (show e)
@@ -66,8 +66,8 @@ tests = testGroup "Unit.HoogleLocalGen"
             stamp = HoogleStamp "ph-1" "fp-1"
             dot = tmp </> ".hypha"
         -- empty unit list: no .txt collection at all, only stamping
-        ensureFresh runner "" dot stamp []
-        ensureFresh runner "" dot stamp []
+        ensureFresh runner "" "" dot stamp []
+        ensureFresh runner "" "" dot stamp []
         seen <- readIORef calls
         seen @?= 0
         stampOk <- doesFileExist (dot </> "hoogle-stamp")
@@ -85,7 +85,7 @@ tests = testGroup "Unit.HoogleLocalGen"
         let runner = HaddockRunner $ \req -> do
               modifyIORef called (req :)
               pure (Left (HaddockError "must not be called"))
-        result <- collectTxtForUnit runner tmp
+        result <- collectTxtForUnit runner tmp ""
                     (LocalUnit pid [tmp </> "src"] False)
         case result of
           Right p -> p @?= (docDir </> "bar.txt")

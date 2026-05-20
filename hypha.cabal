@@ -103,6 +103,7 @@ library
     Hypha.Server.App
     Hypha.Server.Ui.Source
     Hypha.Package.Resolver
+    Hypha.Hoogle.Format
     Hypha.Hoogle.Local
     Hypha.Hoogle.Remote
     Hypha.Project.Fingerprint

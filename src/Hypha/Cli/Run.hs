@@ -31,7 +31,8 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory
   ( XdgDirectory (..), createDirectoryIfMissing, doesDirectoryExist
   , getHomeDirectory, getXdgDirectory, listDirectory )
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory, takeFileName)
+import System.Process (readProcessWithExitCode)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import qualified System.Exit as System
 
@@ -368,14 +369,16 @@ runLookupCommand flags q = do
         createDirectoryIfMissing True d
         pure d
     storeRoot <- defaultStoreRoot
-    hoogleLocal <- HogLocal.openLocalHoogle dotHypha storeRoot
+    distRoot  <- defaultDistDocRoot
+    hoogleLocal <- HogLocal.openLocalHoogle dotHypha storeRoot distRoot
 
     -- Bring the local Hoogle DB up to date before the cascade runs.
     -- Without this, Tier 2 always opens an empty/missing .hoo and
     -- every type-signature query falls through to remote Hoogle.
     case mRoot of
       Nothing   -> pure ()                  -- no plan, nothing to feed
-      Just root -> ensureProjectHoogle storeRoot dotHypha hoogleLocal root
+      Just root ->
+        ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
 
     let opts = Lookup.LookupOptions
           { Lookup.loOffline = gfOffline flags
@@ -395,11 +398,12 @@ runLookupCommand flags q = do
 -- still works without it.
 ensureProjectHoogle
   :: FilePath          -- ^ store root
+  -> FilePath          -- ^ dist doc root
   -> FilePath          -- ^ project @.hypha@ directory
   -> HogLocal.HyphaHoogle
   -> ProjectRoot
   -> IO ()
-ensureProjectHoogle storeRoot dotHypha _ root = do
+ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
   ePlan <- loadBuildPlan root
   case ePlan of
     Left _     -> pure ()
@@ -409,7 +413,7 @@ ensureProjectHoogle storeRoot dotHypha _ root = do
       fp <- aggregateFingerprint units
       let stamp = HogLocal.HoogleStamp ph fp
       HogLocal.ensureFresh HogLocal.defaultHaddockRunner
-                           storeRoot dotHypha stamp units
+                           storeRoot distRoot dotHypha stamp units
 
 planToLocalUnits :: BuildPlan -> [HogLocal.LocalUnit]
 planToLocalUnits plan =
@@ -461,6 +465,46 @@ defaultStoreRoot = do
       case [ e | e <- entries, "ghc-" `Text.isPrefixOf` Text.pack e ] of
         (e:_) -> pure (base </> e)
         []    -> pure ""
+
+-- | Best-effort lookup of GHC's distribution doc directory — where
+-- boot libs (@base@, @containers@, ...) keep their pre-shipped
+-- Hoogle @.txt@.  Invokes @ghc --print-libdir@ and walks back to
+-- @share/doc/ghc-X.Y.Z/html/libraries@.  Returns @\"\"@ if @ghc@ is
+-- not on PATH; scavenging treats that as \"disabled\".
+defaultDistDocRoot :: IO FilePath
+defaultDistDocRoot = do
+  r <- try @SomeException (readProcessWithExitCode "ghc"
+         ["--print-libdir"] "")
+  case r of
+    Right (System.ExitSuccess, out, _) -> do
+      let libDir   = trim out
+          -- libDir = <prefix>/lib/ghc-X.Y.Z/lib
+          --       or <prefix>/lib/ghc-X.Y.Z (older layout)
+          -- We want <prefix>/share/doc/ghc-X.Y.Z/html/libraries.
+          prefix1  = takeDirectory libDir              -- ../ghc-X.Y.Z
+          ghcVer1  = takeFileName  prefix1
+          prefix   = case ghcVer1 of
+            "lib" -> takeDirectory prefix1  -- newer layout drop two levels
+            _     -> takeDirectory prefix1
+          ghcVer   = takeFileName (takeDirectory libDir)
+          -- Cover both layouts with a small probe list.
+          candidates =
+            [ prefix </> "share" </> "doc" </> ghcVer
+                       </> "html" </> "libraries"
+            , takeDirectory prefix </> "share" </> "doc"
+                       </> ghcVer </> "html" </> "libraries"
+            ]
+      firstExisting candidates
+    _ -> pure ""
+  where
+    trim = reverse . dropWhile (`elem` ("\n\r \t" :: String))
+                    . reverse
+                    . dropWhile (`elem` ("\n\r \t" :: String))
+
+    firstExisting []     = pure ""
+    firstExisting (p:ps) = do
+      ok <- doesDirectoryExist p
+      if ok then pure p else firstExisting ps
 
 -- | Construct a BuildEnv IO from a project root and its build plan.
 mkBuildEnv :: ProjectRoot -> BuildPlan -> IO (BuildEnv IO)

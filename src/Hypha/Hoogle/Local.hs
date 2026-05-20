@@ -23,6 +23,7 @@ module Hypha.Hoogle.Local
   , ensureFresh
     -- * Internals exposed for tests + downstream wiring
   , scavengeStoreTxt
+  , scavengeDistributionTxt
   , haddockOutputPath
   ) where
 
@@ -42,6 +43,8 @@ import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory, takeExtension, takeFileName)
 import System.Process (readProcessWithExitCode)
 
+import Hypha.Hoogle.Format
+  ( decodeEntities, splitNameSig, stripTags )
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), Version (..) )
@@ -54,20 +57,27 @@ data HyphaHoogle = HyphaHoogle
     -- ^ @~/.cabal/store/ghc-X.Y.Z@ root for the active GHC.  Empty
     -- string when the store could not be located; scavenging then
     -- always returns 'Nothing' and the caller falls back to haddock.
+  , hhDistRoot  :: !FilePath
+    -- ^ @\<ghc-prefix\>/share/doc/ghc-X.Y.Z/html/libraries@ — where
+    -- boot/distribution packages ('base', 'containers', 'text',
+    -- ...) keep their pre-built Hoogle @.txt@.  Empty string
+    -- disables distribution scavenging.
   }
 
 -- | Open (or initialise) the per-project Hoogle DB.  No regeneration
 -- happens here; the first 'ensureFresh' triggers it lazily.
 openLocalHoogle
   :: FilePath  -- ^ project @.hypha@ directory
-  -> FilePath  -- ^ GHC store root (may be \"\" to disable scavenging)
+  -> FilePath  -- ^ GHC store root (may be \"\" to disable)
+  -> FilePath  -- ^ GHC distribution doc root (may be \"\" to disable)
   -> IO HyphaHoogle
-openLocalHoogle dotHypha storeRoot = do
+openLocalHoogle dotHypha storeRoot distRoot = do
   lock <- newMVar ()
   pure HyphaHoogle
     { hhDbPath    = dotHypha </> "hoogle.hoo"
     , hhLock      = lock
     , hhStoreRoot = storeRoot
+    , hhDistRoot  = distRoot
     }
 
 -- | Locate @\<pkg\>.txt@ inside the cabal store.  Returns 'Nothing'
@@ -106,6 +116,24 @@ scavengeStoreTxt storeRoot pid = do
       ok <- doesFileExist path
       pure (if ok then Just path else Nothing)
 
+-- | Locate @\<pkg\>.txt@ for a boot/distribution package — those
+-- live under GHC's installation share dir, not the cabal store.
+-- Layout:
+--
+-- > <dist-root>/<pkg>-<ver>/<pkg>.txt
+--
+-- where @\<dist-root\>@ is e.g.
+-- @\<ghc-prefix\>/share/doc/ghc-X.Y.Z/html/libraries@.
+scavengeDistributionTxt :: FilePath -> PackageId -> IO (Maybe FilePath)
+scavengeDistributionTxt distRoot pid = do
+  rootOk <- doesDirectoryExist distRoot
+  if not rootOk then pure Nothing else do
+    let pkg = Text.unpack (unPackageName (pkgName pid))
+        ver = Text.unpack (unVersion    (pkgVersion pid))
+        path = distRoot </> (pkg <> "-" <> ver) </> (pkg <> ".txt")
+    ok <- doesFileExist path
+    pure (if ok then Just path else Nothing)
+
 -- | What we need to know about a unit for Hoogle @.txt@ collection.
 data LocalUnit = LocalUnit
   { luPkgId   :: !PackageId
@@ -142,23 +170,31 @@ newtype HaddockRunner = HaddockRunner
 -- a 'HaddockError'.
 collectTxtForUnit
   :: HaddockRunner
-  -> FilePath           -- ^ store root
+  -> FilePath           -- ^ cabal store root
+  -> FilePath           -- ^ GHC distribution doc root (may be \"\")
   -> LocalUnit
   -> IO (Either HaddockError FilePath)
-collectTxtForUnit runner storeRoot lu = do
-  scavenged <- scavengeStoreTxt storeRoot (luPkgId lu)
-  case scavenged of
+collectTxtForUnit runner storeRoot distRoot lu = do
+  -- Prefer the store entry; for boot/distribution libs that aren't
+  -- in the store fall back to GHC's pre-shipped @.txt@.  Last
+  -- resort: build the @.txt@ with @haddock@ for local units.
+  storeHit <- scavengeStoreTxt storeRoot (luPkgId lu)
+  case storeHit of
     Just p  -> pure (Right p)
-    Nothing
-      | not (luIsLocal lu) ->
-          pure (Left (HaddockError "no store .txt and unit is not local"))
-      | otherwise -> do
-          out <- haddockOutputPath (luPkgId lu)
-          runHaddock runner HaddockRequest
-            { hrPkgId   = luPkgId lu
-            , hrSrcDirs = luSrcDirs lu
-            , hrOutput  = out
-            }
+    Nothing -> do
+      distHit <- scavengeDistributionTxt distRoot (luPkgId lu)
+      case distHit of
+        Just p  -> pure (Right p)
+        Nothing
+          | not (luIsLocal lu) ->
+              pure (Left (HaddockError "no .txt and unit is not local"))
+          | otherwise -> do
+              out <- haddockOutputPath (luPkgId lu)
+              runHaddock runner HaddockRequest
+                { hrPkgId   = luPkgId lu
+                , hrSrcDirs = luSrcDirs lu
+                , hrOutput  = out
+                }
 
 -- | Where to put @haddock@-generated @.txt@ files.  We co-locate
 -- them under @\<XDG_CACHE\>/hypha/hoogle-txt@ so the
@@ -235,16 +271,17 @@ stampFilePath dotHypha = dotHypha </> "hoogle-stamp"
 -- supplied one.  Idempotent and cheap when stamps match.
 ensureFresh
   :: HaddockRunner
-  -> FilePath        -- ^ store root
+  -> FilePath        -- ^ cabal store root
+  -> FilePath        -- ^ GHC distribution doc root
   -> FilePath        -- ^ project @.hypha@ directory
   -> HoogleStamp     -- ^ current stamp
   -> [LocalUnit]
   -> IO ()
-ensureFresh runner storeRoot dotHypha stamp units = do
+ensureFresh runner storeRoot distRoot dotHypha stamp units = do
   createDirectoryIfMissing True dotHypha
   mPrior <- readStamp (stampFilePath dotHypha)
   when (mPrior /= Just stamp) $
-    regenerate runner storeRoot dotHypha stamp units
+    regenerate runner storeRoot distRoot dotHypha stamp units
 
 readStamp :: FilePath -> IO (Maybe HoogleStamp)
 readStamp f = do
@@ -262,12 +299,13 @@ regenerate
   :: HaddockRunner
   -> FilePath
   -> FilePath
+  -> FilePath
   -> HoogleStamp
   -> [LocalUnit]
   -> IO ()
-regenerate runner storeRoot dotHypha stamp units = do
+regenerate runner storeRoot distRoot dotHypha stamp units = do
   -- 1. Gather every per-package .txt path.
-  paths <- mapM (collectTxtForUnit runner storeRoot) units
+  paths <- mapM (collectTxtForUnit runner storeRoot distRoot) units
   let okPaths = [ p | Right p <- paths ]
 
   -- 2. Drop them into a single directory @hoogle generate@ can scan
@@ -324,10 +362,18 @@ searchLocal hh q = withMVar (hhLock hh) $ \_ -> do
              :: IO (Either SomeException [HoogleHit])
       pure (either (const []) id r)
   where
-    toHit t = HoogleHit
-      { hhPackage = maybe "" (Text.pack . fst) (Hoogle.targetPackage t)
-      , hhModule  = maybe "" (Text.pack . fst) (Hoogle.targetModule t)
-      , hhName    = Text.pack (Hoogle.targetItem t)
-      , hhSig     = Text.pack (Hoogle.targetType t)
-      , hhDocs    = Text.pack (Hoogle.targetDocs t)
-      }
+    toHit t =
+      -- Hoogle's library carries the same HTML-formatted strings as
+      -- the web service.  Strip + decode + split @name :: sig@ so
+      -- agents never see raw @\<span class=name\>...\</span\>@ leaks.
+      let cleanItem = decodeEntities (stripTags (Text.pack (Hoogle.targetItem t)))
+          cleanTyp  = decodeEntities (stripTags (Text.pack (Hoogle.targetType t)))
+          (name, sigFromItem) = splitNameSig cleanItem
+          sig = if Text.null cleanTyp then sigFromItem else cleanTyp
+      in HoogleHit
+           { hhPackage = maybe "" (Text.pack . fst) (Hoogle.targetPackage t)
+           , hhModule  = maybe "" (Text.pack . fst) (Hoogle.targetModule t)
+           , hhName    = name
+           , hhSig     = sig
+           , hhDocs    = decodeEntities (Text.pack (Hoogle.targetDocs t))
+           }
