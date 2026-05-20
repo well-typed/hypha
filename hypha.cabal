@@ -173,6 +173,7 @@ test-suite hypha-tests
   other-modules:
     Golden.Package
     Golden.Server
+    Golden.Lookup
     Golden.Symbol
     Golden.Human
     Golden.Versions

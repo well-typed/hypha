@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
 import qualified Golden.Human
+import qualified Golden.Lookup
 import qualified Golden.Package
 import qualified Golden.Server
 import qualified Golden.Source
@@ -36,6 +37,7 @@ import qualified Unit.Haddock
 main :: IO ()
 main = defaultMain (testGroup "hypha"
   [ Golden.Human.tests
+  , Golden.Lookup.tests
   , Golden.Package.tests
   , Golden.Server.tests
   , Golden.Source.tests

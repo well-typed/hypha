@@ -1,0 +1,1 @@
+{"actions":{"query":"x","raise_timeout":"HYPHA_HOOGLE_TIMEOUT=30 hypha lookup x","retry_offline":"hypha lookup x --offline","tiers_consulted":"cache,local-hoogle,remote-hoogle"},"command":"lookup","error":{"code":"HOOGLE_REMOTE_ERROR","exit_code":5,"message":"RemoteHttp \"timeout after 10s\""},"ok":false,"schema":"hypha/v0"}
