@@ -12,14 +12,24 @@ module Hypha.Hoogle.Local
   ( HyphaHoogle
   , openLocalHoogle
   , searchLocal
+    -- * Generation pipeline
+  , LocalUnit (..)
+  , HaddockRequest (..)
+  , HaddockError (..)
+  , HaddockRunner (..)
+  , collectTxtForUnit
     -- * Internals exposed for tests + downstream wiring
   , scavengeStoreTxt
+  , haddockOutputPath
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Data.List (isPrefixOf)
+import Data.Text (Text)
 import qualified Data.Text as Text
-import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
+import System.Directory
+  ( XdgDirectory (..), createDirectoryIfMissing, doesDirectoryExist
+  , doesFileExist, getXdgDirectory, listDirectory )
 import System.FilePath ((</>))
 
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
@@ -85,6 +95,66 @@ scavengeStoreTxt storeRoot pid = do
                       </> "html" </> (pkg <> ".txt")
       ok <- doesFileExist path
       pure (if ok then Just path else Nothing)
+
+-- | What we need to know about a unit for Hoogle @.txt@ collection.
+data LocalUnit = LocalUnit
+  { luPkgId   :: !PackageId
+  , luSrcDirs :: ![FilePath]
+    -- ^ @hs-source-dirs@ entries to feed @haddock@ when no store
+    -- @.txt@ is available.
+  }
+  deriving stock (Show, Eq)
+
+-- | Request to invoke @haddock@ for a single package.
+data HaddockRequest = HaddockRequest
+  { hrPkgId   :: !PackageId
+  , hrSrcDirs :: ![FilePath]
+  , hrOutput  :: !FilePath    -- ^ destination @.txt@ path
+  }
+  deriving stock (Show, Eq)
+
+-- | Reason a @haddock@ invocation could not produce a @.txt@.
+newtype HaddockError = HaddockError Text
+  deriving stock (Show, Eq)
+
+-- | Record-of-functions wrapping the @haddock@ binary so tests can
+-- inject a deterministic implementation.
+newtype HaddockRunner = HaddockRunner
+  { runHaddock :: HaddockRequest -> IO (Either HaddockError FilePath)
+  }
+
+-- | Try the store first, then @haddock@.  Returns the @.txt@ path or
+-- a 'HaddockError'.
+collectTxtForUnit
+  :: HaddockRunner
+  -> FilePath           -- ^ store root
+  -> LocalUnit
+  -> IO (Either HaddockError FilePath)
+collectTxtForUnit runner storeRoot lu = do
+  scavenged <- scavengeStoreTxt storeRoot (luPkgId lu)
+  case scavenged of
+    Just p  -> pure (Right p)
+    Nothing -> do
+      out <- haddockOutputPath (luPkgId lu)
+      runHaddock runner HaddockRequest
+        { hrPkgId   = luPkgId lu
+        , hrSrcDirs = luSrcDirs lu
+        , hrOutput  = out
+        }
+
+-- | Where to put @haddock@-generated @.txt@ files.  We co-locate
+-- them under @\<XDG_CACHE\>/hypha/hoogle-txt@ so the
+-- @hoogle generate@ step can point at a single directory.
+haddockOutputPath :: PackageId -> IO FilePath
+haddockOutputPath pid = do
+  dir <- getXdgDirectory XdgCache "hypha"
+  let outDir = dir </> "hoogle-txt"
+      file   = Text.unpack (unPackageName (pkgName pid))
+            <> "-"
+            <> Text.unpack (unVersion (pkgVersion pid))
+            <> ".txt"
+  createDirectoryIfMissing True outDir
+  pure (outDir </> file)
 
 -- | Stub: subsequent tasks fill in the generation lifecycle.  For
 -- now, every query collapses to an empty result list.

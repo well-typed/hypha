@@ -1,13 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Unit.HoogleLocalGen (tests) where
 
-import System.Directory (createDirectoryIfMissing)
+import Data.IORef (modifyIORef, newIORef, readIORef)
+import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
-import Hypha.Hoogle.Local (scavengeStoreTxt)
+import Hypha.Hoogle.Local
+  ( HaddockError (..), HaddockRequest (..), HaddockRunner (..)
+  , LocalUnit (..), collectTxtForUnit, scavengeStoreTxt )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 tests :: TestTree
@@ -30,4 +33,44 @@ tests = testGroup "Unit.HoogleLocalGen"
         createDirectoryIfMissing True tmp
         path <- scavengeStoreTxt tmp pid
         path @?= Nothing
+
+  , testCase "collectTxtForUnit falls back to HaddockRunner when no store .txt" $
+      withSystemTempDirectory "hypha-hg" $ \tmp -> do
+        called <- newIORef ([] :: [HaddockRequest])
+        let runner = HaddockRunner $ \req -> do
+              modifyIORef called (req :)
+              writeFile (hrOutput req) "@package foo\n"
+              pure (Right (hrOutput req))
+            lu = LocalUnit
+                  { luPkgId   = PackageId (PackageName "foo") (Version "0.1")
+                  , luSrcDirs = [tmp </> "src"]
+                  }
+        createDirectoryIfMissing True (tmp </> "src")
+        writeFile (tmp </> "src" </> "Foo.hs") "module Foo where"
+        result <- collectTxtForUnit runner tmp lu
+        case result of
+          Right p -> doesFileExist p >>= (@?= True)
+          Left (HaddockError e) -> fail (show e)
+        seen <- readIORef called
+        length seen @?= 1
+
+  , testCase "collectTxtForUnit uses store .txt when present (no runner call)" $
+      withSystemTempDirectory "hypha-hg" $ \tmp -> do
+        called <- newIORef ([] :: [HaddockRequest])
+        let pid    = PackageId (PackageName "bar") (Version "0.2")
+            hashD  = tmp </> "bar-0.2-xyz"
+            docDir = hashD </> "share" </> "doc"
+                          </> "bar-0.2" </> "html"
+        createDirectoryIfMissing True docDir
+        writeFile (docDir </> "bar.txt") "@package bar\n"
+        let runner = HaddockRunner $ \req -> do
+              modifyIORef called (req :)
+              pure (Left (HaddockError "must not be called"))
+        result <- collectTxtForUnit runner tmp
+                    (LocalUnit pid [tmp </> "src"])
+        case result of
+          Right p -> p @?= (docDir </> "bar.txt")
+          Left e  -> fail (show e)
+        seen <- readIORef called
+        length seen @?= 0
   ]
