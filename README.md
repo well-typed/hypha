@@ -148,8 +148,7 @@ Examples:
 |------|-------------|
 | `--project-dir DIR` | Override project root |
 | `--package-override PKG=VER` | Replace a plan entry (repeatable) |
-| `--global` | Widen Hoogle to the global stackage DB instead of per-project |
-| `--offline` | No network; fail closed |
+| `--offline` | No network; skip the remote Hoogle tier in `lookup` |
 | `--human` | Pretty ANSI text instead of JSON |
 | `--pretty-json` | Indent JSON output |
 | `--full` | Include all fields (default: compact) |
@@ -161,17 +160,49 @@ Examples:
 
 | Command | Args | Purpose |
 |---------|------|---------|
-| `search` | `QUERY` | Hoogle search scoped to build plan |
+| `lookup` | `QUERY` | Tiered symbol resolution (see below) |
 | `package` | `<pkg>[@ver]` | Package metadata (latest, deprecation, license) |
 | `module` | `<pkg>/<Mod>` | Exported symbols with signatures |
 | `symbol` | `<pkg>/<Mod>/<sym>` | Full info: signature, Haddock, source coords |
 | `source` | `<pkg>/<Mod>/<sym>` or `<pkg>/<Mod>` | Source slice |
 | `versions` | `<pkg>` | Version history, plan-pinned marker |
 | `deps` | `<pkg> [--reverse] [--depth N]` | Forward/reverse deps within the plan |
-| `whatprovides` | `<symbol>` | Packages exporting that symbol |
 | `doctor` | — | Environment health check |
 | `server` | `[--port N] [--prebuild]` | Doc-browser HTTP server |
 | `mcp` | — | MCP stdio shim |
+
+### Looking up symbols (`hypha lookup`)
+
+Single entry point for the question *"which package/module provides
+this?"*.  Runs a three-tier short-circuit cascade and returns at the
+first hit:
+
+1. **`PackageCache`** (SQLite): exact-name + qualified-name lookup
+   (e.g. both `lookup` and `Data.Map.lookup`).
+2. **Local Hoogle DB** at `<project>/.hypha/hoogle.hoo`: built lazily
+   from scavenged store `*.txt` files plus on-demand `haddock --hoogle`
+   for local packages.  Handles type-signature queries.
+3. **Remote Hoogle** at `hoogle.haskell.org`: HTTP fallback.  Cached in
+   the global `kv` table; skipped under `--offline` / `HYPHA_OFFLINE=1`.
+
+`hypha lookup` always emits a structured `OutcomeEnvelope`.  Failures
+carry a `code` (`NOT_FOUND`, `HOOGLE_OFFLINE`, `HOOGLE_REMOTE_ERROR`)
+and `actions` suggesting how to retry.
+
+### Cache layout
+
+| Path | Purpose |
+|------|---------|
+| `~/.cache/hypha/hypha.db` | Global SQLite cache: store-package symbol index + remote-Hoogle KV cache |
+| `~/.cache/hypha/hoogle-txt/` | Scratch dir for `haddock --hoogle` outputs |
+| `<project>/.hypha/cache.db` | Project SQLite cache: local + SRP package symbol index |
+| `<project>/.hypha/hoogle.hoo` | Project Hoogle DB |
+| `<project>/.hypha/hoogle-stamp` | Plan-hash + aggregate-fingerprint stamp |
+| `<project>/.hypha/hoogle-input/` | Symlinks / copies of the `.txt` files fed to `hoogle generate` |
+
+No `invalidate` subcommand is shipped (agents would footgun).  To
+force a rebuild: `rm -rf <project>/.hypha` (project-only) or
+`rm -rf ~/.cache/hypha` (global).
 
 ## Local Doc Browser (`hypha server`)
 

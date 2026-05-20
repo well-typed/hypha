@@ -6,6 +6,44 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] — unreleased
+
+### Breaking
+
+- `hypha search` removed.  Use `hypha lookup`.
+- `hypha whatprovides` removed.  Use `hypha lookup`.
+- `--global` flag removed.  The new `lookup` cascade decides for
+  itself which tier (cache → local Hoogle → remote Hoogle) answers
+  the query.
+
+### Added
+
+- `hypha lookup <query>` — single tiered symbol-resolution command.
+  Short-circuiting cascade with a structured `OutcomeEnvelope` on
+  every result, including failures (`NOT_FOUND`, `HOOGLE_OFFLINE`,
+  `HOOGLE_REMOTE_ERROR`).
+- `--offline` flag (and `HYPHA_OFFLINE=1`) skips the remote Hoogle
+  tier; cache + local Hoogle still consulted.
+- `HYPHA_HOOGLE_TIMEOUT=<seconds>` overrides the remote timeout
+  (default 10s).
+- Source-tree fingerprint invalidation for local-package cache rows
+  (`Hypha.Project.Fingerprint`).
+- Project Hoogle DB lifecycle (`Hypha.Hoogle.Local`): scavenges
+  `<pkg>.txt` from the cabal store when present, falls back to
+  `haddock --hoogle` for local packages.  Regeneration gated by a
+  plan-hash + aggregate-fingerprint stamp; concurrent searches
+  serialised behind a single MVar.
+- `Hypha.Hoogle.Remote`: HTTP client to `hoogle.haskell.org` with
+  injectable transport and 24-hour `kv`-table caching.
+
+### Internal
+
+- Schema migration: `pkg_index_meta` gains a `fingerprint TEXT`
+  column; idempotent so existing user DBs upgrade in place on next
+  open.
+- Modules removed: `Hypha.Command.Search`, `Hypha.Command.WhatProvides`,
+  `Hypha.Hoogle.Query`, `Hypha.Hoogle.Database`.
+
 ## [0.1.0] — 2026-05-18
 
 Initial public release. Bundles Plan A (CLI alpha), Plan B (local doc
