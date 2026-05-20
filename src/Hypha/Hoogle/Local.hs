@@ -296,7 +296,30 @@ linkOrCopy dstDir src = do
     Right () -> pure ()
     Left  _  -> copyFile src dst
 
--- | Stub: 'searchLocal' is wired to consult the on-disk DB in the
--- next task.  For now it returns no results regardless of input.
+-- | Search the project's Hoogle DB.  Returns @[]@ when the DB does
+-- not exist (the caller is expected to have run 'ensureFresh' first;
+-- 'searchLocal' itself never regenerates, because regeneration is
+-- expensive and 'searchLocal' is the hot path).
+--
+-- Any exception thrown by the @hoogle@ library is caught and
+-- collapsed to @[]@: callers fall through to the remote tier rather
+-- than crash on a corrupt or partial DB.
 searchLocal :: HyphaHoogle -> HoogleQuery -> IO [HoogleHit]
-searchLocal hh _q = withMVar (hhLock hh) $ \_ -> pure []
+searchLocal hh q = withMVar (hhLock hh) $ \_ -> do
+  ok <- doesFileExist (hhDbPath hh)
+  if not ok
+    then pure []
+    else do
+      r <- try (Hoogle.withDatabase (hhDbPath hh) $ \db ->
+                  pure (map toHit (Hoogle.searchDatabase db
+                          (Text.unpack (unHoogleQuery q)))))
+             :: IO (Either SomeException [HoogleHit])
+      pure (either (const []) id r)
+  where
+    toHit t = HoogleHit
+      { hhPackage = maybe "" (Text.pack . fst) (Hoogle.targetPackage t)
+      , hhModule  = maybe "" (Text.pack . fst) (Hoogle.targetModule t)
+      , hhName    = Text.pack (Hoogle.targetItem t)
+      , hhSig     = Text.pack (Hoogle.targetType t)
+      , hhDocs    = Text.pack (Hoogle.targetDocs t)
+      }
