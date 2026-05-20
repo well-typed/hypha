@@ -25,6 +25,7 @@ import qualified Unit.Modules
 import qualified Unit.PackageCache
 import qualified Unit.PackageCacheFingerprint
 import qualified Unit.HoogleLocalGen
+import qualified Unit.HoogleRemote
 import qualified Unit.PackageCacheLookup
 import qualified Unit.Module
 import qualified Unit.Project
@@ -60,6 +61,7 @@ main = defaultMain (testGroup "hypha"
   , Unit.PackageCache.tests
   , Unit.PackageCacheFingerprint.tests
   , Unit.HoogleLocalGen.tests
+  , Unit.HoogleRemote.tests
   , Unit.PackageCacheLookup.tests
   , Unit.Module.tests
   , Unit.Server.tests

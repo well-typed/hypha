@@ -22,6 +22,7 @@ module Hypha.Search.PackageCache
   , readCachedFingerprint
   , writeCachedFingerprint
   , writeCachedIndex
+  , hyphaGlobalCache
   , readCachedBlob
   , writeCachedBlob
   ) where
@@ -154,6 +155,12 @@ writeCachedIndex
   -> IO ()
 writeCachedIndex c origin pkg ver rows =
   writeIndex (selectWrite c origin) pkg ver rows
+
+-- | Accessor for the global 'IndexCache' handle.  Used by
+-- 'Hypha.Hoogle.Remote' to piggy-back on the existing @kv@ table
+-- for caching remote query results.
+hyphaGlobalCache :: HyphaPackageCache -> IndexCache
+hyphaGlobalCache = hpcGlobal
 
 -- | Read the per-component fingerprint stored alongside the cache
 -- rows for a @(pkg, version)@ pair.  The origin tells which DB to

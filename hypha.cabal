@@ -107,6 +107,7 @@ library
     Hypha.Server.Ui.Source
     Hypha.Package.Resolver
     Hypha.Hoogle.Local
+    Hypha.Hoogle.Remote
     Hypha.Project.Fingerprint
     Hypha.Search.Cache
     Hypha.Search.PackageCache
@@ -203,6 +204,7 @@ test-suite hypha-tests
     Unit.PackageCache
     Unit.PackageCacheFingerprint
     Unit.HoogleLocalGen
+    Unit.HoogleRemote
     Unit.PackageCacheLookup
   build-depends:
     , aeson
