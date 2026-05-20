@@ -9,7 +9,8 @@ import Test.Tasty.Golden (goldenVsString)
 
 import Hypha.Command.Versions (runVersions)
 import Hypha.Output.Json (encodeEnvelope)
-import Hypha.Types.BuildPlan (BuildPlan (..), PlannedUnit (..), emptyBuildPlan)
+import Hypha.Types.BuildPlan
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import qualified Data.Map.Strict as Map
 
@@ -32,6 +33,7 @@ runVersionsCommand = do
                 { puId = PackageId (PackageName "async") (Version "2.2.5")
                 , puDeps = []
                 , puIsLocal = False
+                , puOrigin = OriginHackage
                 , puSrcDir  = Nothing
                 , puDistDir = Nothing
           , puLibComponents = []
@@ -40,6 +42,7 @@ runVersionsCommand = do
                 { puId = PackageId (PackageName "base") (Version "4.18.3.0")
                 , puDeps = []
                 , puIsLocal = False
+                , puOrigin = OriginHackage
                 , puSrcDir  = Nothing
                 , puDistDir = Nothing
           , puLibComponents = []

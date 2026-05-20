@@ -12,7 +12,8 @@ import Test.Tasty.Golden (goldenVsString)
 import Hypha.BuildEnv.Mock (MockBuildEnv (..), emptyMock, mkMockBuildEnv)
 import Hypha.Command.Source (runSource)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes)
-import Hypha.Types.BuildPlan (BuildPlan (..), PlannedUnit (..), emptyBuildPlan)
+import Hypha.Types.BuildPlan
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import qualified Data.Map.Strict as Map
 
@@ -44,6 +45,7 @@ runSourceCommand = do
                 { puId = PackageId (PackageName "async") (Version "2.2.5")
                 , puDeps = []
                 , puIsLocal = False
+                , puOrigin = OriginHackage
                 , puSrcDir  = Nothing
                 , puDistDir = Nothing
           , puLibComponents = []

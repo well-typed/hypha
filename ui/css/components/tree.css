@@ -45,3 +45,32 @@
   font-size: 0.85em;
   margin-left: 0.1em;
 }
+
+/* Provenance badge next to the package link.  Only rendered for
+ * non-Hackage origins; the common case stays uncluttered. */
+.tree li .origin-tag {
+  display: inline-block;
+  margin-left: 0.35em;
+  padding: 0 0.35em;
+  border-radius: 0.25em;
+  font-size: 0.7em;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.tree li .origin-tag.srp {
+  background: rgba(217, 119, 6, 0.18);
+  color: #d97706;
+}
+
+.tree li .origin-tag.local {
+  background: rgba(59, 130, 246, 0.18);
+  color: #3b82f6;
+}
+
+.tree li .origin-tag.tarball {
+  background: rgba(107, 114, 128, 0.18);
+  color: var(--muted);
+}

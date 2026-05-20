@@ -21,12 +21,16 @@ import qualified Hypha.Server.Ui.Doc     as UIDoc
 import qualified Hypha.Server.Ui.Source  as UISrc
 import           Hypha.Server.Api       (HyphaApi, api)
 import           Hypha.Server.Slots     (BuildSlots)
+import           Hypha.Types.BuildPlan  (PackageOrigin)
 
 -- | Runtime configuration for the server, connecting the WAI app to
 -- the application's data sources.
 data ServerConfig = ServerConfig
   { scProjectName  :: !Text
-  , scPackages     :: ![Text]
+  , scPackages     :: ![(Text, PackageOrigin)]
+      -- ^ Sidebar entries.  The 'Text' is the human-facing component
+      -- label (@pkg@, @pkg:sublib@, @pkg:exe:name@); the
+      -- 'PackageOrigin' drives the per-entry provenance badge.
   , scSlots        :: !BuildSlots
   , scIndexReady   :: !(IO Bool)
       -- ^ Whether the in-memory search index has finished populating.

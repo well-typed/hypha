@@ -78,6 +78,7 @@ runPackageLocalCommand = do
                         (pkgVersion (rpPkgId rp))
                         (rpIsLocal rp)
                         (rpDepsCount rp)
+                        (rpOrigin rp)
                         modules
               pure (Aeson.encode (encodeEnvelope "package" oc))
 

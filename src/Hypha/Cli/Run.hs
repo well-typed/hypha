@@ -213,6 +213,7 @@ dispatch flags = \case
             (pkgVersion (rpPkgId rp))
             (rpIsLocal rp)
             (rpDepsCount rp)
+            (rpOrigin rp)
             modules0))
 
   VersionsCommand pkg ->

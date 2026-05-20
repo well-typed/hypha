@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Project.Plan
   ( -- * Types
@@ -18,7 +19,8 @@ import qualified Cabal.Plan as CP
 import qualified Hypha.Hackage.Source as Src
 import qualified Hypha.Project.Components as Comp
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), CompilerId (..), PlannedUnit (..), ProjectRoot (..) )
+  ( BuildPlan (..), CompilerId (..), PackageOrigin (..), PlannedUnit (..)
+  , ProjectRoot (..) )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | Errors that can occur when loading the build plan.
@@ -105,6 +107,7 @@ toPlannedUnit unitIdToPkgId sourceCacheLookup u = do
     { puId            = pkgId
     , puDeps          = deps
     , puIsLocal       = (CP.uType u == CP.UnitTypeLocal)
+    , puOrigin        = originFromPkgLoc (CP.uPkgSrc u)
     , puSrcDir        = srcDir
     , puDistDir       = CP.uDistDir u
     , puLibComponents = comps
@@ -126,7 +129,33 @@ extractSrcDir :: Maybe CP.PkgLoc -> Maybe FilePath
 extractSrcDir (Just (CP.LocalUnpackedPackage p)) = Just p
 extractSrcDir _                                   = Nothing
 
+-- | Map a @cabal-plan@ source location to our coarser 'PackageOrigin'.
+-- We do not surface 'OriginSourceRepo' metadata that the plan omits;
+-- if cabal didn't record a URL, neither do we.
+originFromPkgLoc :: Maybe CP.PkgLoc -> PackageOrigin
+originFromPkgLoc = \case
+  Nothing -> OriginUnknown
+  Just (CP.LocalUnpackedPackage p) -> OriginLocal p
+  Just (CP.LocalTarballPackage  p) -> OriginLocalTarball p
+  Just (CP.RemoteTarballPackage (CP.URI u)) -> OriginRemoteTarball u
+  Just (CP.RepoTarballPackage _)   -> OriginHackage
+  Just (CP.RemoteSourceRepoPackage sr) ->
+    OriginSourceRepo
+      (CP.srLocation sr)
+      -- Prefer explicit tag, fall back to branch — cabal stores the
+      -- resolved commit hash in @tag@ for @source-repository-package@
+      -- pinned via @tag:@ but in @branch@ when only a branch is given.
+      (firstJust (CP.srTag sr) (CP.srBranch sr))
+      (CP.srSubdir sr)
+
 -- | Convert a cabal-plan PkgId to our PackageId type.
 toPackageId :: CP.PkgId -> PackageId
 toPackageId (CP.PkgId (CP.PkgName name) ver) =
   PackageId (PackageName name) (Version (CP.dispVer ver))
+
+-- | Like @<|>@ on 'Maybe', spelt out to keep the dependency surface
+-- small; @Control.Applicative@ would do but we already avoid importing
+-- it here.
+firstJust :: Maybe a -> Maybe a -> Maybe a
+firstJust (Just x) _ = Just x
+firstJust Nothing  y = y

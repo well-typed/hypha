@@ -39,7 +39,8 @@ import Hypha.Error (HyphaError (..))
 import qualified Hypha.Hackage.Api as Hackage
 import Hypha.Hackage.Api (HackageClient (..))
 import Hypha.Hackage.Source (fetchAndExtractSource)
-import Hypha.Types.BuildPlan (BuildPlan (..), PlannedUnit (..), lookupUnit)
+import Hypha.Types.BuildPlan
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), lookupUnit )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | The result of resolving a package name.
@@ -52,6 +53,9 @@ data ResolvedPackage = ResolvedPackage
     -- ^ Whether this is a local project package.
   , rpDepsCount       :: !Int
     -- ^ Number of library-level dependencies (from plan or store).
+  , rpOrigin          :: !PackageOrigin
+    -- ^ Provenance of the package source.  Out-of-plan resolutions
+    -- (store hit, Hackage fallback) report 'OriginHackage'.
   }
   deriving stock (Show, Eq)
 
@@ -100,6 +104,7 @@ resolvePackageWith env hclient plan name = do
         , rpIsOutsidePlan = False
         , rpIsLocal       = puIsLocal pu
         , rpDepsCount     = length (puDeps pu)
+        , rpOrigin        = puOrigin pu
         })
     Nothing -> do
       -- Step 2: Try the cabal store (installed packages).
@@ -111,6 +116,7 @@ resolvePackageWith env hclient plan name = do
             , rpIsOutsidePlan = True
             , rpIsLocal       = False
             , rpDepsCount     = 0
+            , rpOrigin        = OriginHackage
             })
         [] -> do
           -- Step 3: Fetch from Hackage (latest version).
@@ -125,6 +131,7 @@ resolvePackageWith env hclient plan name = do
                 , rpIsOutsidePlan = True
                 , rpIsLocal       = False
                 , rpDepsCount     = 0
+                , rpOrigin        = OriginHackage
                 })
   where
     matchingPid :: PackageName -> PackageId -> Maybe PackageId

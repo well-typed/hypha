@@ -11,6 +11,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 
 import Hypha.Server.Ui.Layout (shellPage)
+import Hypha.Types.BuildPlan (PackageOrigin (..))
 
 tests :: TestTree
 tests = testGroup "Golden.Server"
@@ -24,7 +25,8 @@ tests = testGroup "Golden.Server"
 
 renderHome :: IO LBS.ByteString
 renderHome =
-  let page = shellPage "fixture-project" [] ["async", "containers"] body
+  let page = shellPage "fixture-project" []
+               [("async", OriginHackage), ("containers", OriginHackage)] body
       body = p_ $ do
         toHtml ("Welcome to hypha. Press " :: Text.Text)
         code_ "s"

@@ -5,6 +5,7 @@ module Hypha.Types.BuildPlan
   ( -- * Core types
     BuildPlan (..)
   , PlannedUnit (..)
+  , PackageOrigin (..)
   , PlanPackage (..)
   , ProjectRoot (..)
   , CompilerId (..)
@@ -57,12 +58,40 @@ data PlanPackage = PlanPackage
   }
   deriving stock (Show, Eq, Ord)
 
+-- | Where the bytes of a planned unit come from.  Derived from
+-- @plan.json@'s @pkg-src@ field and the unit type.
+--
+-- The distinction matters in the @hypha server@ UI: an
+-- @acid-state-1.1.1@ pulled from a @source-repository-package@ fork
+-- looks identical to the Hackage copy unless we surface the origin.
+data PackageOrigin
+  = OriginHackage
+    -- ^ Pulled from a Hackage-like repo tarball (the common case).
+  | OriginSourceRepo
+      !(Maybe Text)  -- ^ repo URL, when known
+      !(Maybe Text)  -- ^ git tag / branch / commit reference
+      !(Maybe FilePath)  -- ^ subdir within the repo
+    -- ^ @source-repository-package@ overlay.
+  | OriginLocal !FilePath
+    -- ^ Local @packages:@ entry; field is the source dir.
+  | OriginLocalTarball !FilePath
+    -- ^ Locally-stored tarball (uncommon).
+  | OriginRemoteTarball !Text
+    -- ^ Arbitrary remote tarball URL (uncommon).
+  | OriginUnknown
+    -- ^ Plan entry without a @pkg-src@ block — typically @base@ and
+    -- other boot libraries shipped with GHC.
+  deriving stock (Show, Eq, Ord)
+
 -- | A planned unit with its dependencies and metadata.
 data PlannedUnit = PlannedUnit
   { puId      :: !PackageId
   , puDeps    :: ![PackageId]
   , puIsLocal :: !Bool
     -- ^ Whether this is a local project package (not a dependency).
+  , puOrigin  :: !PackageOrigin
+    -- ^ Provenance of the package source (Hackage, SRP overlay, local
+    -- directory, etc.), derived from @plan.json@.
   , puSrcDir  :: !(Maybe FilePath)
     -- ^ Source root from plan.json (pkg-src.path).
     -- 'Just p' for inplace/local packages, 'Nothing' otherwise.
@@ -119,6 +148,7 @@ applyOverrides overrides bp = bp
     applyOverride (PackageOverride n v) =
       Map.insertWith (\_ old -> old { puId = (puId old) { pkgVersion = v } }) n
         PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False
+                    , puOrigin = OriginUnknown
                     , puSrcDir = Nothing, puDistDir = Nothing
                     , puLibComponents = [] }
 

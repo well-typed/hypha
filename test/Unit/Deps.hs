@@ -13,7 +13,8 @@ import Test.Tasty.HUnit (testCase, (@?=), assertFailure)
 
 import Hypha.Command.Deps (runDeps)
 import Hypha.Output.Outcome (outcomeResult, outcomeRelated, Related (..))
-import Hypha.Types.BuildPlan (BuildPlan (..), PlannedUnit (..), emptyBuildPlan)
+import Hypha.Types.BuildPlan
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | Build a test plan with known dependency structure:
@@ -31,6 +32,7 @@ mkTestPlan = emptyBuildPlan
               , PackageId (PackageName "hashable") (Version "1.4.4")
               ]
           , puIsLocal = False
+          , puOrigin = OriginHackage
           , puSrcDir  = Nothing
           , puDistDir = Nothing
           , puLibComponents = []
@@ -41,6 +43,7 @@ mkTestPlan = emptyBuildPlan
               [ PackageId (PackageName "array") (Version "0.5.6")
               ]
           , puIsLocal = False
+          , puOrigin = OriginHackage
           , puSrcDir  = Nothing
           , puDistDir = Nothing
           , puLibComponents = []
@@ -49,6 +52,7 @@ mkTestPlan = emptyBuildPlan
           { puId = PackageId (PackageName "hashable") (Version "1.4.4")
           , puDeps = []
           , puIsLocal = False
+          , puOrigin = OriginHackage
           , puSrcDir  = Nothing
           , puDistDir = Nothing
           , puLibComponents = []
@@ -57,6 +61,7 @@ mkTestPlan = emptyBuildPlan
           { puId = PackageId (PackageName "array") (Version "0.5.6")
           , puDeps = []
           , puIsLocal = False
+          , puOrigin = OriginHackage
           , puSrcDir  = Nothing
           , puDistDir = Nothing
           , puLibComponents = []

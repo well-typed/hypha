@@ -13,15 +13,16 @@ import Lucid.Base (makeAttributes)
 
 import qualified Hypha.Server.Ui.Search as UISearch
 import qualified Hypha.Server.Ui.Tree   as UITree
+import Hypha.Types.BuildPlan (PackageOrigin)
 
 -- | Shell HTML wrapping every view: sticky search bar, sidebar tree,
 -- breadcrumbs, and the main pane body.  Carries a thin progress strip
 -- pinned to the very top of the page that polls @\/progress@ until the
 -- background indexer reports done.
-shellPage :: Text                -- ^ page title
-          -> [(Text, Text)]      -- ^ breadcrumbs (label, href)
-          -> [Text]              -- ^ package list for sidebar tree
-          -> Html ()             -- ^ main pane body
+shellPage :: Text                          -- ^ page title
+          -> [(Text, Text)]                -- ^ breadcrumbs (label, href)
+          -> [(Text, PackageOrigin)]       -- ^ package list for sidebar tree
+          -> Html ()                       -- ^ main pane body
           -> Html ()
 shellPage title crumbs pkgs body = doctypehtml_ $ do
   head_ $ do

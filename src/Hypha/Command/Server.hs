@@ -53,7 +53,8 @@ import qualified Hypha.Server.Slots as Slots
 import qualified Hypha.Source.Extract as Extract
 import qualified Hypha.Source.Locate as Locate
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PlannedUnit (..), ProjectRoot, lookupUnit )
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), ProjectRoot
+  , lookupUnit )
 import Hypha.Types.ComponentName
   ( ComponentName (..), cnKind, cnPackage, parseComponentName )
 import Hypha.Types.Doc (DocText (..))
@@ -351,13 +352,17 @@ componentKey pkgT (Comp.Exe    s) = pkgT <> ":exe:" <> s
 
 -- | Every renderable component name for a unit.  Falls back to a
 -- single @pkg@ entry when no components were parsed.
-componentNames :: BuildPlan -> PackageId -> [Text]
+componentNames :: BuildPlan -> PackageId -> [(Text, PackageOrigin)]
 componentNames plan pid =
-  let pkgT = unPackageName (pkgName pid)
+  let pkgT   = unPackageName (pkgName pid)
+      origin = case lookupUnit (pkgName pid) plan of
+        Just pu -> puOrigin pu
+        Nothing -> OriginUnknown
+      tag t  = (t, origin)
   in case lookupUnit (pkgName pid) plan of
        Just pu | not (null (puLibComponents pu)) ->
-         [ componentKey pkgT (Comp.ciKind c) | c <- puLibComponents pu ]
-       _ -> [pkgT]
+         [ tag (componentKey pkgT (Comp.ciKind c)) | c <- puLibComponents pu ]
+       _ -> [tag pkgT]
 
 -- | Enumerate every component of a unit (main + sublibs + exes) as
 -- @(kind, sourceDirs)@ pairs.  Falls back to a single fallback entry
