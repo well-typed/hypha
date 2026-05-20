@@ -19,20 +19,27 @@ module Hypha.Hoogle.Local
   , HaddockRunner (..)
   , defaultHaddockRunner
   , collectTxtForUnit
+  , HoogleStamp (..)
+  , ensureFresh
     -- * Internals exposed for tests + downstream wiring
   , scavengeStoreTxt
   , haddockOutputPath
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Control.Exception (SomeException, try)
+import Control.Monad (when)
 import Data.List (isPrefixOf)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.IO as TIO
+import qualified Hoogle
 import System.Directory
-  ( XdgDirectory (..), createDirectoryIfMissing, doesDirectoryExist
-  , doesFileExist, getXdgDirectory, listDirectory )
+  ( XdgDirectory (..), copyFile, createDirectoryIfMissing
+  , createFileLink, doesDirectoryExist, doesFileExist, getXdgDirectory
+  , listDirectory, removeDirectoryRecursive )
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>), takeDirectory, takeExtension)
+import System.FilePath ((</>), takeDirectory, takeExtension, takeFileName)
 import System.Process (readProcessWithExitCode)
 
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
@@ -203,7 +210,93 @@ enumerateHsFiles = fmap concat . mapM walk
         else if takeExtension p `elem` [".hs", ".lhs"]
                then pure [p] else pure []
 
--- | Stub: subsequent tasks fill in the generation lifecycle.  For
--- now, every query collapses to an empty result list.
+-- | Identity stamp used to decide whether the Hoogle DB is stale.
+-- Two parts: the plan hash (captures dependency changes) and an
+-- aggregate fingerprint over all local components (captures source
+-- edits).  Either changing invalidates the DB.
+data HoogleStamp = HoogleStamp
+  { hsPlanHash    :: !Text
+  , hsAggregateFp :: !Text
+  }
+  deriving stock (Show, Eq)
+
+stampFilePath :: FilePath -> FilePath
+stampFilePath dotHypha = dotHypha </> "hoogle-stamp"
+
+-- | Regenerate the Hoogle DB if the stored stamp differs from the
+-- supplied one.  Idempotent and cheap when stamps match.
+ensureFresh
+  :: HaddockRunner
+  -> FilePath        -- ^ store root
+  -> FilePath        -- ^ project @.hypha@ directory
+  -> HoogleStamp     -- ^ current stamp
+  -> [LocalUnit]
+  -> IO ()
+ensureFresh runner storeRoot dotHypha stamp units = do
+  createDirectoryIfMissing True dotHypha
+  mPrior <- readStamp (stampFilePath dotHypha)
+  when (mPrior /= Just stamp) $
+    regenerate runner storeRoot dotHypha stamp units
+
+readStamp :: FilePath -> IO (Maybe HoogleStamp)
+readStamp f = do
+  ok <- doesFileExist f
+  if not ok then pure Nothing else do
+    txt <- TIO.readFile f
+    case Text.lines txt of
+      (a : b : _) -> pure (Just (HoogleStamp a b))
+      _           -> pure Nothing
+
+writeStamp :: FilePath -> HoogleStamp -> IO ()
+writeStamp f s = TIO.writeFile f (Text.unlines [hsPlanHash s, hsAggregateFp s])
+
+regenerate
+  :: HaddockRunner
+  -> FilePath
+  -> FilePath
+  -> HoogleStamp
+  -> [LocalUnit]
+  -> IO ()
+regenerate runner storeRoot dotHypha stamp units = do
+  -- 1. Gather every per-package .txt path.
+  paths <- mapM (collectTxtForUnit runner storeRoot) units
+  let okPaths = [ p | Right p <- paths ]
+
+  -- 2. Drop them into a single directory @hoogle generate@ can scan
+  -- with @--local=<dir>@.  Symlink when possible; fall back to copy.
+  let inputDir = dotHypha </> "hoogle-input"
+  removeAndRecreate inputDir
+  mapM_ (linkOrCopy inputDir) okPaths
+
+  -- 3. Generate the database (no-op if okPaths is empty: Hoogle will
+  -- still create an empty DB file which is fine for our purposes).
+  let dbPath = dotHypha </> "hoogle.hoo"
+  case okPaths of
+    [] -> pure ()
+    _  -> Hoogle.hoogle
+            [ "generate"
+            , "--database=" <> dbPath
+            , "--local=" <> inputDir
+            ]
+
+  -- 4. Stamp the result so we skip next time.
+  writeStamp (stampFilePath dotHypha) stamp
+
+removeAndRecreate :: FilePath -> IO ()
+removeAndRecreate p = do
+  ok <- doesDirectoryExist p
+  when ok (removeDirectoryRecursive p)
+  createDirectoryIfMissing True p
+
+linkOrCopy :: FilePath -> FilePath -> IO ()
+linkOrCopy dstDir src = do
+  let dst = dstDir </> takeFileName src
+  result <- try (createFileLink src dst) :: IO (Either SomeException ())
+  case result of
+    Right () -> pure ()
+    Left  _  -> copyFile src dst
+
+-- | Stub: 'searchLocal' is wired to consult the on-disk DB in the
+-- next task.  For now it returns no results regardless of input.
 searchLocal :: HyphaHoogle -> HoogleQuery -> IO [HoogleHit]
 searchLocal hh _q = withMVar (hhLock hh) $ \_ -> pure []

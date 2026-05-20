@@ -10,7 +10,8 @@ import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Hoogle.Local
   ( HaddockError (..), HaddockRequest (..), HaddockRunner (..)
-  , LocalUnit (..), collectTxtForUnit, scavengeStoreTxt )
+  , HoogleStamp (..), LocalUnit (..), collectTxtForUnit, ensureFresh
+  , scavengeStoreTxt )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 tests :: TestTree
@@ -53,6 +54,23 @@ tests = testGroup "Unit.HoogleLocalGen"
           Left (HaddockError e) -> fail (show e)
         seen <- readIORef called
         length seen @?= 1
+
+  , testCase "ensureFresh writes stamp and skips on second call" $
+      withSystemTempDirectory "hypha-hg" $ \tmp -> do
+        calls <- newIORef (0 :: Int)
+        let runner = HaddockRunner $ \req -> do
+              modifyIORef calls (+1)
+              writeFile (hrOutput req) "@package x\n"
+              pure (Right (hrOutput req))
+            stamp = HoogleStamp "ph-1" "fp-1"
+            dot = tmp </> ".hypha"
+        -- empty unit list: no .txt collection at all, only stamping
+        ensureFresh runner "" dot stamp []
+        ensureFresh runner "" dot stamp []
+        seen <- readIORef calls
+        seen @?= 0
+        stampOk <- doesFileExist (dot </> "hoogle-stamp")
+        stampOk @?= True
 
   , testCase "collectTxtForUnit uses store .txt when present (no runner call)" $
       withSystemTempDirectory "hypha-hg" $ \tmp -> do
