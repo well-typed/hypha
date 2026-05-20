@@ -46,31 +46,80 @@
   margin-left: 0.1em;
 }
 
-/* Provenance badge next to the package link.  Only rendered for
- * non-Hackage origins; the common case stays uncluttered. */
-.tree li .origin-tag {
-  display: inline-block;
-  margin-left: 0.35em;
-  padding: 0 0.35em;
-  border-radius: 0.25em;
-  font-size: 0.7em;
-  font-family: var(--mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  vertical-align: middle;
+/* Sidebar row now lays out a single-letter provenance chip and the
+ * package link on the same baseline.  We use flex so the chip never
+ * pushes the link onto a second line on narrow viewports. */
+.tree li.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
 }
 
-.tree li .origin-tag.srp {
-  background: rgba(217, 119, 6, 0.18);
+.tree li.tree-row a {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Single-letter provenance chip on the LEFT of the package name.
+ * Fixed-width square so the package names align in a tidy column. */
+.tree li .origin-chip {
+  display: inline-flex;
+  flex: 0 0 1.4em;
+  width: 1.4em;
+  height: 1.4em;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.3em;
+  font-family: var(--mono);
+  font-size: 0.72em;
+  font-weight: 700;
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.tree li .origin-chip.hackage {
+  background: rgba(34, 197, 94, 0.18);
+  color: #16a34a;
+}
+
+.tree li .origin-chip.srp {
+  background: rgba(217, 119, 6, 0.22);
   color: #d97706;
 }
 
-.tree li .origin-tag.local {
-  background: rgba(59, 130, 246, 0.18);
+.tree li .origin-chip.local {
+  background: rgba(59, 130, 246, 0.22);
   color: #3b82f6;
 }
 
-.tree li .origin-tag.tarball {
-  background: rgba(107, 114, 128, 0.18);
+.tree li .origin-chip.tarball {
+  background: rgba(107, 114, 128, 0.22);
   color: var(--muted);
+}
+
+.tree li .origin-chip.unknown {
+  background: rgba(107, 114, 128, 0.15);
+  color: var(--muted);
+}
+
+/* Full origin block rendered on the package page header.  Looks like
+ * a chip but spells out the origin and optionally the SRP url/ref. */
+.origin-pill {
+  display: inline-block;
+  padding: 0.2em 0.6em;
+  border-radius: 0.3em;
+  font-size: 0.85em;
+  font-family: var(--mono);
+  margin: 0.2rem 0 0.6rem;
+}
+
+.origin-pill.hackage  { background: rgba(34, 197, 94, 0.18);  color: #16a34a; }
+.origin-pill.srp      { background: rgba(217, 119, 6, 0.22);  color: #d97706; }
+.origin-pill.local    { background: rgba(59, 130, 246, 0.22); color: #3b82f6; }
+.origin-pill.tarball  { background: rgba(107, 114, 128, 0.22); color: var(--muted); }
+.origin-pill.unknown  { background: rgba(107, 114, 128, 0.15); color: var(--muted); }
+
+.origin-pill .origin-detail {
+  opacity: 0.85;
+  font-weight: normal;
 }

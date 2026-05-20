@@ -3,6 +3,7 @@
 module Hypha.Server.Ui.Tree
   ( packageTree
   , originBadge
+  , originBadgeFull
   ) where
 
 import Data.Text (Text)
@@ -12,11 +13,10 @@ import Lucid
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 
 -- | Sidebar package list linking to each component's overview page.
--- Entries are @(compositeName, origin)@ where the name is one of
--- @pkg@, @pkg:sublib@, or @pkg:exe:name@.  The trailing kind tag is
--- rendered as a muted span; the @origin@ value drives a small
--- provenance badge so users can tell a fork apart from the Hackage
--- copy of the same @pkg-ver@.
+-- Each row places a single-letter origin chip to the left of the
+-- package label so the chip and the link stay on one row.  The
+-- composite name still carries the @:exe:@ or @:sublib@ tag at the
+-- tail; only the leading chip is new.
 packageTree :: [(Text, PackageOrigin)] -> Html ()
 packageTree = ul_ [class_ "tree"] . mconcat . map renderEntry
   where
@@ -31,33 +31,61 @@ packageTree = ul_ [class_ "tree"] . mconcat . map renderEntry
               Just e  -> ("exe-tag",    Just (":exe:" <> e), "%3Aexe%3A" <> e)
               Nothing -> ("sublib-tag", Just (":"     <> t), "%3A"       <> t)
           hrefText = pkgPart <> hrefSuffix
-      in li_ $ do
+      in li_ [class_ "tree-row"] $ do
+           originBadge origin
            a_ [href_ ("/pkg/" <> hrefText)] $ do
              toHtml pkgPart
              case suffix of
                Nothing -> pure ()
                Just s  -> span_ [class_ kindCls] (toHtml s)
-           originBadge origin
 
--- | Tiny inline pill summarising package provenance.  Hidden when the
--- origin would simply read \"hackage\" — the silent default avoids
--- visual noise in projects whose plan is entirely Hackage-pinned.
+-- | Single-letter provenance chip used in the sidebar.  Always rendered
+-- so every package row has the same horizontal layout; the chip's
+-- background colour distinguishes the origin without taking real
+-- estate from the package name.
 originBadge :: PackageOrigin -> Html ()
-originBadge = \case
-  OriginHackage          -> pure ()
-  OriginUnknown          -> pure ()
-  OriginLocal _          ->
-    span_ [class_ "origin-tag local"
-          , title_ "local package"] "local"
-  OriginLocalTarball _   ->
-    span_ [class_ "origin-tag tarball"
-          , title_ "local tarball"] "tarball"
-  OriginRemoteTarball _  ->
-    span_ [class_ "origin-tag tarball"
-          , title_ "remote tarball"] "tarball"
-  OriginSourceRepo _ tag _ ->
-    let lbl = case tag of
-          Just t  -> "srp@" <> Text.take 7 t
-          Nothing -> "srp"
-    in span_ [class_ "origin-tag srp", title_ "source-repository-package"]
-         (toHtml lbl)
+originBadge o =
+  let (cls, letter, label) = originChip o
+  in span_ [ class_ ("origin-chip " <> cls)
+           , title_ label
+           ] (toHtml letter)
+
+-- | Fully spelt-out origin block for the package page header.  Used by
+-- 'pkgPage' so a clicked package shows the chip's meaning in plain
+-- English plus any SRP metadata the plan recorded.
+originBadgeFull :: PackageOrigin -> Html ()
+originBadgeFull o =
+  let (cls, _letter, label) = originChip o
+  in div_ [class_ ("origin-pill " <> cls)] $ do
+       toHtml label
+       case o of
+         OriginSourceRepo url ref subdir -> originDetails url ref subdir
+         OriginLocal p                   -> span_ [class_ "origin-detail"]
+                                              (toHtml (" \x2014 " <> Text.pack p))
+         OriginLocalTarball p            -> span_ [class_ "origin-detail"]
+                                              (toHtml (" \x2014 " <> Text.pack p))
+         OriginRemoteTarball u           -> span_ [class_ "origin-detail"]
+                                              (toHtml (" \x2014 " <> u))
+         _                                -> pure ()
+
+originDetails :: Maybe Text -> Maybe Text -> Maybe FilePath -> Html ()
+originDetails url ref subdir =
+  let pieces = mconcat
+        [ maybe [] (\u -> [u])        url
+        , maybe [] (\r -> ["@" <> r]) ref
+        , maybe [] (\s -> ["(" <> Text.pack s <> ")"]) subdir
+        ]
+  in case pieces of
+       [] -> pure ()
+       _  -> span_ [class_ "origin-detail"]
+               (toHtml (" \x2014 " <> Text.intercalate " " pieces))
+
+-- | (CSS class, single-letter label, full label) tuple for an origin.
+originChip :: PackageOrigin -> (Text, Text, Text)
+originChip = \case
+  OriginHackage          -> ("hackage", "H", "Hackage")
+  OriginUnknown          -> ("unknown", "?", "Unknown origin")
+  OriginLocal _          -> ("local",   "L", "Local package")
+  OriginLocalTarball _   -> ("tarball", "T", "Local tarball")
+  OriginRemoteTarball _  -> ("tarball", "T", "Remote tarball")
+  OriginSourceRepo _ _ _ -> ("srp",     "S", "source-repository-package")

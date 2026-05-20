@@ -1,7 +1,7 @@
 .app {
   display: grid;
   grid-template-rows: auto 1fr;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 320px 1fr;
   grid-template-areas: "topbar topbar" "sidebar main";
   height: 100vh;
 }

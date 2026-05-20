@@ -19,6 +19,7 @@ import qualified Hypha.Server.Ui.Layout  as UI
 import qualified Hypha.Server.Ui.Search  as UISearch
 import qualified Hypha.Server.Ui.Doc     as UIDoc
 import qualified Hypha.Server.Ui.Source  as UISrc
+import qualified Hypha.Server.Ui.Tree    as UITree
 import           Hypha.Server.Api       (HyphaApi, api)
 import           Hypha.Server.Slots     (BuildSlots)
 import           Hypha.Types.BuildPlan  (PackageOrigin)
@@ -51,8 +52,11 @@ data ServerConfig = ServerConfig
   , scHaddockHtml  :: !(Text -> [String] -> IO (Maybe BL.ByteString))
       -- ^ \"\<pkg\>-\<ver\>\" + path segments → raw bytes (already rewritten)
   , scSourceText   :: !(Text -> Text -> IO (Maybe Text))
-  , scPackageInfo  :: !(Text -> IO (Maybe (Text, [Text])))
-      -- ^ Package overview: pkg → (version, top-level modules)
+  , scPackageInfo  :: !(Text -> IO (Maybe (Text, [Text], PackageOrigin)))
+      -- ^ Package overview: pkg → (version, top-level modules, origin).
+      -- The origin is surfaced as the full chip on the package page so
+      -- the user can confirm which copy of @pkg-ver@ they are looking
+      -- at when multiple projects share a version.
   , scModuleExports :: !(Text -> Text -> IO [Text])
       -- ^ Module export list: pkg → mod → [symbol names]
   }
@@ -132,11 +136,12 @@ pkgPage cfg pkg = do
   let crumbs = [(pkgT, "/pkg/" <> pkgT)]
   pure $ UI.shellPage pkgT crumbs (scPackages cfg) $ case m of
     Nothing -> p_ [class_ "warn"] (toHtml ("Package " <> pkgT <> " not found."))
-    Just (ver, mods) -> div_ [class_ "pkg"] $ do
+    Just (ver, mods, origin) -> div_ [class_ "pkg"] $ do
       h1_ (toHtml pkgT)
       p_  [class_ "meta"] $ do
         toHtml ("version " :: Text)
         code_ (toHtml ver)
+      UITree.originBadgeFull origin
       h2_ "Modules"
       if null mods
         then p_ [class_ "hint"] (toHtml ("No modules exposed." :: Text))

@@ -274,14 +274,15 @@ buildServerConfig mRoot plan _env _hclient resolver _hoogle = do
         case ePid of
           Left _   -> pure Nothing
           Right rp -> do
-            let pid = rpPkgId rp
-                ver = unVersion (pkgVersion pid)
+            let pid    = rpPkgId rp
+                ver    = unVersion (pkgVersion pid)
+                origin = rpOrigin rp
             mDirs <- resolveComponentDirs plan resolver pkgT
             case mDirs of
-              Nothing        -> pure (Just (ver, []))
+              Nothing        -> pure (Just (ver, [], origin))
               Just (_, dirs) -> do
                 mods <- enumModulesIn dirs
-                pure (Just (ver, mods))
+                pure (Just (ver, mods, origin))
     , App.scModuleExports = \pkgT modT -> do
         mDirs <- resolveComponentDirs plan resolver pkgT
         case mDirs of
