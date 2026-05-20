@@ -87,6 +87,7 @@ library
     Hypha.Command.Deps
     Hypha.Command.Package
     Hypha.Command.Search
+    Hypha.Command.Lookup
     Hypha.Command.Server
     Hypha.Command.Source
     Hypha.Command.Symbol
