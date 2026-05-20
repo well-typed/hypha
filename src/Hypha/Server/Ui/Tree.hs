@@ -84,7 +84,7 @@ originDetails url ref subdir =
 originChip :: PackageOrigin -> (Text, Text, Text)
 originChip = \case
   OriginHackage          -> ("hackage", "H", "Hackage")
-  OriginUnknown          -> ("unknown", "?", "Unknown origin")
+  OriginDistribution     -> ("distribution", "D", "GHC distribution (boot library)")
   OriginLocal _          -> ("local",   "L", "Local package")
   OriginLocalTarball _   -> ("tarball", "T", "Local tarball")
   OriginRemoteTarball _  -> ("tarball", "T", "Remote tarball")

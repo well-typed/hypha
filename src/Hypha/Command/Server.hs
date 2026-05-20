@@ -358,7 +358,7 @@ componentNames plan pid =
   let pkgT   = unPackageName (pkgName pid)
       origin = case lookupUnit (pkgName pid) plan of
         Just pu -> puOrigin pu
-        Nothing -> OriginUnknown
+        Nothing -> OriginDistribution
       tag t  = (t, origin)
   in case lookupUnit (pkgName pid) plan of
        Just pu | not (null (puLibComponents pu)) ->

@@ -97,9 +97,9 @@
   color: var(--muted);
 }
 
-.tree li .origin-chip.unknown {
-  background: rgba(107, 114, 128, 0.15);
-  color: var(--muted);
+.tree li .origin-chip.distribution {
+  background: rgba(168, 85, 247, 0.18);
+  color: #a855f7;
 }
 
 /* Full origin block rendered on the package page header.  Looks like
@@ -117,7 +117,7 @@
 .origin-pill.srp      { background: rgba(217, 119, 6, 0.22);  color: #d97706; }
 .origin-pill.local    { background: rgba(59, 130, 246, 0.22); color: #3b82f6; }
 .origin-pill.tarball  { background: rgba(107, 114, 128, 0.22); color: var(--muted); }
-.origin-pill.unknown  { background: rgba(107, 114, 128, 0.15); color: var(--muted); }
+.origin-pill.distribution { background: rgba(168, 85, 247, 0.18); color: #a855f7; }
 
 .origin-pill .origin-detail {
   opacity: 0.85;

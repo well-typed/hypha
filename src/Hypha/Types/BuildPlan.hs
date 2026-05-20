@@ -78,9 +78,10 @@ data PackageOrigin
     -- ^ Locally-stored tarball (uncommon).
   | OriginRemoteTarball !Text
     -- ^ Arbitrary remote tarball URL (uncommon).
-  | OriginUnknown
-    -- ^ Plan entry without a @pkg-src@ block — typically @base@ and
-    -- other boot libraries shipped with GHC.
+  | OriginDistribution
+    -- ^ Plan entry without a @pkg-src@ block — typically @base@,
+    -- @ghc-prim@ and other libraries shipped with the GHC
+    -- distribution.
   deriving stock (Show, Eq, Ord)
 
 -- | A planned unit with its dependencies and metadata.
@@ -148,7 +149,7 @@ applyOverrides overrides bp = bp
     applyOverride (PackageOverride n v) =
       Map.insertWith (\_ old -> old { puId = (puId old) { pkgVersion = v } }) n
         PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False
-                    , puOrigin = OriginUnknown
+                    , puOrigin = OriginDistribution
                     , puSrcDir = Nothing, puDistDir = Nothing
                     , puLibComponents = [] }
 

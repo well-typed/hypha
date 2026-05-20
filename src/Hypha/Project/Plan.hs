@@ -134,7 +134,7 @@ extractSrcDir _                                   = Nothing
 -- if cabal didn't record a URL, neither do we.
 originFromPkgLoc :: Maybe CP.PkgLoc -> PackageOrigin
 originFromPkgLoc = \case
-  Nothing -> OriginUnknown
+  Nothing -> OriginDistribution
   Just (CP.LocalUnpackedPackage p) -> OriginLocal p
   Just (CP.LocalTarballPackage  p) -> OriginLocalTarball p
   Just (CP.RemoteTarballPackage (CP.URI u)) -> OriginRemoteTarball u
