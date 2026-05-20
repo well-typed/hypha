@@ -127,7 +127,10 @@ urlEncode = Text.concatMap encChar
 
 cacheKey :: HoogleQuery -> Text
 cacheKey (HoogleQuery q) =
-  "hoogle:remote:"
+  -- Bumped the prefix when the upstream JSON post-processing changed
+  -- (HTML-entity decoding, tag stripping, sig split) so stale cache
+  -- entries written by older binaries don't shadow the cleaner shape.
+  "hoogle:remote:v2:"
   <> Text.decodeUtf8
        (Base16.encode (SHA256.hash (Text.encodeUtf8 q)))
 
@@ -160,7 +163,57 @@ decodeHits bs = case eitherDecode bs of
   Left err   -> Left (Text.pack err)
   Right hits -> Right (map fromRaw hits)
   where
-    fromRaw r = HoogleHit (rhPkg r) (rhMod r) (rhItm r) (rhTyp r) (rhDoc r)
+    fromRaw r =
+      -- Hoogle's @item@ field is HTML: wrapped @\<span class=name\>@,
+      -- entities encoded.  Split on @ :: @ to recover (name, sig);
+      -- when the upstream @type@ field is non-empty, prefer it.
+      let cleanItem = decodeEntities (stripTags (rhItm r))
+          cleanTyp  = decodeEntities (stripTags (rhTyp r))
+          (name, sigFromItem) = splitSig cleanItem
+          sig = if Text.null cleanTyp then sigFromItem else cleanTyp
+      in HoogleHit (rhPkg r) (rhMod r) name sig (decodeEntities (rhDoc r))
+
+-- | Drop every @\<…\>@ run.  Cheap; Hoogle's HTML payload is shallow
+-- (no nested attributes with @\>@ inside).
+stripTags :: Text -> Text
+stripTags = go . Text.unpack
+  where
+    go []          = ""
+    go ('<' : rs)  = go (drop 1 (dropWhile (/= '>') rs))
+    go (c   : rs)  = Text.cons c (go rs)
+
+-- | Tiny HTML-entity decoder covering only the entities Hoogle's
+-- output actually emits (@&lt; &gt; &amp; &quot; &#39;@).  Numeric
+-- entities beyond that are left alone — Hoogle does not use them
+-- for the @item@ / @type@ fields.
+decodeEntities :: Text -> Text
+decodeEntities = Text.pack . go . Text.unpack
+  where
+    go [] = []
+    go ('&':rest)
+      | Just (c, rs) <- entity rest = c : go rs
+    go (c:rs) = c : go rs
+
+    entity s
+      | Just rs <- prefix "lt;"   s = Just ('<',  rs)
+      | Just rs <- prefix "gt;"   s = Just ('>',  rs)
+      | Just rs <- prefix "amp;"  s = Just ('&',  rs)
+      | Just rs <- prefix "quot;" s = Just ('"',  rs)
+      | Just rs <- prefix "#39;"  s = Just ('\'', rs)
+      | otherwise                   = Nothing
+
+    prefix p s
+      | take (length p) s == p = Just (drop (length p) s)
+      | otherwise              = Nothing
+
+-- | Split @\"id :: a -> a\"@ → @(\"id\", \"a -> a\")@.  When no
+-- @ :: @ separator is present, the whole string is the name and the
+-- signature is empty.
+splitSig :: Text -> (Text, Text)
+splitSig t = case Text.breakOn " :: " t of
+  (name, rest)
+    | Text.null rest -> (Text.strip name, "")
+    | otherwise      -> (Text.strip name, Text.strip (Text.drop 4 rest))
 
 -- | TLS-aware default transport.
 defaultTransport :: RemoteOptions -> IO RemoteHoogleTransport
