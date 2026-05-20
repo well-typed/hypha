@@ -18,18 +18,21 @@ module Hypha.Search.PackageCache
   , openPackageCacheAt
   , haveCachedIndex
   , readCachedIndex
+  , lookupByName
   , writeCachedIndex
   , readCachedBlob
   , writeCachedBlob
   ) where
 
 import Data.Text (Text)
+import qualified Data.Text as Text
+import qualified Data.Set as Set
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Search.Cache
-  ( IndexCache, defaultCachePath, haveIndex, openIndexCache, readBlob
-  , readIndex, writeBlob, writeIndex )
+  ( IndexCache, defaultCachePath, haveIndex, lookupRowsByName
+  , openIndexCache, readBlob, readIndex, writeBlob, writeIndex )
 import Hypha.Types.BuildPlan (ProjectRoot (..))
 
 -- | Tells writers which DB to target.  Reads do not take an origin —
@@ -98,6 +101,43 @@ readCachedIndex c pkg ver =
         [] -> readIndex (hpcGlobal c) pkg ver
         _  -> pure rows
     Nothing -> readIndex (hpcGlobal c) pkg ver
+
+-- | Find every cached row whose symbol name matches @query@.  The
+-- query may be a bare symbol (@lookup@) or fully qualified
+-- (@Data.Map.lookup@).  Project rows shadow global rows on the same
+-- @(pkg, mod, name)@ triple so a forked checkout overrides the store
+-- copy at the same version.
+lookupByName
+  :: HyphaPackageCache
+  -> Text
+  -> IO [(Text, Text, Text, Text)]
+lookupByName c rawQuery = do
+  let (mMod, name) = splitQualified rawQuery
+  projectRows <- case hpcProject c of
+    Just p  -> lookupRowsByName p name mMod
+    Nothing -> pure []
+  globalRows  <- lookupRowsByName (hpcGlobal c) name mMod
+  pure (mergeShadow projectRows globalRows)
+
+-- | Split @Data.Map.lookup@ into @(Just "Data.Map", "lookup")@.
+-- Bare symbols return @(Nothing, sym)@.
+splitQualified :: Text -> (Maybe Text, Text)
+splitQualified raw =
+  case Text.breakOnEnd "." raw of
+    (pre, post)
+      | Text.null pre -> (Nothing, post)
+      | otherwise     -> (Just (Text.dropEnd 1 pre), post)
+
+-- | Project rows take precedence per @(pkg, mod, name)@; global rows
+-- fill in any triples the project does not cover.
+mergeShadow
+  :: [(Text, Text, Text, Text)]
+  -> [(Text, Text, Text, Text)]
+  -> [(Text, Text, Text, Text)]
+mergeShadow project global =
+  let key (p, m, n, _) = (p, m, n)
+      projectKeys = Set.fromList (map key project)
+  in project ++ filter (\r -> not (key r `Set.member` projectKeys)) global
 
 -- | Route a write to the DB picked by 'CacheOrigin'.  When the caller
 -- asks for 'OriginProject' but no project cache exists we fall back to

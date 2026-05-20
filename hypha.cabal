@@ -201,6 +201,7 @@ test-suite hypha-tests
     Unit.Mcp
     Unit.PackageCache
     Unit.PackageCacheFingerprint
+    Unit.PackageCacheLookup
   build-depends:
     , aeson
     , async

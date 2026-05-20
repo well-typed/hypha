@@ -21,6 +21,7 @@ module Hypha.Search.Cache
   , defaultCachePath
   , haveIndex
   , readIndex
+  , lookupRowsByName
   , writeIndex
   , readBlob
   , writeBlob
@@ -85,6 +86,26 @@ schema =
     \  ( k TEXT PRIMARY KEY NOT NULL \
     \  , v BLOB NOT NULL )"
   ]
+
+-- | Look up every row whose @name@ matches the given symbol.  When
+-- the caller supplies a module qualifier, filter by @mod@ too.  This
+-- is the SQL-only primitive; 'Hypha.Search.PackageCache.lookupByName'
+-- handles qualified-name parsing and project-shadows-global merging.
+lookupRowsByName
+  :: IndexCache
+  -> Text                                  -- ^ symbol name
+  -> Maybe Text                            -- ^ optional module qualifier
+  -> IO [(Text, Text, Text, Text)]
+lookupRowsByName c name mMod = case mMod of
+  Nothing ->
+    queryNamed (icConn c)
+      "SELECT pkg, mod, name, sig FROM pkg_index WHERE name = :n"
+      [":n" := name]
+  Just modT ->
+    queryNamed (icConn c)
+      "SELECT pkg, mod, name, sig FROM pkg_index \
+      \WHERE name = :n AND mod = :m"
+      [":n" := name, ":m" := modT]
 
 withWrite :: IndexCache -> IO a -> IO a
 withWrite c io = withMVar (icLock c) (\_ -> io)
