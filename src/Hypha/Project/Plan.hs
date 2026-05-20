@@ -6,13 +6,20 @@ module Hypha.Project.Plan
     PlanError (..)
     -- * Loading
   , loadBuildPlan
+    -- * Staleness
+  , planHash
   ) where
 
 import Control.Exception (IOException, try)
+import qualified Crypto.Hash.SHA256 as SHA256
+import qualified Data.ByteString.Base16 as Base16
+import Data.List (sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text
 
 import qualified Cabal.Plan as CP
 
@@ -159,3 +166,20 @@ toPackageId (CP.PkgId (CP.PkgName name) ver) =
 firstJust :: Maybe a -> Maybe a -> Maybe a
 firstJust (Just x) _ = Just x
 firstJust Nothing  y = y
+
+-- | SHA-256 (hex) over the in-memory plan.  Used as the staleness
+-- stamp for the local Hoogle DB: when the set of pinned
+-- @(pkg, version)@ pairs changes, the hash changes too.  We hash the
+-- canonical form rather than the on-disk @plan.json@ so that
+-- semantically identical plans produce identical hashes.
+planHash :: BuildPlan -> Text
+planHash bp =
+  let pids = sort
+        [ unPackageName (pkgName (puId u))
+          <> "-"
+          <> unVersion (pkgVersion (puId u))
+        | u <- Map.elems (bpUnits bp)
+        ]
+      payload = Text.encodeUtf8 (Text.unlines pids)
+      digest  = SHA256.hash payload
+  in Text.decodeUtf8 (Base16.encode digest)
