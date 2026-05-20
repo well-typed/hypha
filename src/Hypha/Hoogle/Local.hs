@@ -17,6 +17,7 @@ module Hypha.Hoogle.Local
   , HaddockRequest (..)
   , HaddockError (..)
   , HaddockRunner (..)
+  , defaultHaddockRunner
   , collectTxtForUnit
     -- * Internals exposed for tests + downstream wiring
   , scavengeStoreTxt
@@ -30,7 +31,9 @@ import qualified Data.Text as Text
 import System.Directory
   ( XdgDirectory (..), createDirectoryIfMissing, doesDirectoryExist
   , doesFileExist, getXdgDirectory, listDirectory )
-import System.FilePath ((</>))
+import System.Exit (ExitCode (..))
+import System.FilePath ((</>), takeDirectory, takeExtension)
+import System.Process (readProcessWithExitCode)
 
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
 import Hypha.Types.PackageId
@@ -155,6 +158,50 @@ haddockOutputPath pid = do
             <> ".txt"
   createDirectoryIfMissing True outDir
   pure (outDir </> file)
+
+-- | Default runner: shells to the @haddock@ binary with @--hoogle@.
+-- The binary is expected on @PATH@ (ships with every GHCup install).
+-- When absent, the runner returns 'HaddockError'; the caller decides
+-- whether to fall back to remote-only operation.
+--
+-- We deliberately do NOT pass GHC package-db flags here: by the time
+-- hypha runs, the project has been built, so @haddock@ inherits the
+-- right environment.  When that assumption breaks the runner fails
+-- and the failure is surfaced as a structured warning rather than a
+-- crash.
+defaultHaddockRunner :: HaddockRunner
+defaultHaddockRunner = HaddockRunner $ \req -> do
+  files <- enumerateHsFiles (hrSrcDirs req)
+  case files of
+    [] -> pure (Left (HaddockError "no .hs files found"))
+    _  -> do
+      (ec, _out, err) <- readProcessWithExitCode "haddock"
+        ( ["--hoogle", "-o", takeDirectory (hrOutput req)]
+        ++ files ) ""
+      case ec of
+        ExitSuccess -> do
+          ok <- doesFileExist (hrOutput req)
+          if ok
+            then pure (Right (hrOutput req))
+            else pure (Left (HaddockError "haddock produced no output"))
+        ExitFailure _ -> pure (Left (HaddockError (Text.pack err)))
+
+enumerateHsFiles :: [FilePath] -> IO [FilePath]
+enumerateHsFiles = fmap concat . mapM walk
+  where
+    walk root = do
+      ok <- doesDirectoryExist root
+      if not ok then pure [] else walkDir root
+    walkDir d = do
+      entries <- listDirectory d
+      fmap concat $ mapM (visit d) entries
+    visit parent name = do
+      let p = parent </> name
+      isDir <- doesDirectoryExist p
+      if isDir
+        then walkDir p
+        else if takeExtension p `elem` [".hs", ".lhs"]
+               then pure [p] else pure []
 
 -- | Stub: subsequent tasks fill in the generation lifecycle.  For
 -- now, every query collapses to an empty result list.
