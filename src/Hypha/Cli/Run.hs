@@ -292,12 +292,13 @@ runServerInteractive flags port mBind prebuild jobs = do
       let opts = Server.ServerOpts ba prebuild jobs
       e <- withResolver flags $ \(resolver, env) -> do
         eRoot <- discoverProjectRoot (gfProjectDir flags)
+        let mRoot = either (const Nothing) Just eRoot
         plan  <- case eRoot of
           Left _    -> pure emptyBuildPlan
           Right rt  -> either (const emptyBuildPlan) id <$> loadBuildPlan rt
         hclient <- mkHackageClientForFlags flags
         hoogle  <- mkHoogleForFlags flags
-        r <- Server.runServer plan env hclient resolver hoogle opts
+        r <- Server.runServer mRoot plan env hclient resolver hoogle opts
         case r of
           Left be   -> pure (Left (UserError (Text.pack (renderBindError be))))
           Right ()  -> pure (Right ())

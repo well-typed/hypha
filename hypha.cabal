@@ -107,6 +107,7 @@ library
     Hypha.Server.Ui.Source
     Hypha.Package.Resolver
     Hypha.Search.Cache
+    Hypha.Search.PackageCache
     Hypha.Search.Fuzzy
     Hypha.Source.Extract
     Hypha.Source.Locate
@@ -196,6 +197,7 @@ test-suite hypha-tests
     Unit.ServerSlots
     Property.HaddockRewrite
     Unit.Mcp
+    Unit.PackageCache
   build-depends:
     , aeson
     , async

@@ -44,7 +44,8 @@ import Hypha.Package.Resolver
 import Data.List (sortOn)
 import Data.Ord (Down (..))
 import qualified Hypha.Project.Components as Comp
-import qualified Hypha.Search.Cache as Cache
+import qualified Hypha.Search.PackageCache as Cache
+import Hypha.Search.PackageCache (CacheOrigin (..))
 import qualified Hypha.Search.Fuzzy as Fuzzy
 import qualified Hypha.Server.App as App
 import qualified Hypha.Server.Haddock.Rewrite as Rewrite
@@ -52,7 +53,7 @@ import qualified Hypha.Server.Slots as Slots
 import qualified Hypha.Source.Extract as Extract
 import qualified Hypha.Source.Locate as Locate
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PlannedUnit (..), lookupUnit )
+  ( BuildPlan (..), PlannedUnit (..), ProjectRoot, lookupUnit )
 import Hypha.Types.ComponentName
   ( ComponentName (..), cnKind, cnPackage, parseComponentName )
 import Hypha.Types.Doc (DocText (..))
@@ -104,15 +105,16 @@ parseBind raw =
 -- | Boot the server.  Returns 'Left' on bind refusal; otherwise blocks
 -- inside Warp's event loop.
 runServer
-  :: BuildPlan
+  :: Maybe ProjectRoot
+  -> BuildPlan
   -> BuildEnv IO
   -> HackageClient IO
   -> PackageResolver IO
   -> Hoogle IO
   -> ServerOpts
   -> IO (Either BindError ())
-runServer plan env hclient resolver hoogle opts = do
-  cfg <- buildServerConfig plan env hclient resolver hoogle
+runServer mRoot plan env hclient resolver hoogle opts = do
+  cfg <- buildServerConfig mRoot plan env hclient resolver hoogle
   hPutStrLn stderr
     ( "hypha server listening on http://" <> baHost (soBind opts)
    <> ":" <> show (baPort (soBind opts))
@@ -146,13 +148,14 @@ planPackageIds = map puId . Map.elems . bpUnits
 -- | Assemble the 'ServerConfig' callbacks that connect the WAI app to the
 -- resolver, build env, and Hoogle.
 buildServerConfig
-  :: BuildPlan
+  :: Maybe ProjectRoot
+  -> BuildPlan
   -> BuildEnv IO
   -> HackageClient IO
   -> PackageResolver IO
   -> Hoogle IO
   -> IO App.ServerConfig
-buildServerConfig plan _env _hclient resolver _hoogle = do
+buildServerConfig mRoot plan _env _hclient resolver _hoogle = do
   let pids     = planPackageIds plan
       packages = concatMap (componentNames plan) pids
   slots <- Slots.initialiseSlots pids
@@ -165,7 +168,7 @@ buildServerConfig plan _env _hclient resolver _hoogle = do
   readyRef    <- IORef.newIORef False
   doneRef     <- IORef.newIORef (0 :: Int)
   totalRef    <- IORef.newIORef (0 :: Int)
-  cache       <- Cache.defaultCachePath >>= Cache.openIndexCache
+  cache       <- Cache.openPackageCache mRoot
   -- Hydrate from the on-disk cache synchronously before the server
   -- accepts requests so the common (warm) path renders results
   -- immediately on the first keystroke.  Anything not yet cached gets
@@ -380,7 +383,7 @@ componentsForUnit plan pid d =
 -- background indexer rebuilds the whole set.
 hydrateFromCache
   :: BuildPlan
-  -> Cache.IndexCache
+  -> Cache.HyphaPackageCache
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
   -> IO [PackageId]
@@ -395,7 +398,7 @@ hydrateFromCache plan cache pids ref = go [] pids
         []  -> go (pid : missing) rest
         _   -> do
           let keys = [ componentKey pkgT k | k <- kinds ]
-          hits <- mapM (\k -> Cache.haveIndex cache k verT) keys
+          hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
           if and hits
             then do
               mapM_ (loadKey verT) keys
@@ -403,7 +406,7 @@ hydrateFromCache plan cache pids ref = go [] pids
             else go (pid : missing) rest
 
     loadKey verT k = do
-      rows <- Cache.readIndex cache k verT
+      rows <- Cache.readCachedIndex cache k verT
       let indexed =
             [ Fuzzy.mkIndexedRow p m n s | (p, m, n, s) <- rows ]
       indexed `seq`
@@ -429,7 +432,7 @@ hydrateFromCache plan cache pids ref = go [] pids
 -- the O(|index|) behaviour of @old ++ rows@.
 buildAndCacheIndex
   :: BuildPlan
-  -> Cache.IndexCache
+  -> Cache.HyphaPackageCache
   -> PackageResolver IO
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
@@ -438,6 +441,12 @@ buildAndCacheIndex
 buildAndCacheIndex plan cache resolver pids ref doneRef =
   mapM_ indexUnit pids
   where
+    -- Local + source-repository-package units land in the project DB;
+    -- everything else (store packages) goes to the shared global DB.
+    originFor :: PackageId -> CacheOrigin
+    originFor pid = case lookupUnit (pkgName pid) plan of
+      Just u | puIsLocal u -> OriginProject
+      _                    -> OriginGlobal
     -- The done counter bumps once per /unit/, not per component, so
     -- the progress bar continues to read in package units.
     bump = IORef.atomicModifyIORef' doneRef (\n -> (n + 1, ()))
@@ -463,7 +472,7 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
                      ]
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
-      Cache.writeIndex cache compKey verT flatRows
+      Cache.writeCachedIndex cache (originFor pid) compKey verT flatRows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
