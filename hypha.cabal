@@ -183,6 +183,8 @@ test-suite hypha-tests
     Golden.Versions
     Golden.Source
     Property.ComponentName
+    Property.LookupCascade
+    Property.LookupOutcomeShape
     Property.HackageCache
     Property.OutputJson
     Property.SymbolPath

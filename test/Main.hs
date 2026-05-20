@@ -9,6 +9,8 @@ import qualified Golden.Source
 import qualified Golden.Symbol
 import qualified Golden.Versions
 import qualified Property.ComponentName
+import qualified Property.LookupCascade
+import qualified Property.LookupOutcomeShape
 import qualified Property.HackageCache
 import qualified Property.HaddockRewrite
 import qualified Property.OutputJson
@@ -44,6 +46,8 @@ main = defaultMain (testGroup "hypha"
   , Golden.Symbol.tests
   , Golden.Versions.tests
   , Property.ComponentName.tests
+  , Property.LookupCascade.tests
+  , Property.LookupOutcomeShape.tests
   , Property.HaddockRewrite.tests
   , Property.SymbolPath.tests
   , Property.HackageCache.tests
