@@ -315,14 +315,6 @@ Endpoints:
 | `/haddock/<pkg>-<ver>/...` | Rewritten Haddock HTML |
 | `/healthz` | `ok` (plain text) |
 
-## Mantra
-
-> An LLM doesn't need or care about fancy Haddock HTML pages — it cares
-> about the source code, which also contains the comments (the
-> documentation). That is what an LLM needs to learn the shape of a
-> project. Humans need visuals. `hypha` gives both surfaces the same
-> data through the same code.
-
 ## MCP Host Integration
 
 `hypha-mcp` is a thin JSON-RPC 2.0 stdio shim. Today it exposes a
@@ -330,7 +322,8 @@ single MCP tool — `hypha.exec` — that takes a CLI argv array and
 shells out to the `hypha` binary, returning whatever JSON the CLI
 emits. Per-subcommand MCP tools are a planned follow-up.
 
-Add it to your MCP client:
+In case your AI harness of choice doesn't support Claude plugins,
+you can still add `hypha-mcp` as an MCP client:
 
 **Claude Code** — if you installed the [Claude Code plugin](#claude-code-plugin),
 `hypha-mcp` is registered for you on `/plugin install`; no manual config
