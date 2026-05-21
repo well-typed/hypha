@@ -84,10 +84,11 @@ that auto-loads a skill teaching Claude to prefer the `hypha` CLI over
 grepping of `~/.cabal/store`. The plugin lives at the root of this repo
 (`.claude-plugin/{plugin,marketplace}.json` + `skills/hypha-haskell/SKILL.md`).
 
-**Prerequisite:** the `hypha` (and optionally `hypha-mcp`) binary must
-already be on `$PATH` — install per the [From source](#from-source-requires-ghc--96)
-section above first. The plugin only ships skill content and slash
-commands; it does **not** vendor the binary.
+**Prerequisite:** the `hypha` and `hypha-mcp` binaries must already be on
+`$PATH` — install per the [From source](#from-source-requires-ghc--96)
+section above first. The plugin ships skill content, slash commands, and
+an `mcpServers` declaration that auto-registers `hypha-mcp` with Claude
+Code on install; it does **not** vendor the binaries themselves.
 
 #### Option A — install from the Well-Typed marketplace (recommended)
 
@@ -331,7 +332,10 @@ emits. Per-subcommand MCP tools are a planned follow-up.
 
 Add it to your MCP client:
 
-**Claude Code** (`~/.claude.json`):
+**Claude Code** — if you installed the [Claude Code plugin](#claude-code-plugin),
+`hypha-mcp` is registered for you on `/plugin install`; no manual config
+needed. To wire it up manually, add to `~/.claude.json`:
+
 ```json
 {
   "mcpServers": {
