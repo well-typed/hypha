@@ -1,0 +1,12 @@
+{
+  "name": "hypha",
+  "version": "0.2.0",
+  "description": "Haskell-aware code/doc browser for AI agents. Teaches Claude to query Hackage/Hoogle via the hypha CLI instead of WebFetch.",
+  "author": {
+    "name": "Well-Typed",
+    "url": "https://well-typed.com"
+  },
+  "homepage": "https://github.com/well-typed/hypha",
+  "license": "BSD-3-Clause",
+  "keywords": ["haskell", "hackage", "hoogle", "cabal", "well-typed"]
+}

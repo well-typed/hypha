@@ -18,6 +18,12 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Claude Code plugin scaffold (`.claude-plugin/plugin.json`) with a
+  `hypha-haskell` skill (`skills/hypha-haskell/SKILL.md`) that auto-loads
+  on Haskell projects and teaches the agent to prefer the `hypha` CLI
+  over `WebFetch` on hackage.haskell.org/hoogle.haskell.org and over
+  ad-hoc grepping of `~/.cabal/store`. Includes a `/hypha-lookup` slash
+  command shortcut.
 - `hypha lookup <query>` — single tiered symbol-resolution command.
   Short-circuiting cascade with a structured `OutcomeEnvelope` on
   every result, including failures (`NOT_FOUND`, `HOOGLE_OFFLINE`,
