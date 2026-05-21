@@ -76,6 +76,61 @@ cabal install exe:hypha-mcp
 nix run gitlab:well-typed/hypha#hypha -- --help
 ```
 
+### Claude Code plugin
+
+`hypha` ships as a [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins)
+that auto-loads a skill teaching Claude to prefer the `hypha` CLI over
+`WebFetch` on hackage.haskell.org / hoogle.haskell.org and over ad-hoc
+grepping of `~/.cabal/store`. The plugin lives at the root of this repo
+(`.claude-plugin/{plugin,marketplace}.json` + `skills/hypha-haskell/SKILL.md`).
+
+**Prerequisite:** the `hypha` (and optionally `hypha-mcp`) binary must
+already be on `$PATH` — install per the [From source](#from-source-requires-ghc--96)
+section above first. The plugin only ships skill content and slash
+commands; it does **not** vendor the binary.
+
+#### Option A — install from the Well-Typed marketplace (recommended)
+
+Inside a Claude Code session:
+
+```
+/plugin marketplace add https://gitlab.well-typed.com/well-typed/hypha.git
+/plugin install hypha@well-typed
+```
+
+> The first command opens an interactive TUI prompting you to confirm
+> the marketplace add. Accept it, then run the second command.
+
+#### Option B — install from a local clone
+
+If you already have the repo checked out (e.g. for development):
+
+```
+/plugin marketplace add /absolute/path/to/hypha
+/plugin install hypha@well-typed
+```
+
+Use the absolute path; Claude Code resolves the marketplace from the
+directory's `.claude-plugin/marketplace.json`.
+
+#### Verify the install
+
+```
+/plugin list
+```
+
+You should see `hypha@well-typed` enabled. Open any `.hs` or `.cabal`
+file and Claude will auto-trigger the `hypha-haskell` skill on the next
+Haskell question. The `/hypha-lookup <symbol-or-signature>` slash command
+becomes available too.
+
+#### Uninstall
+
+```
+/plugin uninstall hypha@well-typed
+/plugin marketplace remove well-typed
+```
+
 ## Quick Start
 
 ### 1. Materialise a build plan
@@ -303,36 +358,6 @@ Add it to your MCP client:
 **Generic MCP client** — point any MCP-compatible host at the
 `hypha-mcp` executable over stdio. It speaks JSON-RPC 2.0 and exposes
 the `hypha.exec` tool described above.
-
-## Claude Code Plugin
-
-Hypha ships as a [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins)
-that auto-loads a skill teaching Claude to prefer `hypha` over
-`WebFetch`/grep for any Haskell question. The plugin lives at the root of
-this repo (`.claude-plugin/plugin.json` + `skills/hypha-haskell/SKILL.md`).
-
-**Prerequisite:** the `hypha` binary must be on `$PATH`. Build/install it
-as described in [Installation](#installation) first.
-
-Install the plugin into your user-scoped Claude Code config:
-
-```bash
-git clone https://github.com/well-typed/hypha.git
-cd hypha
-claude /plugin install .
-```
-
-Or, if Well-Typed's internal plugin marketplace is configured:
-
-```
-/plugin marketplace add well-typed/hypha
-/plugin install hypha
-```
-
-Once installed, Claude Code will auto-trigger the `hypha-haskell` skill
-on `.hs`/`.cabal` edits and Haskell questions, and will route lookups
-through the `hypha` CLI (or the `hypha-mcp` tool if configured) instead
-of fetching Hackage HTML.
 
 ## Exit Codes
 

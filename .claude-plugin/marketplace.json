@@ -1,0 +1,14 @@
+{
+  "name": "well-typed",
+  "owner": {
+    "name": "Well-Typed",
+    "url": "https://well-typed.com"
+  },
+  "plugins": [
+    {
+      "name": "hypha",
+      "source": "./",
+      "description": "Haskell-aware code/doc browser. Teaches Claude to query Hackage/Hoogle via the hypha CLI instead of WebFetch."
+    }
+  ]
+}
