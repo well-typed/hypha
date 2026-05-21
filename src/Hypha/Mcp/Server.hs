@@ -173,14 +173,38 @@ toolsListResult = object
 hyphaExecTool :: Value
 hyphaExecTool = object
   [ "name"        .= ("hypha.exec" :: Text)
-  , "description" .= ("Run a hypha CLI command and return its JSON envelope." :: Text)
+  , "description" .= (Text.unlines
+      [ "Run a hypha CLI command and return its JSON envelope."
+      , ""
+      , "Use for any Haskell lookup against the current cabal project: a"
+      , "function's type, a module's exports, a symbol's source or"
+      , "Haddock, a package's pinned version, dependency graphs. Prefer"
+      , "this over WebFetch of hackage.haskell.org or hoogle.haskell.org."
+      , ""
+      , "Subcommands: lookup, package, module, symbol, source, versions,"
+      , "deps, doctor.  Note: `hypha search` does NOT exist — use"
+      , "`hypha lookup` for tiered symbol resolution."
+      , ""
+      , "Call shape: `args` is the argv array (NOT a bare query string)."
+      , "Examples:"
+      , "  {\"args\": [\"lookup\", \"filterM\"]}"
+      , "  {\"args\": [\"lookup\", \"a -> Maybe a\", \"--select\", \"sig\"]}"
+      , "  {\"args\": [\"symbol\", \"aeson/Data.Aeson/encode\","
+      , "             \"--select\", \"sig,haddock\"]}"
+      , "  {\"args\": [\"source\", \"containers/Data.Map.Strict/insert\"]}"
+      ])
   , "inputSchema" .= object
       [ "type"       .= ("object" :: Text)
       , "properties" .= object
           [ "args" .= object
               [ "type"        .= ("array" :: Text)
               , "items"       .= object [ "type" .= ("string" :: Text) ]
-              , "description" .= ("hypha CLI arguments as strings" :: Text)
+              , "description" .= (Text.unlines
+                  [ "Argv array passed to the hypha binary."
+                  , "MUST be an array of strings (e.g."
+                  , "[\"lookup\", \"ToJSON\", \"--select\", \"sig\"])."
+                  , "MUST NOT be a bare query string."
+                  ])
               ]
           ]
       , "required" .= ([ "args" ] :: [Text])

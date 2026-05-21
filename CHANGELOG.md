@@ -6,6 +6,18 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `hypha-mcp`'s `hypha.exec` tool description spells out the argv-array
+  shape with examples and lists the available subcommands, so smaller
+  / less obedient MCP clients (GLM, Llama, …) don't invent calling
+  conventions or non-existent subcommands like `hypha search`.
+- SKILL.md gains a "Commands that do NOT exist" subsection and an
+  explicit calling-convention block for `hypha.exec`.
+- README sandbox troubleshooting now mentions `/etc/ssl/certs` (TLS to
+  the remote Hoogle) and includes a generic `sbox` recipe for non
+  Claude-Code harnesses.
+
 ### Fixed
 
 - `hypha lookup` no longer aborts with a misleading `NETWORK_ERROR`

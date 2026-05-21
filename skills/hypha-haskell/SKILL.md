@@ -120,6 +120,29 @@ If `hypha-mcp` is configured as an MCP server in the client, prefer the
 `hypha.exec` tool call over a `Bash` invocation — it avoids re-parsing
 JSON through the shell.
 
+**Calling convention.** `hypha.exec` takes a single field `args` that is
+the **argv array** passed to the `hypha` binary. It is **not** a bare
+query string. Examples:
+
+```json
+{"args": ["lookup", "filterM"]}
+{"args": ["lookup", "a -> Maybe a", "--select", "sig"]}
+{"args": ["symbol", "aeson/Data.Aeson/encode", "--select", "sig,haddock"]}
+{"args": ["source", "containers/Data.Map.Strict/insert"]}
+```
+
+## Commands that do NOT exist
+
+Do not invent these — they have been removed or never existed:
+
+- `hypha search` — removed in 0.2.0. Use `hypha lookup` for tiered
+  symbol/type-signature resolution.
+- `hypha whatprovides` — removed in 0.2.0. Use `hypha lookup`.
+- `hypha install`, `hypha update` — `hypha` does not manage packages;
+  use `cabal` for that.
+- `--global` — flag removed in 0.2.0; the cascade decides which tier
+  answers the query.
+
 ## Failure modes
 
 - **`plan.json not found`** → user hasn't run `cabal build` yet, or you're

@@ -389,15 +389,38 @@ Fix: widen the sandbox's read allowlist in your Claude Code
 `settings.json`. The exact key depends on your Claude Code version,
 but the directories `hypha` needs to see are typically:
 
-- `~/.ghcup/**`
-- `~/.cabal/store/**`
-- `~/.cache/cabal/**`
+- `~/.ghcup/**` — required if hypha needs to spawn `haddock`
+- `~/.cabal/store/**` — required for `hypha source` / `hypha symbol`
+- `~/.cache/cabal/**` — speeds up the Hackage HTTP cache
+- `/etc/ssl/certs/**` (or `$SSL_CERT_FILE`) — required for TLS to
+  hackage.haskell.org / hoogle.haskell.org; without it the remote
+  tier fails with `HandshakeFailed ... certificate has unknown CA`
 
 `hypha` is designed to degrade gracefully here: the `lookup` cascade
 falls through to remote Hoogle when the local Hoogle tier cannot run
 `haddock`, and reports `TOOL_MISSING` (exit `8`) rather than the
 misleading `NETWORK_ERROR`. Widening the sandbox just restores the
 local-fast path.
+
+### Running under other harnesses (pi, sbox, …)
+
+The same class of failures hits any sandboxed harness driving hypha,
+not just Claude Code. If you wrap `hypha` (or an agent that calls it)
+in `sbox`, `bwrap`, `firejail`, or similar, expose the same paths as
+read-only mounts. A minimal recipe for `sbox`:
+
+```bash
+sbox \
+  --rw  /path/to/your-project \
+  --ro  ~/.ghcup \
+  --ro  ~/.cabal/store \
+  --ro  /etc/ssl/certs \
+  -- <your-agent> --provider … --model …
+```
+
+Plus whatever paths the harness itself needs (e.g. `~/.pi` for the
+`pi` harness's model config). Without these, hypha sees `TOOL_MISSING`
+for the toolchain and TLS failures for the remote tier.
 
 ## Caching
 
