@@ -189,6 +189,7 @@ test-suite hypha-tests
     Unit.BuildEnvCompose
     Unit.Components
     Unit.Doctor
+    Unit.Errors
     Unit.Hackage
     Unit.Module
     Unit.Modules

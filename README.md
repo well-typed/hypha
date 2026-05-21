@@ -372,7 +372,39 @@ the `hypha.exec` tool described above.
 | `3` | Not found (symbol/package absent across plan → store → Hackage) |
 | `4` | Network error (offline cache miss, HTTP 429/503, transport failure) |
 | `5` | Cache / on-disk corruption |
-| `7` | Environment error (no `plan.json`, missing GHC/Haddock, unreachable store) |
+| `7` | Environment error (no `plan.json`, unreachable store) |
+| `8` | Tool missing — required external binary (`haddock`, `cabal`, `ghc`) not on `$PATH` |
+
+## Troubleshooting
+
+### Running under Claude Code's sandbox
+
+Claude Code runs `Bash` commands inside a filesystem sandbox that may
+hide your toolchain directories from the spawned process. Symptoms:
+
+- `hypha lookup` reports `TOOL_MISSING` for `haddock` (or `cabal`,
+  `ghc`) even though those binaries work in your terminal.
+- `hypha source` returns empty results that you can reproduce
+  manually.
+
+Cause: `~/.ghcup`, `~/.cabal/store`, and similar paths are not in the
+sandbox's read allowlist. From the sandboxed process's view they
+return `ENOENT`, so PATH-resolved binaries appear missing and
+cabal-store reads find nothing.
+
+Fix: widen the sandbox's read allowlist in your Claude Code
+`settings.json`. The exact key depends on your Claude Code version,
+but the directories `hypha` needs to see are typically:
+
+- `~/.ghcup/**`
+- `~/.cabal/store/**`
+- `~/.cache/cabal/**`
+
+`hypha` is designed to degrade gracefully here: the `lookup` cascade
+falls through to remote Hoogle when the local Hoogle tier cannot run
+`haddock`, and reports `TOOL_MISSING` (exit `8`) rather than the
+misleading `NETWORK_ERROR`. Widening the sandbox just restores the
+local-fast path.
 
 ## Caching
 

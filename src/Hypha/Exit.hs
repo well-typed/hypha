@@ -9,6 +9,7 @@ module Hypha.Exit
   , exitNetworkError
   , exitCacheError
   , exitEnvironmentError
+  , exitToolMissing
     -- * Conversion
   , toSystemExitCode
   ) where
@@ -44,6 +45,13 @@ exitCacheError = ExitCode 5
 -- | Environment error — no plan.json, missing ghc/haddock, store unreachable, Stack.
 exitEnvironmentError :: ExitCode
 exitEnvironmentError = ExitCode 7
+
+-- | Tool missing — a required external binary (haddock, cabal, ghc) was
+-- not found on @PATH@.  Distinct from 'exitEnvironmentError' because it
+-- signals to agents that the failure is recoverable by installing or
+-- exposing the tool, not by reconfiguring the project.
+exitToolMissing :: ExitCode
+exitToolMissing = ExitCode 8
 
 -- | Convert our typed 'ExitCode' to 'System.Exit.ExitCode'.
 toSystemExitCode :: ExitCode -> System.ExitCode

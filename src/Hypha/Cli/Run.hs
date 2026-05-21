@@ -10,9 +10,11 @@ module Hypha.Cli.Run
   , withPlan
   , dispatch
   , humanFromValue
+  , classifyLookupException
   ) where
 
-import Control.Exception (try, SomeException)
+import Control.Exception (IOException, try, SomeException, fromException)
+import System.IO.Error (isDoesNotExistError)
 import Data.Aeson (Value)
 import qualified Data.Aeson as Aeson
 import Data.Aeson.Key (Key)
@@ -388,8 +390,22 @@ runLookupCommand flags q = do
           }
     Lookup.runLookup cache hoogleLocal opts q
   case result of
-    Left e  -> pure (Left (NetworkError (Text.pack (show e))))
+    Left e  -> pure (Left (classifyLookupException e))
     Right o -> pure (Right o)
+
+-- | Classify a 'SomeException' raised inside the @hypha lookup@
+-- pipeline.  An @ENOENT@ from a child-process spawn (typically the
+-- @haddock@ binary missing on @PATH@, or hidden by a sandbox) becomes
+-- 'ToolMissing' so callers can distinguish "this environment lacks a
+-- required tool" from "the network died" — and so the CLI exits with
+-- the dedicated code instead of pretending it was a network error.
+classifyLookupException :: SomeException -> HyphaError
+classifyLookupException se
+  | Just (ioe :: IOException) <- fromException se
+  , isDoesNotExistError ioe
+  = ToolMissing (Text.pack (show ioe))
+  | otherwise
+  = NetworkError (Text.pack (show se))
 
 -- | Materialise the project Hoogle DB: load the plan, derive a
 -- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),
@@ -404,16 +420,23 @@ ensureProjectHoogle
   -> ProjectRoot
   -> IO ()
 ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
-  ePlan <- loadBuildPlan root
-  case ePlan of
-    Left _     -> pure ()
-    Right plan -> do
-      let units = planToLocalUnits plan
-          ph    = planHash plan
-      fp <- aggregateFingerprint units
-      let stamp = HogLocal.HoogleStamp ph fp
-      HogLocal.ensureFresh HogLocal.defaultHaddockRunner
-                           storeRoot distRoot dotHypha stamp units
+  -- Best-effort: ANY failure here (missing toolchain in a sandbox,
+  -- IO errors regenerating the DB, Hoogle library panics) must not
+  -- abort the lookup. The cascade in 'Lookup.runLookup' is designed
+  -- to fall through to remote Hoogle when Tier 2 yields no hits, so
+  -- we swallow the exception and let it proceed.
+  _ <- try @SomeException $ do
+    ePlan <- loadBuildPlan root
+    case ePlan of
+      Left _     -> pure ()
+      Right plan -> do
+        let units = planToLocalUnits plan
+            ph    = planHash plan
+        fp <- aggregateFingerprint units
+        let stamp = HogLocal.HoogleStamp ph fp
+        HogLocal.ensureFresh HogLocal.defaultHaddockRunner
+                             storeRoot distRoot dotHypha stamp units
+  pure ()
 
 planToLocalUnits :: BuildPlan -> [HogLocal.LocalUnit]
 planToLocalUnits plan =

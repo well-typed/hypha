@@ -6,6 +6,21 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `hypha lookup` no longer aborts with a misleading `NETWORK_ERROR`
+  when the local Hoogle tier cannot run `haddock` (e.g. when the
+  binary is genuinely missing, or when Claude Code's sandbox hides
+  `~/.ghcup` from the spawned process). The cascade now falls through
+  to remote Hoogle, and any genuine `ENOENT` from a child-process
+  spawn is classified as `TOOL_MISSING` (exit `8`).
+- `defaultHaddockRunner` catches `IOException` around the `haddock`
+  invocation and returns a structured `HaddockError` instead of
+  propagating the exception.
+- `ensureProjectHoogle` is now actually best-effort (matching its
+  docstring): any failure regenerating the project Hoogle DB is
+  swallowed so the lookup cascade continues to the remote tier.
+
 ## [0.2.0] — unreleased
 
 ### Breaking
@@ -18,6 +33,12 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `TOOL_MISSING` error variant (exit code `8`) for the case where a
+  required external binary (`haddock`, `cabal`, `ghc`, …) is not on
+  `$PATH` — distinguishes this from `NETWORK_ERROR` (was previously
+  misclassified) and from `ENV_ERROR` (broader environment problems).
+  Updated SKILL.md failure-modes table and added a "Running under
+  Claude Code's sandbox" troubleshooting section to the README.
 - Claude Code plugin scaffold (`.claude-plugin/plugin.json`) with a
   `hypha-haskell` skill (`skills/hypha-haskell/SKILL.md`) that auto-loads
   on Haskell projects and teaches the agent to prefer the `hypha` CLI

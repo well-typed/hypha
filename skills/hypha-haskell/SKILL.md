@@ -128,6 +128,20 @@ JSON through the shell.
   Confirm spelling, or check `hypha deps` from a package that depends on it.
 - **Hoogle results stale** → run `hypha doctor`; the local Hoogle DB
   regenerates lazily.
+- **`TOOL_MISSING`** (exit `8`, e.g. `haddock binary not found on PATH`) →
+  required external binary is unavailable to `hypha`. Usually means one
+  of (a) the user hasn't installed the GHC toolchain in this shell, or
+  (b) Claude Code's sandbox is hiding `~/.ghcup` / `~/.cabal` from the
+  spawned process even though the binary exists in the user's terminal.
+  **Do not** hallucinate the answer from memory. Instead:
+    1. Run `hypha doctor` and report what it found.
+    2. Re-run the original query — `hypha lookup` already falls through
+       to remote Hoogle on `TOOL_MISSING`; the failure usually only
+       affects `hypha source` / `hypha symbol`, which need the cabal
+       store.
+    3. Tell the user the binary is missing and (if relevant) point
+       them at the "Running under Claude Code's sandbox" section in
+       the hypha README.
 
 ## Anti-patterns
 

@@ -28,7 +28,8 @@ module Hypha.Hoogle.Local
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
-import Control.Exception (SomeException, try)
+import Control.Exception (IOException, SomeException, try)
+import System.IO.Error (isDoesNotExistError)
 import Control.Monad (when)
 import Data.List (isPrefixOf)
 import Data.Text (Text)
@@ -226,16 +227,24 @@ defaultHaddockRunner = HaddockRunner $ \req -> do
   case files of
     [] -> pure (Left (HaddockError "no .hs files found"))
     _  -> do
-      (ec, _out, err) <- readProcessWithExitCode "haddock"
+      r <- try @IOException $ readProcessWithExitCode "haddock"
         ( ["--hoogle", "-o", takeDirectory (hrOutput req)]
         ++ files ) ""
-      case ec of
-        ExitSuccess -> do
+      case r of
+        -- 'haddock' binary not on PATH (or hidden by an outer sandbox):
+        -- surface as a structured HaddockError so the caller can fall
+        -- back to remote tiers without crashing the whole command.
+        Left ioe | isDoesNotExistError ioe ->
+          pure (Left (HaddockError "haddock binary not found on PATH"))
+        Left ioe ->
+          pure (Left (HaddockError (Text.pack (show ioe))))
+        Right (ExitSuccess, _out, _err) -> do
           ok <- doesFileExist (hrOutput req)
           if ok
             then pure (Right (hrOutput req))
             else pure (Left (HaddockError "haddock produced no output"))
-        ExitFailure _ -> pure (Left (HaddockError (Text.pack err)))
+        Right (ExitFailure _, _out, err) ->
+          pure (Left (HaddockError (Text.pack err)))
 
 enumerateHsFiles :: [FilePath] -> IO [FilePath]
 enumerateHsFiles = fmap concat . mapM walk
