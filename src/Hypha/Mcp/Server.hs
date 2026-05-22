@@ -14,6 +14,7 @@ import Data.Aeson
   , object, (.=), (.:), (.:?)
   , eitherDecodeStrict, encode, withObject
   )
+import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
@@ -21,11 +22,12 @@ import Data.ByteString (ByteString)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TE
-import Data.Vector (toList)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.IO (hFlush, hIsEOF, hPutStrLn, stderr, stdin, stdout)
 import System.Process.Typed (proc, readProcess)
+
+import Hypha.Mcp.Tools (allTools, argvForTool)
 
 -- ---------------------------------------------------------------------------
 -- * JSON-RPC types
@@ -167,88 +169,57 @@ initializeResult = object
 -- | Tools/list response payload.
 toolsListResult :: Value
 toolsListResult = object
-  [ "tools" .= [ hyphaExecTool ]
-  ]
-
-hyphaExecTool :: Value
-hyphaExecTool = object
-  [ "name"        .= ("hypha.exec" :: Text)
-  , "description" .= (Text.unlines
-      [ "Run a hypha CLI command and return its JSON envelope."
-      , ""
-      , "Use for any Haskell lookup against the current cabal project: a"
-      , "function's type, a module's exports, a symbol's source or"
-      , "Haddock, a package's pinned version, dependency graphs. Prefer"
-      , "this over WebFetch of hackage.haskell.org or hoogle.haskell.org."
-      , ""
-      , "Subcommands: lookup, package, module, symbol, source, versions,"
-      , "deps, doctor.  Note: `hypha search` does NOT exist — use"
-      , "`hypha lookup` for tiered symbol resolution."
-      , ""
-      , "Call shape: `args` is the argv array (NOT a bare query string)."
-      , "Examples:"
-      , "  {\"args\": [\"lookup\", \"filterM\"]}"
-      , "  {\"args\": [\"lookup\", \"a -> Maybe a\", \"--select\", \"sig\"]}"
-      , "  {\"args\": [\"symbol\", \"aeson/Data.Aeson/encode\","
-      , "             \"--select\", \"sig,haddock\"]}"
-      , "  {\"args\": [\"source\", \"containers/Data.Map.Strict/insert\"]}"
-      ])
-  , "inputSchema" .= object
-      [ "type"       .= ("object" :: Text)
-      , "properties" .= object
-          [ "args" .= object
-              [ "type"        .= ("array" :: Text)
-              , "items"       .= object [ "type" .= ("string" :: Text) ]
-              , "description" .= (Text.unlines
-                  [ "Argv array passed to the hypha binary."
-                  , "MUST be an array of strings (e.g."
-                  , "[\"lookup\", \"ToJSON\", \"--select\", \"sig\"])."
-                  , "MUST NOT be a bare query string."
-                  ])
-              ]
-          ]
-      , "required" .= ([ "args" ] :: [Text])
-      ]
+  [ "tools" .= allTools
   ]
 
 -- ---------------------------------------------------------------------------
 -- * Tool execution
 
 -- | Handle a @tools/call@ request.
+--
+-- The MCP @tools/call@ params shape is
+-- @{ "name": "<tool>", "arguments": { ... } }@.  We dispatch on
+-- @name@ via "Hypha.Mcp.Tools.argvForTool" to obtain the @hypha@
+-- argv array, then shell out as before.
 handleToolCall :: Maybe Value -> Maybe Value -> IO JSONRPCResponse
-handleToolCall mReqId mParams = do
-  let args = parseArgs mParams
-  bin <- hyphaBinPath
-  (ec, out, err) <- execHypha bin (map Text.unpack args)
-  let exitCode = case ec of ExitSuccess -> 0; ExitFailure n -> n
-  let result = object
-        [ "content" .= [ object
-            [ "type" .= ("text" :: Text)
-            , "text" .= out
-            ]]
-        , "_meta" .= object
-            [ "exitCode" .= exitCode
-            , "stderr"   .= err
+handleToolCall mReqId mParams = case decodeToolCall mParams of
+  Left err -> pure (jsonError mReqId (-32602) err)
+  Right (toolName, toolArgs) -> case argvForTool toolName toolArgs of
+    Left err   -> pure (jsonError mReqId (-32602) err)
+    Right argv -> do
+      bin <- hyphaBinPath
+      (ec, out, err) <- execHypha bin (map Text.unpack argv)
+      let exitCode = case ec of ExitSuccess -> 0; ExitFailure n -> n
+      let result = object
+            [ "content" .= [ object
+                [ "type" .= ("text" :: Text)
+                , "text" .= out
+                ]]
+            , "_meta" .= object
+                [ "exitCode" .= exitCode
+                , "stderr"   .= err
+                ]
+            , "isError" .= (exitCode /= 0)
             ]
-        , "isError" .= (exitCode /= 0)
-        ]
-  pure (jsonSuccess mReqId result)
+      pure (jsonSuccess mReqId result)
 
--- | Extract the string array from @{"arguments": {"args": [...]}}@.
--- Also tolerates a flat @{"args": [...]}@ for testing convenience.
-parseArgs :: Maybe Value -> [Text]
-parseArgs = \case
-  Nothing -> []
-  Just (Object o) ->
-    -- The MCP tools/call params have the tool arguments under "arguments".
-    let inner = case KM.lookup "arguments" o of
-          Just (Object ao) -> ao
-          _                -> o
-    in case KM.lookup "args" inner of
-         Just (Array arr)  -> [ txt | String txt <- toList arr ]
-         Just (String raw) -> [raw]
-         _                 -> []
-  Just _ -> []
+-- | Decode a @tools/call@ params object into @(toolName, arguments)@.
+--
+-- For backwards compatibility, a missing @name@ is treated as a call
+-- to @hypha.exec@, and an outer @{"args": [...]}@ without an
+-- @arguments@ wrapper is hoisted into @arguments@.
+decodeToolCall :: Maybe Value -> Either Text (Text, Value)
+decodeToolCall = \case
+  Nothing -> Right ("hypha.exec", object [])
+  Just (Object o) -> do
+    let name = case KM.lookup (Key.fromText "name") o of
+          Just (String t) -> t
+          _               -> "hypha.exec"
+    let args = case KM.lookup (Key.fromText "arguments") o of
+          Just v  -> v
+          Nothing -> Object o
+    Right (name, args)
+  Just _ -> Left "`params` must be a JSON object"
 
 -- | Discover the path to the @hypha@ binary.
 --

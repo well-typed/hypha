@@ -46,6 +46,38 @@ follow-up question. Both are expensive.
 - **One tool, two surfaces.** Same code powers the CLI/MCP shim and the
   local doc-browser server, so agents and humans see the same data.
 
+## Design philosophy: cli-printing-press
+
+`hypha` is built to the principles laid out in
+[cli-printing-press](https://github.com/mvanhorn/cli-printing-press) —
+a manifesto for *agent-native* CLIs.  The relevant tenets and how
+`hypha` honours them:
+
+| cli-pp principle | hypha |
+|---|---|
+| **Agent-native by default** | Compact JSON is the default; `--human` is opt-in. |
+| **Typed exit codes** | `0` success, `2` user error, `3` not found, `4` network, `5` cache corruption, `7` environment, `8` tool missing — every failure is classifiable without parsing error text. |
+| **Local-first data layer** | SQLite caches (per-project + shared global), an on-disk Hoogle DB, ETag-revalidated Hackage HTTP cache, and a fuzzy index — all built so repeat queries stay off the network. |
+| **Compact mode for tokens** | Compact JSON is the *default*; `--select f1,f2` projects fields; `--full` is opt-in. No HTML noise. |
+| **Human + machine output modes** | `--human` for terminals, JSON for pipelines, HTMX-rendered HTML for the `server` UI — same data, three surfaces. |
+| **Actionable errors** | Every `OutcomeEnvelope` failure carries a stable `code` and an `actions` map suggesting the next command to try. |
+| **Verified, not vibes** | Property tests via `falsify`, golden JSON regressions via `tasty-golden`, edge cases via `tasty-hunit`. CI gates merges. |
+| **Non-obvious insight** | Symbols resolve to the canonical declaration even across re-exports and CPP `#ifdef` branches — the value that raw Hackage HTML cannot give you. |
+| **Dual interface from one spec** | The `hypha` CLI, the `hypha-mcp` JSON-RPC shim, and the `hypha server` HTML UI share one library — no duplicated client/store code. |
+
+**CLI vs MCP, the cli-pp split.**  cli-printing-press is explicit that
+*CLIs win for agents* (cheaper tokens, native to shell-trained LLMs)
+and *MCP wins for IDE auto-discovery*.  `hypha` follows that split:
+
+- **Agents should call `hypha` directly** through a shell tool.  The
+  Claude Code skill (`skills/hypha-haskell/SKILL.md`) tells the model
+  to prefer `Bash hypha …` over the MCP tools.
+- **`hypha-mcp` exists for IDE/MCP-only harnesses** (Claude Desktop,
+  Cursor, opencode without a shell).  It exposes one MCP tool per CLI
+  subcommand (`hypha.lookup`, `hypha.symbol`, …) so IDE auto-discovery
+  surfaces structured arguments; the generic `hypha.exec` remains as
+  an escape hatch.
+
 ## Features
 
 | Feature | Description |
@@ -55,7 +87,7 @@ follow-up question. Both are expensive.
 | **Token-efficient JSON** | Compact JSON by default; opt into more fields with `--full`, opt out with `--select`. No HTML noise. |
 | **Aggressive caching** | ETag-revalidated Hackage cache, persistent SQLite search index, on-disk source + Haddock caches. Drastically reduces HTTP traffic and repeat work. |
 | **Faithful source pointers** | Signatures + Haddock are re-extracted at the re-export target. Source links land on the canonical declaration, even across CPP `#ifdef` branches. |
-| **MCP server** | Ships `hypha-mcp` as an stdio MCP shim for Claude Code, opencode, and any MCP client. Today it exposes a single `hypha.exec` tool that shells through to the CLI; per-subcommand tools are planned. |
+| **MCP server** | Ships `hypha-mcp` as an stdio MCP shim for Claude Code, opencode, and any MCP client. Exposes one MCP tool per CLI subcommand (`hypha.lookup`, `hypha.symbol`, …) so IDEs see structured arguments, plus a generic `hypha.exec` escape hatch. |
 | **Local doc-browser server** | Optional HTTP server with a command-palette fuzzy search (FZF / Telescope style), shimmering "Building docs…" placeholder, top progress bar, and Haddock prose rendered to clean HTML. |
 
 ## Installation
@@ -317,10 +349,17 @@ Endpoints:
 
 ## MCP Host Integration
 
-`hypha-mcp` is a thin JSON-RPC 2.0 stdio shim. Today it exposes a
-single MCP tool — `hypha.exec` — that takes a CLI argv array and
-shells out to the `hypha` binary, returning whatever JSON the CLI
-emits. Per-subcommand MCP tools are a planned follow-up.
+`hypha-mcp` is a thin JSON-RPC 2.0 stdio shim. It exposes one MCP
+tool per CLI subcommand — `hypha.lookup`, `hypha.package`,
+`hypha.module`, `hypha.symbol`, `hypha.source`, `hypha.versions`,
+`hypha.deps`, `hypha.doctor` — each with a structured input schema
+that IDE clients can render as a form. A generic `hypha.exec` tool
+remains as an escape hatch for argv-level invocation.
+
+Per cli-printing-press: **agents in a shell-capable harness should
+call `hypha` directly via `Bash` / equivalent**, not via MCP. The
+MCP surface is here for IDE auto-discovery (Claude Desktop, Cursor)
+and for harnesses without a shell.
 
 In case your AI harness of choice doesn't support Claude plugins,
 you can still add `hypha-mcp` as an MCP client:

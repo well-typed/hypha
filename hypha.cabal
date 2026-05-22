@@ -65,6 +65,7 @@ library
     Hypha.Exit
     Hypha.Output.Outcome
     Hypha.Mcp.Server
+    Hypha.Mcp.Tools
     Hypha.Output.Actions
     Hypha.Output.Json
     Hypha.Output.Human
@@ -141,6 +142,7 @@ library
     , servant               >= 0.20
     , servant-server        >= 0.20
     , process               >= 1.6
+    , scientific            >= 0.3
     , wai                   >= 3.2
     , warp                  >= 3.3
     , prettyprinter-ansi-terminal >= 1.1

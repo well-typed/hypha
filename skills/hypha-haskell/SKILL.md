@@ -114,15 +114,29 @@ hypha deps mtl --reverse
 hypha lookup 'a -> Maybe a'
 ```
 
-## MCP alternative
+## CLI first, MCP only if no shell
 
-If `hypha-mcp` is configured as an MCP server in the client, prefer the
-`hypha.exec` tool call over a `Bash` invocation — it avoids re-parsing
-JSON through the shell.
+Follow the [cli-printing-press](https://github.com/mvanhorn/cli-printing-press#why-clis-plus-mcp)
+guidance: **CLIs win for agents** (100x fewer tokens than MCP tool
+schemas, native to LLM training distribution); **MCP wins for IDE
+auto-discovery**. So:
 
-**Calling convention.** `hypha.exec` takes a single field `args` that is
-the **argv array** passed to the `hypha` binary. It is **not** a bare
-query string. Examples:
+- **Default to `Bash hypha …`.** Zero schema-token tax, one fewer
+  process hop (`hypha-mcp` shells to the same binary anyway), closer
+  to the shell-interaction patterns the model was trained on.
+- **Use the MCP tools only when no Bash is available** (e.g. a harness
+  without a shell tool, or an IDE driving `hypha-mcp` directly).
+
+When the MCP tools *are* the right call, prefer the **per-command
+tools** (`hypha.lookup`, `hypha.symbol`, `hypha.source`, …) over the
+generic `hypha.exec`. They take structured arguments instead of an
+argv array, so the model does not have to spell out flag plumbing.
+Reach for `hypha.exec` only as an escape hatch when no per-command
+tool fits.
+
+**`hypha.exec` calling convention** (escape hatch). Single field
+`args` = argv array passed to the `hypha` binary. Not a bare query
+string.
 
 ```json
 {"args": ["lookup", "filterM"]}
