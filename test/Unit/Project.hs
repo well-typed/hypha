@@ -3,7 +3,11 @@ module Unit.Project (tests) where
 
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=), assertBool)
+import System.Directory (createDirectory)
 import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
+
+import Hypha.Project.Discovery (DiscoveryError (..))
 
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId (PackageName (..), Version (..))
@@ -14,6 +18,7 @@ import Hypha.Project.Overrides (parsePackageOverride)
 tests :: TestTree
 tests = testGroup "Unit.Project"
   [ testDiscovery
+  , testDiscoveryIgnoresDotCabalDir
   , testLoadBuildPlan
   , testParseOverride
   , testApplyOverrides
@@ -31,6 +36,24 @@ testDiscovery = testCase "discoverProjectRoot finds tiny-project fixture" $ do
       assertBool "root should contain tiny-project" ("tiny-project" `elem` pathSegments root)
   where
     pathSegments = words . map (\c -> if c == '/' then ' ' else c)
+
+-- | Regression: walking up from a non-project subdir must NOT
+-- stop at a directory whose only \"cabal-ish\" entry is a @.cabal@
+-- /directory/ (the per-user cabal config dir, common at @~/@).
+-- A real cabal project requires either @cabal.project@ or a
+-- @<pkg>.cabal@ /file/ with a non-empty stem.
+testDiscoveryIgnoresDotCabalDir :: TestTree
+testDiscoveryIgnoresDotCabalDir =
+  testCase "discoverProjectRoot ignores a `.cabal` config directory" $
+    withSystemTempDirectory "hypha-discovery" $ \fakeHome -> do
+      -- Mimic ~/ shape: only a `.cabal` directory, no real .cabal file.
+      createDirectory (fakeHome </> ".cabal")
+      createDirectory (fakeHome </> "subdir")
+      result <- discoverProjectRoot (Just (fakeHome </> "subdir"))
+      case result of
+        Right (ProjectRoot r) ->
+          error ("Expected NoProjectFound, found " <> r)
+        Left NoProjectFound{} -> pure ()
 
 testLoadBuildPlan :: TestTree
 testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $ do

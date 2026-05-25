@@ -78,8 +78,8 @@ errorMessage = \case
   PlanFailure (ProjectRoot r) e
     -> case e of
          PlanNotFound pth ->
-              "plan.json (searched at " <> Text.pack pth
-           <> " missing under " <> Text.pack r
+              "plan.json missing under " <> Text.pack r
+           <> " (cabal-plan: " <> Text.pack pth <> ")"
            <> "; run `cabal build --dry-run`"
          PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
 

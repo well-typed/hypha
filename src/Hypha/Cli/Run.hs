@@ -571,12 +571,24 @@ defaultDistDocRoot = do
 mkBuildEnv :: ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
 mkBuildEnv (ProjectRoot _) plan = do
   home <- getHomeDirectory
-  let CompilerId cid = bpCompiler plan
-      ghcDir = "ghc-" <> Text.unpack (Text.takeWhileEnd (/= '-') cid)
-      storeDir = home </> ".cabal" </> "store" </> ghcDir
   ghcVer <- sniffGhcOrUnknown
-  warnOnLeft renderCabalStoreError (offlineNullBuildEnv ghcVer)
-             (mkCabalBuildEnv storeDir)
+  let CompilerId cid = bpCompiler plan
+      planVer        = Text.takeWhileEnd (/= '-') cid
+      -- The plan may carry a sentinel ("unknown") or be empty when
+      -- 'loadProjectAndPlan' has fallen back to 'emptyBuildPlan'.
+      -- In those cases the plan can't tell us which store to probe,
+      -- so we fall through to the PATH-sniffed version instead of
+      -- composing nonsense paths like 'ghc-unknown'.
+      verForStore = if Text.null planVer || planVer == "unknown"
+                      then unVersion ghcVer
+                      else planVer
+  if verForStore == "unknown"
+    then pure (offlineNullBuildEnv ghcVer)
+    else do
+      let ghcDir   = "ghc-" <> Text.unpack verForStore
+          storeDir = home </> ".cabal" </> "store" </> ghcDir
+      warnOnLeft renderCabalStoreError (offlineNullBuildEnv ghcVer)
+                 (mkCabalBuildEnv storeDir)
 
 -- | Empty BuildEnv used when no cabal store is reachable.  All
 -- operations return 'Nothing' / empty sets.  The GHC version is

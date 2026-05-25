@@ -8,7 +8,8 @@ module Hypha.Project.Discovery
 
 import Control.Exception.Safe (IOException, try)
 import Data.List (isSuffixOf)
-import System.Directory (doesFileExist, getCurrentDirectory, canonicalizePath, listDirectory)
+import System.Directory
+  ( canonicalizePath, doesFileExist, getCurrentDirectory, listDirectory )
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Types.BuildPlan (ProjectRoot (..))
@@ -46,10 +47,28 @@ discoverProjectRoot mDir = do
                     then pure (Left (NoProjectFound dir))
                     else walkUp parent
 
--- | Check if a directory contains any @*.cabal@ file.
+-- | Check if a directory contains any genuine @<pkg>.cabal@ file.
+--
+-- Real cabal package files look like @foo.cabal@: non-empty stem,
+-- @.cabal@ suffix, and the entry must be a /file/.  The bare name
+-- @.cabal@ does NOT qualify — that is the per-user cabal config
+-- directory at @~/@, and historically a sibling check that only
+-- looked at the suffix made 'discoverProjectRoot' mistake the home
+-- directory for a cabal project.
 hasAnyCabalFile :: FilePath -> IO Bool
 hasAnyCabalFile dir = do
   result <- try @IO @IOException (listDirectory dir)
   case result of
     Left _        -> pure False
-    Right entries -> pure (any (isSuffixOf ".cabal") entries)
+    Right entries ->
+      anyM (\e -> doesFileExist (dir </> e))
+           (filter looksLikeCabalFileName entries)
+  where
+    looksLikeCabalFileName name =
+      name /= ".cabal" && ".cabal" `isSuffixOf` name
+
+    anyM :: Monad m => (a -> m Bool) -> [a] -> m Bool
+    anyM _ []     = pure False
+    anyM f (x:xs) = do
+      b <- f x
+      if b then pure True else anyM f xs
