@@ -25,11 +25,13 @@ import System.FilePath ((</>))
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Error (HyphaError (..))
 import Hypha.Output.Outcome (Outcome (..), Related (..), tagOutsidePlan)
-import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
+import Hypha.Package.Resolver
+  ( PackageResolver (..), ResolvedPackage (..), resolveRef )
 import Hypha.Source.Extract (SymbolInfo (..), extractSymbolInfo)
 import Hypha.Source.Locate (findModuleFile, modulePathToFile)
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
-import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
+import Hypha.Types.PackageId
+  ( PackageId (..), PackageName (..), PackageRef (..), Version (..) )
 import Hypha.Types.SymbolPath
   ( SymbolPath (..), ModulePath (..), SymbolName (..), parseSymbolPath )
 import Hypha.Types.Doc (DocText (..))
@@ -110,7 +112,8 @@ runSymbolWith _env resolver rawArg = runExceptT $ do
   let pkgName = spPackage sp
       sym     = unSymbolName symName
       modTxt  = unModulePath modPath
-  rp        <- ExceptT $ resolvePkg resolver pkgName
+      ref     = PackageRef pkgName (spVersion sp)
+  rp        <- ExceptT $ resolveRef resolver ref
   let pid = rpPkgId rp
       ver = pkgVersion pid
   d         <- ExceptT (resolveSrc resolver pid)

@@ -63,7 +63,8 @@ import Hypha.Hoogle.Remote qualified as HogRemote
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
 import Hypha.Output.Outcome
-import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..), mkPackageResolver)
+import Hypha.Package.Resolver
+  ( PackageResolver (..), ResolvedPackage (..), mkPackageResolver, resolveRef )
 import Hypha.Project.Components qualified as Comp
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
@@ -72,7 +73,9 @@ import Hypha.Project.Plan (loadBuildPlan, planHash)
 import Hypha.Search.PackageCache qualified as PC
 import Hypha.Source.Modules qualified as SourceModules
 import Hypha.Types.BuildPlan
-import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
+import Hypha.Types.PackageId
+  ( PackageName (..), Version (..), PackageId (..), PackageRef (..)
+  , parsePackageRef )
 
 -- | Top-level entry point.  Wires global flags and the chosen subcommand to
 -- their handlers and emits exactly one JSON envelope (or, with @--human@, a
@@ -217,21 +220,21 @@ dispatchE flags = \case
     ExceptT (runLookupCommand flags q)
 
   PackageCommand rawArg -> do
+    let ref = parsePackageRef rawArg
     (resolver, env) <- loadResolver flags
-    let (rawName, _) = splitVersionHint rawArg
-    rp       <- ExceptT (resolvePkg resolver (PackageName rawName))
+    rp       <- ExceptT (resolveRef resolver ref)
     modules0 <- liftIO (resolveExposedModules resolver env (rpPkgId rp))
     pure $ Package.mkSuccessOutcome
-      rawName
+      (unPackageName (refName ref))
       (pkgVersion (rpPkgId rp))
       (rpIsLocal rp)
       (rpDepsCount rp)
       (rpOrigin rp)
       modules0
 
-  VersionsCommand pkg -> do
+  VersionsCommand rawArg -> do
+    let PackageRef pkgName _ = parsePackageRef rawArg
     (resolver, _env) <- loadResolver flags
-    let pkgName = PackageName pkg
     eAvail    <- liftIO (fetchVrs resolver pkgName)
     (_, plan) <- loadPlan flags
     pure $ case eAvail of
@@ -239,9 +242,9 @@ dispatchE flags = \case
       Right versions -> Versions.runVersionsWithAvail plan pkgName versions
 
   ModuleCommand arg -> do
-    (pkg, modPath)   <- parsePkgMod arg
+    (pkgT, modPath)  <- parsePkgMod arg
     (resolver, _env) <- loadResolver flags
-    rp <- ExceptT (resolvePkg resolver (PackageName pkg))
+    rp <- ExceptT (resolveRef resolver (parsePackageRef pkgT))
     let pid = rpPkgId rp
     d  <- ExceptT (resolveSrc resolver pid)
     oc <- liftIO (Module.runModuleFromDir d pid modPath)
@@ -252,12 +255,13 @@ dispatchE flags = \case
     ExceptT (Symbol.runSymbolWith env resolver arg)
 
   SourceCommand arg -> do
-    (pkg, modPath, mSym) <- parsePkgModOptSym arg
-    runSourceArm flags pkg modPath mSym
+    (pkgT, modPath, mSym) <- parsePkgModOptSym arg
+    runSourceArm flags (parsePackageRef pkgT) modPath mSym
 
-  DepsCommand pkgName reverseMode mDepth -> do
+  DepsCommand rawArg reverseMode mDepth -> do
+    let PackageRef pkgName _ = parsePackageRef rawArg
     (_, plan) <- loadPlan flags
-    liftIO (Deps.runDeps plan (PackageName pkgName) reverseMode mDepth)
+    liftIO (Deps.runDeps plan pkgName reverseMode mDepth)
 
   DoctorCommand ->
     liftIO Doctor.runDoctor
@@ -329,13 +333,13 @@ renderBindError = \case
 -- source directory (local → Hackage tarball), then extract snippet.
 runSourceArm
   :: GlobalFlags
-  -> Text
+  -> PackageRef
   -> Text
   -> Maybe Text
   -> ExceptT HyphaError IO (Outcome Value)
-runSourceArm flags pkg modPath mSym = do
+runSourceArm flags ref modPath mSym = do
   (resolver, env) <- loadResolver flags
-  rp  <- ExceptT (resolvePkg resolver (PackageName pkg))
+  rp  <- ExceptT (resolveRef resolver ref)
   let pid = rpPkgId rp
   dir <- ExceptT (resolveSrc resolver pid)
   oc  <- ExceptT (Source.runSourceFromDir env pid dir modPath mSym)
@@ -601,14 +605,6 @@ processOutcome flags cmd result = do
 errorOutcome :: HyphaError -> Outcome Value
 errorOutcome = failureOutcome . errorToOutcomeError
 
--- | Split @PKG[@VER]@ into its parts.
-splitVersionHint :: Text -> (Text, Maybe Text)
-splitVersionHint raw =
-  case Text.splitOn "@" raw of
-    [n]    -> (n, Nothing)
-    [n, v] -> (n, Just v)
-    (n:_)  -> (n, Nothing)
-    []     -> ("", Nothing)
 
 -- | Compact / full field sets per command name.  Keep in sync with each
 -- command module's local key declarations.  Equal sets where there is no

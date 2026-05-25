@@ -30,11 +30,17 @@ genModulePath = do
     pure (Text.pack (c : cs))
   pure (Text.intercalate "." segs)
 
+genVersionText :: Gen.Gen Text
+genVersionText = do
+  segs <- Gen.list (Range.between (1, 4)) $
+    Gen.int (Range.between (0, 99))
+  pure (Text.intercalate "." (map (Text.pack . show) segs))
+
 genSymbolPath :: Gen.Gen SymbolPath
 genSymbolPath = do
   pkgT <- genIdentText
   hasVer <- Gen.bool False
-  mVer <- if hasVer then Just <$> genIdentText else pure Nothing
+  mVer <- if hasVer then Just <$> genVersionText else pure Nothing
   hasMod <- Gen.bool False
   mMod <- if hasMod then Just <$> genModulePath else pure Nothing
   hasSym <- Gen.bool False
@@ -46,7 +52,7 @@ genSymbolPath = do
 assemble :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text
 assemble pkg mv mm ms =
        pkg
-    <> maybe "" ("@" <>) mv
+    <> maybe "" ("-" <>) mv
     <> maybe "" ("/" <>) mm
     <> maybe "" ("/" <>) ms
 
@@ -58,13 +64,21 @@ tests = testGroup "SymbolPath"
   , testProperty "specific: pkg only" $ do
       assert $ P.eq P..$ ("expected", Right (SymbolPath (PackageName "async") Nothing Nothing Nothing))
                    P..$ ("got", parseSymbolPath "async")
-  , testProperty "specific: pkg + ver + module + symbol" $ do
+  , testProperty "specific: pkg-ver + module + symbol" $ do
       assert $ P.eq P..$ ("expected", Right (SymbolPath
                             (PackageName "async")
                             (Just (Version "2.2.5"))
                             (Just (ModulePath "Control.Concurrent.Async"))
                             (Just (SymbolName "concurrently"))))
-                   P..$ ("got", parseSymbolPath "async@2.2.5/Control.Concurrent.Async/concurrently")
+                   P..$ ("got", parseSymbolPath "async-2.2.5/Control.Concurrent.Async/concurrently")
+  , testProperty "specific: store-entry hash is stripped" $ do
+      assert $ P.eq P..$ ("expected", Right (SymbolPath
+                            (PackageName "async")
+                            (Just (Version "2.2.6"))
+                            Nothing
+                            Nothing))
+                   P..$ ("got", parseSymbolPath
+                          "async-2.2.6-2cf97ca5548db623c976b1d55bcaa9224d6c0bd752c6b49b011be7ed1e28f200")
   , testProperty "rejects: symbol without module" $ do
       assert $ P.eq P..$ ("expected", Left SymbolWithoutModule)
                    P..$ ("got", parseSymbolPath "async//concurrently")

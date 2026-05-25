@@ -12,7 +12,8 @@ module Hypha.Types.SymbolPath
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Types.PackageId (PackageName (..), Version (..), parsePackageName, parseVersion)
+import Hypha.Types.PackageId
+  ( PackageName (..), Version (..), PackageRef (..), parsePackageRef )
 
 newtype ModulePath = ModulePath { unModulePath :: Text }
   deriving stock (Show, Eq, Ord)
@@ -33,7 +34,6 @@ data ParseError
   | EmptyPackageSegment
   | SymbolWithoutModule
   | InvalidPackageName !Text
-  | InvalidVersion !Text
   | InvalidModule !Text
   | InvalidSymbol !Text
   | ModuleSegmentNotUppercase !Text
@@ -58,44 +58,47 @@ validateModulePath m
           Just (c, _) | c >= 'A' && c <= 'Z' -> Right ()
           _ -> Left (ModuleSegmentNotUppercase seg)
 
--- | Parse @pkg[@ver][/Mod[.Path]][/sym]@.
+-- | Parse @pkg[-ver][/Mod[.Path]][/sym]@.  The version segment uses
+-- the Haskell convention (hyphen separator, all digits and dots) —
+-- the @\@ver@ syntax is no longer accepted.
 parseSymbolPath :: Text -> Either ParseError SymbolPath
 parseSymbolPath t
   | Text.null t = Left EmptyInput
   | otherwise =
       let segs    = Text.splitOn "/" t
           (pkgSeg, mModSeg, mSymSeg) = case segs of
-            []                 -> ("", Nothing, Nothing)
-            [p]                -> (p, Nothing, Nothing)
-            [p, m]             -> (p, Just m, Nothing)
-            (p : m : s : _)    -> (p, Just m, Just s)
-          (pkgPart, mVerPart) = case Text.splitOn "@" pkgSeg of
-            [p]    -> (p, Nothing)
-            [p, v] -> (p, Just v)
-            (p:_)  -> (p, Nothing)
-            []     -> ("", Nothing)
+            []              -> ("", Nothing, Nothing)
+            [p]             -> (p, Nothing, Nothing)
+            [p, m]          -> (p, Just m, Nothing)
+            (p : m : s : _) -> (p, Just m, Just s)
+          PackageRef pkg mv = parsePackageRef pkgSeg
       in do
-        pkg <- maybe (Left (InvalidPackageName pkgPart)) Right (parsePackageName pkgPart)
-        mv  <- case mVerPart of
-                 Nothing -> Right Nothing
-                 Just v  -> maybe (Left (InvalidVersion v)) (Right . Just) (parseVersion v)
-        mm  <- case mModSeg of
-                 Nothing -> Right Nothing
-                 Just m  -> if Text.null m
-                                then if mSymSeg /= Nothing
-                                       then Left SymbolWithoutModule
-                                       else Left (InvalidModule m)
-                                else Just <$> validateModulePath m
-        ms  <- case mSymSeg of
-                 Nothing -> Right Nothing
-                 Just s  -> if Text.null s then Left (InvalidSymbol s) else Right (Just (SymbolName s))
+        when (Text.null (unPackageName pkg))
+             (Left EmptyPackageSegment)
+        when (Text.any (`elem` ("/@" :: String)) (unPackageName pkg))
+             (Left (InvalidPackageName (unPackageName pkg)))
+        mm <- case mModSeg of
+                Nothing -> Right Nothing
+                Just m  -> if Text.null m
+                             then if mSymSeg /= Nothing
+                                    then Left SymbolWithoutModule
+                                    else Left (InvalidModule m)
+                             else Just <$> validateModulePath m
+        ms <- case mSymSeg of
+                Nothing -> Right Nothing
+                Just s  -> if Text.null s
+                             then Left (InvalidSymbol s)
+                             else Right (Just (SymbolName s))
         case (mm, ms) of
           (Nothing, Just _) -> Left SymbolWithoutModule
           _                 -> Right (SymbolPath pkg mv mm ms)
+  where
+    when True  e = e
+    when False _ = Right ()
 
 renderSymbolPath :: SymbolPath -> Text
 renderSymbolPath (SymbolPath (PackageName p) mv mm ms) =
      p
-  <> maybe "" (\(Version v)        -> "@" <> v) mv
-  <> maybe "" (\(ModulePath m)     -> "/" <> m) mm
-  <> maybe "" (\(SymbolName s)     -> "/" <> s) ms
+  <> maybe "" (\(Version v)    -> "-" <> v) mv
+  <> maybe "" (\(ModulePath m) -> "/" <> m) mm
+  <> maybe "" (\(SymbolName s) -> "/" <> s) ms

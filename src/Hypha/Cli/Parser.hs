@@ -82,9 +82,9 @@ commandParser = hsubparser
  <> command "module" (info moduleParser
         (progDesc "List module exports\ne.g. hypha module async/Control.Concurrent.Async"))
  <> command "symbol" (info symbolParser
-        (progDesc "Symbol signature + haddock\ne.g. hypha symbol async/Control.Concurrent.Async/concurrently\nFormat: PKG/MOD/SYM"))
+        (progDesc "Symbol signature + haddock\ne.g. hypha symbol async-2.2.6/Control.Concurrent.Async/concurrently\nFormat: PKG[-VER]/MOD/SYM"))
  <> command "source" (info sourceParser
-        (progDesc "Source snippet for a symbol or module\ne.g. hypha source async/Control.Concurrent.Async/concurrently\nFormat: PKG/MOD[/SYM]"))
+        (progDesc "Source snippet for a symbol or module\ne.g. hypha source async-2.2.6/Control.Concurrent.Async/concurrently\nFormat: PKG[-VER]/MOD[/SYM]"))
  <> command "versions" (info versionsParser
         (progDesc "Version history on Hackage\ne.g. hypha versions async"))
  <> command "deps" (info depsParser
@@ -103,19 +103,27 @@ lookupParser = fmap ClientCommands $ LookupCommand
 
 packageParser :: Parser Command
 packageParser = fmap ClientCommands $ PackageCommand
-  <$> strArgument (metavar "PKG[@VER]" <> help "Package identifier")
+  <$> strArgument
+        ( metavar "PKG[-VER]"
+       <> help "Package identifier (e.g. async or async-2.2.6)" )
 
 moduleParser :: Parser Command
 moduleParser = fmap ClientCommands $ ModuleCommand
-  <$> strArgument (metavar "PKG/MOD" <> help "Module path (pkg/Module.Path)")
+  <$> strArgument
+        ( metavar "PKG[-VER]/MOD"
+       <> help "Module path (pkg or pkg-version, then /Module.Path)" )
 
 symbolParser :: Parser Command
 symbolParser = fmap ClientCommands $ SymbolCommand
-  <$> strArgument (metavar "PKG/MOD/SYM" <> help "Symbol path (pkg/Module/symbol)")
+  <$> strArgument
+        ( metavar "PKG[-VER]/MOD/SYM"
+       <> help "Symbol path (pkg or pkg-version, then /Module/symbol)" )
 
 sourceParser :: Parser Command
 sourceParser = fmap ClientCommands $ SourceCommand
-  <$> strArgument (metavar "PKG/MOD[/SYM]" <> help "Source path")
+  <$> strArgument
+        ( metavar "PKG[-VER]/MOD[/SYM]"
+       <> help "Source path" )
 
 versionsParser :: Parser Command
 versionsParser = fmap ClientCommands $ VersionsCommand

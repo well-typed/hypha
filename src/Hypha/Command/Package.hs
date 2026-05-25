@@ -29,7 +29,9 @@ import Hypha.Output.Outcome
   )
 import Hypha.Types.BuildPlan
   ( BuildPlan, PackageOrigin (..), PlannedUnit (..), lookupUnit )
-import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
+import Hypha.Types.PackageId
+  ( PackageName (..), PackageId (..), PackageRef (..), Version (..)
+  , parsePackageRef )
 
 -- | Metadata for a single package, as returned by the @package@ command.
 data PackageResult = PackageResult
@@ -59,26 +61,20 @@ fullKeys    = compactKeys
 -- chain (plan → store → Hackage).
 runPackage :: BuildPlan -> Text -> Either HyphaError (Outcome Value)
 runPackage plan rawArg =
-  let (rawName, _mVerHint) = splitVersionHint rawArg
-      pkgName              = PackageName rawName
-  in case lookupUnit pkgName plan of
-       Just pu -> Right (mkSuccessOutcome rawName (pkgVersion (puId pu)) (puIsLocal pu) (length (puDeps pu)) (puOrigin pu) [])
+  let PackageRef pkg _ = parsePackageRef rawArg
+      nameT            = unPackageName pkg
+  in case lookupUnit pkg plan of
+       Just pu -> Right (mkSuccessOutcome nameT
+         (pkgVersion (puId pu)) (puIsLocal pu) (length (puDeps pu))
+         (puOrigin pu) [])
        Nothing -> Left $ NotFound
-         ("package '" <> rawName <> "' not in build plan")
+         ("package '" <> nameT <> "' not in build plan")
 
 -- | Total variant: never fails at the IO boundary, but encodes "not in plan"
 -- as a structured 'OutcomeFailure' so the envelope shape stays consistent.
 runPackagePure :: BuildPlan -> Text -> Outcome Value
 runPackagePure plan rawArg =
   either (failureOutcome . errorToOutcomeError) id (runPackage plan rawArg)
-
-splitVersionHint :: Text -> (Text, Maybe Text)
-splitVersionHint raw =
-  case Text.splitOn "@" raw of
-    [n]    -> (n, Nothing)
-    [n, v] -> (n, Just v)
-    (n:_)  -> (n, Nothing)
-    []     -> ("", Nothing)
 
 -- | Build a success outcome from package metadata and a (possibly empty)
 -- list of exposed modules.  When modules are provided, per-module related

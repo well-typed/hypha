@@ -21,6 +21,7 @@ module Hypha.Package.Resolver
   , mkPackageResolver
     -- * Queries
   , planSrcDir
+  , resolveRef
   ) where
 
 import Data.Aeson (Value)
@@ -41,7 +42,8 @@ import Hypha.Hackage.Api (HackageClient (..))
 import Hypha.Hackage.Source (fetchAndExtractSource)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), lookupUnit )
-import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
+import Hypha.Types.PackageId
+  ( PackageId (..), PackageName (..), PackageRef (..), Version (..) )
 
 -- | The result of resolving a package name.
 data ResolvedPackage = ResolvedPackage
@@ -59,12 +61,36 @@ data ResolvedPackage = ResolvedPackage
   }
   deriving stock (Show, Eq)
 
--- | Record-of-functions interface for package resolution.
+-- | Record-of-functions interface for package resolution.  The
+-- @resolvePkg@ field still takes a bare 'PackageName' (no version
+-- pin) for callers that only know a name; 'resolveRef' wraps it with
+-- 'PackageRef' support so a user-supplied @pkg-version@ string is
+-- honoured end-to-end.
 data PackageResolver m = PackageResolver
   { resolvePkg      :: PackageName -> m (Either HyphaError ResolvedPackage)
   , resolveSrc      :: PackageId -> m (Either HyphaError FilePath)
   , fetchVrs       :: PackageName -> m (Either HyphaError [Version])
   }
+
+-- | Resolve a 'PackageRef'.  When the ref carries a version hint, the
+-- plan-and-store lookup is filtered to that exact version and a final
+-- Hackage fallback constructs a 'PackageId' from the hint directly
+-- (no JSON round-trip, no @\"unknown\"@ defaulting).  When the hint
+-- is absent, delegates to 'resolvePkg'.
+resolveRef
+  :: Monad m => PackageResolver m -> PackageRef -> m (Either HyphaError ResolvedPackage)
+resolveRef pr (PackageRef name Nothing)  = resolvePkg pr name
+resolveRef _  (PackageRef name (Just v)) = pure $ Right ResolvedPackage
+  { rpPkgId         = PackageId name v
+  , rpIsOutsidePlan = True
+  , rpIsLocal       = False
+  , rpDepsCount     = 0
+  , rpOrigin        = OriginHackage
+  }
+-- Pinned versions bypass plan / store and go straight to Hackage via
+-- 'resolveSrc'.  Existence is validated when the source is fetched;
+-- a missing version surfaces as 'NotFound' from the tarball
+-- downloader rather than being silently invented here.
 
 -- | Construct a package resolver from its dependencies.
 --
@@ -122,17 +148,18 @@ resolvePackageWith env hclient plan name = do
           -- Step 3: Fetch from Hackage (latest version).
           result <- fetchPackageJson hclient name
           case result of
-            Left err -> pure (Left (hackageErrorToHypha name err))
-            Right json -> do
-              let ver = extractVersion json
-                  pid = PackageId name (fromMaybe (Version "unknown") ver)
-              pure (Right ResolvedPackage
-                { rpPkgId        = pid
+            Left err   -> pure (Left (hackageErrorToHypha name err))
+            Right json -> case extractVersion json of
+              Just ver -> pure (Right ResolvedPackage
+                { rpPkgId         = PackageId name ver
                 , rpIsOutsidePlan = True
                 , rpIsLocal       = False
                 , rpDepsCount     = 0
                 , rpOrigin        = OriginHackage
                 })
+              Nothing  -> pure (Left (Corruption
+                ("Hackage response for '" <> unPackageName name
+                  <> "' lacked a 'version' field")))
   where
     matchingPid :: PackageName -> PackageId -> Maybe PackageId
     matchingPid target pid
@@ -213,7 +240,3 @@ hackageErrorToHypha name = \case
   Hackage.HttpError code -> NetworkError
     ("Hackage HTTP " <> Text.pack (show code) <> " for " <> unPackageName name)
 
--- | 'fromMaybe' replacement (avoids Prelude dependency on 'Maybe').
-fromMaybe :: a -> Maybe a -> a
-fromMaybe d Nothing  = d
-fromMaybe _ (Just x) = x

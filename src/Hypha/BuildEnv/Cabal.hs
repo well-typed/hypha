@@ -17,7 +17,9 @@ import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeFileName, (</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
+import Hypha.Types.PackageId
+  ( PackageName (..), Version (..), PackageId (..)
+  , PackageRef (..), parsePackageRef )
 
 -- | Errors specific to the Cabal build environment.
 data CabalStoreError
@@ -80,22 +82,24 @@ discoverInStore storeRoot = do
 --   name=async, ver=2.2, hash=5 — silently wrong.
 parseStoreEntry :: String -> Maybe PackageId
 parseStoreEntry entry =
-  let entryT = Text.pack entry
-  in case Text.breakOnEnd "-" entryT of
-       ("", _) -> Nothing
-       (nameVerT, hash) ->
-         if Text.length hash < 8
-           then Nothing
-           else
-             let nameVer = Text.init nameVerT  -- drop trailing separator
-             in case Text.breakOnEnd "-" nameVer of
-                  ("", _) -> Nothing
-                  (nameT, verT) ->
-                    let name = Text.init nameT
-                        ver  = verT
-                    in if Text.null name || Text.null ver
-                       then Nothing
-                       else Just (PackageId (PackageName name) (Version ver))
+  case parsePackageRef (Text.pack entry) of
+    PackageRef name@(PackageName n) (Just ver)
+      | not (Text.null n)
+      , entryHasHash entry
+      -> Just (PackageId name ver)
+    _ -> Nothing
+  where
+    -- Require the trailing hash segment to distinguish a real store
+    -- entry from a stray @pkg-ver@ directory.  'parsePackageRef'
+    -- already strips the hash; we just confirm the original string
+    -- carried one.
+    entryHasHash s = case Text.breakOnEnd "-" (Text.pack s) of
+      (prefix, suffix) ->
+        not (Text.null prefix)
+          && Text.length suffix >= 8
+          && Text.all isHexish suffix
+    isHexish c =
+      (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 
 -- | Locate the source directory for a package.
 --

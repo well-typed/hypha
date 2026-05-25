@@ -117,12 +117,12 @@ packageTool :: Value
 packageTool = toolDescriptor "hypha.package"
   (Text.unlines
     [ "Package metadata (latest, deprecation, license, exposed modules)."
-    , "`pkg` may include a `@version` suffix, e.g. `aeson@2.2.2.0`."
+    , "`pkg` may include a `-version` suffix, e.g. `aeson-2.2.2.0`."
     , ""
     , commonGlobalFlagsDoc
     ])
   (schemaWith
-    [ ("pkg", "string", "Package id, optionally `@version`.") ]
+    [ ("pkg", "string", "Package id, optionally `pkg-version`.") ]
     globalFlagProps)
 
 moduleTool :: Value
