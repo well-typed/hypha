@@ -12,6 +12,7 @@ module Hypha.Cli.Run
   , classifyLookupException
   ) where
 
+import Control.Exception (displayException)
 import Control.Exception.Safe (IOException, try, SomeException, fromException)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except
@@ -69,7 +70,7 @@ import Hypha.Package.Resolver
 import Hypha.Project.Components qualified as Comp
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
-import Hypha.Project.Overrides (parsePackageOverride)
+import Hypha.Project.Overrides (parsePackageOverride, renderOverrideError)
 import Hypha.Project.Plan (loadBuildPlan, planHash)
 import Hypha.Search.PackageCache qualified as PC
 import Hypha.Source.Modules qualified as SourceModules
@@ -103,7 +104,7 @@ loadPlan flags = do
 collectOverridesE
   :: Monad m => [Text] -> ExceptT HyphaError m [PackageOverride]
 collectOverridesE raws = case traverse parsePackageOverride raws of
-  Left  err -> throwE (UserError (Text.pack (show err)))
+  Left  err -> throwE (UserError (renderOverrideError err))
   Right xs  -> pure xs
 
 -- | Create a Hackage client respecting the offline flag.
@@ -480,9 +481,9 @@ classifyLookupException :: SomeException -> HyphaError
 classifyLookupException se
   | Just (ioe :: IOException) <- fromException se
   , isDoesNotExistError ioe
-  = ToolMissing (Text.pack (show ioe))
+  = ToolMissing (Text.pack (displayException ioe))
   | otherwise
-  = NetworkError (Text.pack (show se))
+  = NetworkError (Text.pack (displayException se))
 
 -- | Materialise the project Hoogle DB: load the plan, derive a
 -- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),
@@ -501,11 +502,15 @@ ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
   -- IO errors regenerating the DB, Hoogle library panics) must not
   -- abort the lookup. The cascade in 'Lookup.runLookup' is designed
   -- to fall through to remote Hoogle when Tier 2 yields no hits, so
-  -- we swallow the exception and let it proceed.
-  _ <- try @IO @SomeException $ do
+  -- we keep going on failure — but every failure is announced on
+  -- stderr so the user is never left wondering why Tier 2 went silent.
+  r <- try @IO @SomeException $ do
     ePlan <- loadBuildPlan root
     case ePlan of
-      Left _     -> pure ()
+      Left planErr ->
+        hPutStrLn stderr $
+          "warning: project Hoogle DB skipped — "
+          <> Text.unpack (errorMessage (PlanFailure root planErr))
       Right plan -> do
         let units = planToLocalUnits plan
             ph    = planHash plan
@@ -513,7 +518,11 @@ ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
         let stamp = HogLocal.HoogleStamp ph fp
         HogLocal.ensureFresh HogLocal.defaultHaddockRunner
                              storeRoot distRoot dotHypha stamp units
-  pure ()
+  case r of
+    Left e  -> hPutStrLn stderr $
+                 "warning: project Hoogle DB skipped — "
+                 <> displayException e
+    Right _ -> pure ()
 
 planToLocalUnits :: BuildPlan -> [HogLocal.LocalUnit]
 planToLocalUnits plan =
@@ -681,7 +690,13 @@ resolveExposedModules resolver env pid = do
     trySrcResolver = do
       eDir <- resolveSrc resolver pid
       case eDir of
-        Left _err  -> pure []
+        Left err -> do
+          hPutStrLn stderr $
+            "warning: exposed-modules list empty for "
+            <> Text.unpack (unPackageName (pkgName pid))
+            <> " — source resolve failed: "
+            <> Text.unpack (errorMessage err)
+          pure []
         Right dir -> SourceModules.getExposedModules dir
 
 -- | Emit the outcome to stdout, honouring all output-shaping flags.

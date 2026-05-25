@@ -204,11 +204,14 @@ resolvePackageSourceWith env hclient sourceCache plan pid = do
             else do
               result <- fetchAndExtractSource hclient pid destDir
               case result of
-                Left _err ->
-                  pure (Left (EnvError
-                    ("source not found for "
-                      <> unPackageName (pkgName pid) <> "-" <> unVersion (pkgVersion pid)
-                      <> "; try `cabal build` first or check network connectivity")))
+                -- Preserve the structured cause (NetworkError /
+                -- OfflineCacheMiss / DecodeError / HttpError) so the
+                -- failure envelope reflects /why/ the fetch failed,
+                -- rather than collapsing every variant into the same
+                -- generic message.  See CLAUDE.md, "Errors are
+                -- first-class".
+                Left hErr ->
+                  pure (Left (hackageErrorToHypha (pkgName pid) hErr))
                 Right path -> pure (Right path)
 
 -- | Look up the package source directory from the build plan's 'puSrcDir'.

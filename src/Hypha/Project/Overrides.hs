@@ -1,8 +1,10 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Project.Overrides
   ( -- * Types
     OverrideError (..)
+  , renderOverrideError
     -- * Parsing
   , parsePackageOverride
   ) where
@@ -22,6 +24,15 @@ data OverrideError
   | EmptyVersion
     -- ^ The version part (after @=@) is empty.
   deriving stock (Show, Eq)
+
+-- | User-facing renderer for 'OverrideError'.  Only call this at the
+-- wire boundary (CLI parse-error message, error envelope) — never
+-- inside an error constructor.
+renderOverrideError :: OverrideError -> Text
+renderOverrideError = \case
+  MissingEquals raw -> "expected PKG=VER override (got: " <> raw <> ")"
+  EmptyPackageName  -> "empty package name in --package-override"
+  EmptyVersion      -> "empty version in --package-override"
 
 -- | Parse a @PKG=VER@ override string.
 --

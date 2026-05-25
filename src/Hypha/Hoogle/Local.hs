@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
 -- | Project-scoped Hoogle database lifecycle.
 --
@@ -16,6 +17,7 @@ module Hypha.Hoogle.Local
   , LocalUnit (..)
   , HaddockRequest (..)
   , HaddockError (..)
+  , renderHaddockError
   , HaddockRunner (..)
   , defaultHaddockRunner
   , collectTxtForUnit
@@ -28,6 +30,7 @@ module Hypha.Hoogle.Local
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Control.Exception (displayException)
 import Control.Exception.Safe (IOException, SomeException, try)
 import System.IO.Error (isDoesNotExistError)
 import Control.Monad (when)
@@ -42,6 +45,7 @@ import System.Directory
   , listDirectory, removeDirectoryRecursive )
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory, takeExtension, takeFileName)
+import System.IO (hPutStrLn, stderr)
 import System.Process (readProcessWithExitCode)
 
 import Hypha.Hoogle.Format
@@ -158,8 +162,35 @@ data HaddockRequest = HaddockRequest
   deriving stock (Show, Eq)
 
 -- | Reason a @haddock@ invocation could not produce a @.txt@.
-newtype HaddockError = HaddockError Text
+--
+-- Structured — never flatten exceptions into the constructor at the
+-- call site (see CLAUDE.md, "Render at the edge").  Use
+-- 'renderHaddockError' when a human-readable message is needed.
+data HaddockError
+    -- | No @.hs@ files found in the unit's source dirs.
+  = HaddockNoSources
+    -- | @haddock@ binary not on @PATH@ (or shadowed by a sandbox).
+  | HaddockBinaryMissing
+    -- | @haddock@ failed to spawn; embeds the curated exception reason.
+  | HaddockSpawnFailed !Text
+    -- | Exit success but no @.txt@ landed on disk.
+  | HaddockNoOutput
+    -- | Non-zero exit; embeds the tail of @haddock@'s stderr.
+  | HaddockNonZero !Text
+    -- | Unit is not local and no @.txt@ was found in the store / dist.
+  | HaddockNoStoreEntry
   deriving stock (Show, Eq)
+
+-- | Render a 'HaddockError' to a user-facing message.  Only call this
+-- at the wire boundary (warnings, error envelopes, test failures).
+renderHaddockError :: HaddockError -> Text
+renderHaddockError = \case
+  HaddockNoSources       -> "no .hs files found"
+  HaddockBinaryMissing   -> "haddock binary not found on PATH"
+  HaddockSpawnFailed msg -> "haddock failed to start: " <> msg
+  HaddockNoOutput        -> "haddock produced no output"
+  HaddockNonZero msg     -> "haddock exited with failure: " <> msg
+  HaddockNoStoreEntry    -> "no .txt and unit is not local"
 
 -- | Record-of-functions wrapping the @haddock@ binary so tests can
 -- inject a deterministic implementation.
@@ -188,7 +219,7 @@ collectTxtForUnit runner storeRoot distRoot lu = do
         Just p  -> pure (Right p)
         Nothing
           | not (luIsLocal lu) ->
-              pure (Left (HaddockError "no .txt and unit is not local"))
+              pure (Left HaddockNoStoreEntry)
           | otherwise -> do
               out <- haddockOutputPath (luPkgId lu)
               runHaddock runner HaddockRequest
@@ -225,26 +256,25 @@ defaultHaddockRunner :: HaddockRunner
 defaultHaddockRunner = HaddockRunner $ \req -> do
   files <- enumerateHsFiles (hrSrcDirs req)
   case files of
-    [] -> pure (Left (HaddockError "no .hs files found"))
+    [] -> pure (Left HaddockNoSources)
     _  -> do
       r <- try @IO @IOException $ readProcessWithExitCode "haddock"
         ( ["--hoogle", "-o", takeDirectory (hrOutput req)]
         ++ files ) ""
       case r of
-        -- 'haddock' binary not on PATH (or hidden by an outer sandbox):
-        -- surface as a structured HaddockError so the caller can fall
-        -- back to remote tiers without crashing the whole command.
+        -- 'haddock' binary not on PATH (or hidden by an outer sandbox).
         Left ioe | isDoesNotExistError ioe ->
-          pure (Left (HaddockError "haddock binary not found on PATH"))
+          pure (Left HaddockBinaryMissing)
         Left ioe ->
-          pure (Left (HaddockError (Text.pack (show ioe))))
+          pure (Left (HaddockSpawnFailed
+                       (Text.pack (displayException ioe))))
         Right (ExitSuccess, _out, _err) -> do
           ok <- doesFileExist (hrOutput req)
           if ok
             then pure (Right (hrOutput req))
-            else pure (Left (HaddockError "haddock produced no output"))
+            else pure (Left HaddockNoOutput)
         Right (ExitFailure _, _out, err) ->
-          pure (Left (HaddockError (Text.pack err)))
+          pure (Left (HaddockNonZero (Text.pack err)))
 
 enumerateHsFiles :: [FilePath] -> IO [FilePath]
 enumerateHsFiles = fmap concat . mapM walk
@@ -356,9 +386,10 @@ linkOrCopy dstDir src = do
 -- 'searchLocal' itself never regenerates, because regeneration is
 -- expensive and 'searchLocal' is the hot path).
 --
--- Any exception thrown by the @hoogle@ library is caught and
--- collapsed to @[]@: callers fall through to the remote tier rather
--- than crash on a corrupt or partial DB.
+-- Any exception thrown by the @hoogle@ library is caught (so callers
+-- can fall through to the remote tier rather than crash on a corrupt
+-- or partial DB), but the failure is announced on stderr — never
+-- silently collapsed to @[]@.
 searchLocal :: HyphaHoogle -> HoogleQuery -> IO [HoogleHit]
 searchLocal hh q = withMVar (hhLock hh) $ \_ -> do
   ok <- doesFileExist (hhDbPath hh)
@@ -369,7 +400,13 @@ searchLocal hh q = withMVar (hhLock hh) $ \_ -> do
                   pure (map toHit (Hoogle.searchDatabase db
                           (Text.unpack (unHoogleQuery q)))))
              :: IO (Either SomeException [HoogleHit])
-      pure (either (const []) id r)
+      case r of
+        Left e -> do
+          hPutStrLn stderr $
+            "warning: local Hoogle DB search failed at "
+            <> hhDbPath hh <> ": " <> displayException e
+          pure []
+        Right hits -> pure hits
   where
     toHit t =
       -- Hoogle's library carries the same HTML-formatted strings as

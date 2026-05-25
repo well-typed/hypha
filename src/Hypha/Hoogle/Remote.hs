@@ -18,6 +18,7 @@ module Hypha.Hoogle.Remote
   , defaultTransport
   ) where
 
+import Control.Exception (displayException)
 import Control.Exception.Safe (SomeException, try)
 import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:?))
@@ -199,12 +200,12 @@ httpGet mgr opts url = do
   reqE <- try (parseRequest (Text.unpack url))
             :: IO (Either SomeException Request)
   case reqE of
-    Left e -> pure (Left (RemoteHttp (Text.pack (show e))))
+    Left e -> pure (Left (RemoteHttp (Text.pack (displayException e))))
     Right req0 -> do
       let req = req0 { responseTimeout =
                          responseTimeoutMicro (roTimeoutMicros opts) }
       r <- try (httpLbs req mgr)
              :: IO (Either SomeException (Response ByteString))
       case r of
-        Left  e    -> pure (Left (RemoteHttp (Text.pack (show e))))
+        Left  e    -> pure (Left (RemoteHttp (Text.pack (displayException e))))
         Right resp -> pure (Right (responseBody resp))

@@ -2,6 +2,7 @@
 module Unit.HoogleLocalGen (tests) where
 
 import Data.IORef (modifyIORef, newIORef, readIORef)
+import qualified Data.Text as Text
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -9,7 +10,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Hoogle.Local
-  ( HaddockError (..), HaddockRequest (..), HaddockRunner (..)
+  ( HaddockError (..), HaddockRequest (..), HaddockRunner (..), renderHaddockError
   , HoogleStamp (..), LocalUnit (..), collectTxtForUnit, ensureFresh
   , scavengeStoreTxt )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
@@ -52,7 +53,7 @@ tests = testGroup "Unit.HoogleLocalGen"
         result <- collectTxtForUnit runner tmp "" lu
         case result of
           Right p -> doesFileExist p >>= (@?= True)
-          Left (HaddockError e) -> fail (show e)
+          Left e -> fail (Text.unpack (renderHaddockError e))
         seen <- readIORef called
         length seen @?= 1
 
@@ -84,7 +85,7 @@ tests = testGroup "Unit.HoogleLocalGen"
         writeFile (docDir </> "bar.txt") "@package bar\n"
         let runner = HaddockRunner $ \req -> do
               modifyIORef called (req :)
-              pure (Left (HaddockError "must not be called"))
+              pure (Left (HaddockSpawnFailed "must not be called"))
         result <- collectTxtForUnit runner tmp ""
                     (LocalUnit pid [tmp </> "src"] False)
         case result of

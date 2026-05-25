@@ -8,6 +8,7 @@ module Hypha.Hackage.Cache
   , isFresh
   ) where
 
+import Control.Exception (displayException)
 import Control.Exception.Safe (try, SomeException)
 import Crypto.Hash.SHA256 (hash)
 import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict, encode)
@@ -17,6 +18,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Time (diffUTCTime, getCurrentTime)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
+import System.IO (hPutStrLn, stderr)
 
 import Hypha.Cache (hackageCacheDir)
 import Hypha.Hackage.Types (CacheKind (..), CachedResponse (..), encodeBytesHex)
@@ -40,10 +42,11 @@ cacheFilePath key = do
   dir <- hackageCacheDir
   pure (dir </> unCacheKey key <> ".json")
 
--- | Look up a cached response.  Returns 'Nothing' on miss; also returns
--- 'Nothing' if the on-disk file is malformed (we treat corruption as a miss
--- so the caller refetches; observable typed errors for corruption can be
--- added later if needed).
+-- | Look up a cached response.  Returns 'Nothing' on miss; corruption
+-- (unreadable file or unparsable JSON) is also reported as a miss so
+-- the caller refetches, but the underlying cause is announced on
+-- stderr — never silently swallowed (see CLAUDE.md, "Never ignore an
+-- error branch silently").
 lookupCache :: CacheKey -> IO (Maybe CachedResponse)
 lookupCache key = do
   path <- cacheFilePath key
@@ -53,9 +56,17 @@ lookupCache key = do
     else do
       result <- try (BS.readFile path) :: IO (Either SomeException BS.ByteString)
       case result of
-        Left _  -> pure Nothing
+        Left e  -> do
+          hPutStrLn stderr $
+            "warning: Hackage cache read failed at " <> path
+            <> "; treating as miss: " <> displayException e
+          pure Nothing
         Right bs -> case eitherDecodeStrict bs of
-          Left _   -> pure Nothing
+          Left err -> do
+            hPutStrLn stderr $
+              "warning: Hackage cache corrupt at " <> path
+              <> "; treating as miss: " <> err
+            pure Nothing
           Right cr -> pure (Just cr)
 
 -- | Insert (or replace) a response in the cache.  Creates the cache
