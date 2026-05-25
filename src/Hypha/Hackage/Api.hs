@@ -7,6 +7,7 @@ module Hypha.Hackage.Api
   , PackageJson
   , OfflineMode (..)
   , HackageError (..)
+  , renderHackageError
   , mkHackageClient
   , mkOfflineHackageClient
     -- * Internals exposed for testing
@@ -24,6 +25,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
+import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time
   ( UTCTime, NominalDiffTime, diffUTCTime, getCurrentTime, secondsToNominalDiffTime
@@ -61,12 +63,41 @@ data HackageClient m = HackageClient
   }
 
 -- | Errors that can occur when fetching from Hackage.
+--
+-- Structured — callers wrap this in 'Hypha.Error.HackageFailure' so the
+-- variant survives all the way to the wire layer.  Render at the edge
+-- via 'renderHackageError'; never @show@ a value of this type into an
+-- error message.
 data HackageError
   = NetworkError !String
+    -- ^ Transport-layer failure (TLS handshake, socket close, etc.).
   | OfflineCacheMiss !PackageName
+    -- ^ @--offline@: package not in the local cache.
   | DecodeError !String
+    -- ^ JSON decode failed.
   | HttpError !Int
+    -- ^ Non-2xx HTTP status code.
+  | MissingField !Text
+    -- ^ JSON decode succeeded, but a required field was absent (carries
+    --   the field name).
   deriving stock (Show, Eq)
+
+-- | User-facing renderer for 'HackageError'.  Only call this at the
+-- wire boundary (envelope message, stderr) — never inside an error
+-- constructor.
+renderHackageError :: PackageName -> HackageError -> Text
+renderHackageError (PackageName name) = \case
+  NetworkError msg ->
+    "Hackage transport error for '" <> name <> "': " <> Text.pack msg
+  OfflineCacheMiss _ ->
+    "package '" <> name
+      <> "' not cached; can't fetch from Hackage in offline mode"
+  DecodeError msg ->
+    "Hackage decode error for '" <> name <> "': " <> Text.pack msg
+  HttpError code ->
+    "Hackage HTTP " <> Text.pack (show code) <> " for '" <> name <> "'"
+  MissingField fld ->
+    "Hackage response for '" <> name <> "' lacked '" <> fld <> "' field"
 
 -- | User-Agent header value for hypha.  Includes the project contact email
 -- (@info\@well-typed.com@) so Hackage admins can reach us if we ever

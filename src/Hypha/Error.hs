@@ -30,6 +30,8 @@ import qualified Data.Text as Text
 import Hypha.Exit
   ( ExitCode, exitUserError, exitNotFound, exitNetworkError, exitCacheError
   , exitEnvironmentError, exitToolMissing )
+import Hypha.Hackage.Api (HackageError, renderHackageError)
+import qualified Hypha.Hackage.Api as Hackage
 import Hypha.Hoogle.Remote (RemoteError, renderRemoteError)
 import Hypha.Hoogle.Tier (Tier, renderTierList)
 import Hypha.Hoogle.Type (HoogleQuery (..))
@@ -120,27 +122,40 @@ renderNotFoundReason = \case
 renderPid :: PackageId -> Text
 renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v
 
--- | Umbrella error type produced by hypha.  Every fallible boundary of the
--- CLI funnels through this ADT.  Constructors embed precise sub-errors
--- and any envelope context (query, tiers consulted, ...) needed to
--- render the wire-format error/actions without an auxiliary type.
+-- | Umbrella error type produced by hypha.  Every fallible boundary of
+-- the CLI funnels through this ADT.  Constructors embed precise
+-- sub-errors and any envelope context (query, tiers consulted, ...)
+-- needed to render the wire-format error/actions without an auxiliary
+-- type.
 --
--- Each constructor maps to exactly one 'ExitCode'; totality is checked
--- by the unit tests in @test/Unit/Errors.hs@.
+-- Each constructor maps to exactly one 'ExitCode' (see 'errorExitCode'
+-- / 'errorCode'); 'HackageFailure' dispatches further based on the
+-- embedded 'HackageError' variant so the wire code reflects the actual
+-- cause (transport ↔ NETWORK_ERROR, decode/missing-field ↔ CORRUPTION,
+-- offline-miss ↔ NOT_FOUND).
 --
 -- Per the project ethos (CLAUDE.md, \"Render at the edge\"): error
 -- constructors carry domain types — 'UserErrorReason',
--- 'NotFoundReason', 'HoogleQuery', @['Tier']@, 'RemoteError' — never
--- pre-rendered 'Text'.  Stringification happens in 'errorMessage' /
--- 'errorActions', at the wire boundary.
+-- 'NotFoundReason', 'HoogleQuery', @['Tier']@, 'RemoteError',
+-- 'HackageError' — never pre-rendered 'Text'.  The remaining
+-- @!'Text'@ constructors ('NetworkError', 'ToolMissing') are
+-- catch-all bottoms for opaque exceptions where no structure
+-- survives the @Control.Exception@ boundary.
 data HyphaError
-  = UserError         !UserErrorReason   -- ^ bad CLI args / malformed input
-  | NotFound          !NotFoundReason    -- ^ pkg/symbol/source absent
-  | NetworkError      !Text              -- ^ catch-all transport bottom
-  | Corruption        !Text              -- ^ cache / parse / on-disk corruption
-  | EnvError          !Text              -- ^ generic environment failure
-  | ToolMissing       !Text              -- ^ haddock/cabal/ghc not on PATH
-  | DiscoveryFailure  !DiscoveryError    -- ^ project root discovery failed
+  = UserError         !UserErrorReason
+  | NotFound          !NotFoundReason
+  | HackageFailure    !PackageName !HackageError
+    -- ^ Structured Hackage cause.  Dispatch on the variant for wire
+    --   code / exit code mapping.
+  | NetworkError      !Text
+    -- ^ Catch-all transport bottom: 'classifyLookupException' for
+    --   non-IO 'SomeException' values; we have no better type to
+    --   preserve at this point.
+  | ToolMissing       !Text
+    -- ^ Required external binary (haddock / cabal / ghc) was not
+    --   on @PATH@.  Carries the 'displayException' of the originating
+    --   'IOException'.
+  | DiscoveryFailure  !DiscoveryError
   | PlanFailure       !ProjectRoot !PlanError
     -- | @hypha lookup@: @--offline@ suppressed the remote tier.
   | HoogleOffline      !HoogleQuery ![Tier]
@@ -155,24 +170,41 @@ errorCode = \case
   UserError{}        -> "USER_ERROR"
   NotFound{}         -> "NOT_FOUND"
   NetworkError{}     -> "NETWORK_ERROR"
-  Corruption{}       -> "CORRUPTION"
-  EnvError{}         -> "ENV_ERROR"
   ToolMissing{}      -> "TOOL_MISSING"
   DiscoveryFailure{} -> "ENV_ERROR"
   PlanFailure _ e    -> case e of
     PlanNotFound{}     -> "ENV_ERROR"
     PlanParseFailure{} -> "CORRUPTION"
+  HackageFailure _ e -> hackageErrorWireCode e
   HoogleOffline{}     -> "HOOGLE_OFFLINE"
   HoogleNotFound{}    -> "NOT_FOUND"
   HoogleRemoteError{} -> "HOOGLE_REMOTE_ERROR"
+
+-- | Wire-code dispatch for the variants of 'HackageError'.  Kept here
+-- rather than next to 'HackageError' itself so the mapping stays in
+-- sync with 'hackageErrorExitCode' below — they MUST agree.
+hackageErrorWireCode :: HackageError -> Text
+hackageErrorWireCode = \case
+  Hackage.NetworkError{}     -> "NETWORK_ERROR"
+  Hackage.HttpError{}        -> "NETWORK_ERROR"
+  Hackage.OfflineCacheMiss{} -> "NOT_FOUND"
+  Hackage.DecodeError{}      -> "CORRUPTION"
+  Hackage.MissingField{}     -> "CORRUPTION"
+
+hackageErrorExitCode :: HackageError -> ExitCode
+hackageErrorExitCode = \case
+  Hackage.NetworkError{}     -> exitNetworkError
+  Hackage.HttpError{}        -> exitNetworkError
+  Hackage.OfflineCacheMiss{} -> exitNotFound
+  Hackage.DecodeError{}      -> exitCacheError
+  Hackage.MissingField{}     -> exitCacheError
 
 errorMessage :: HyphaError -> Text
 errorMessage = \case
   UserError         reason -> renderUserErrorReason reason
   NotFound          reason -> renderNotFoundReason  reason
+  HackageFailure    name e -> renderHackageError    name e
   NetworkError      msg    -> msg
-  Corruption        msg    -> msg
-  EnvError          msg    -> msg
   ToolMissing       msg    -> msg
   DiscoveryFailure  (NoProjectFound location)
     -> "no cabal project found (searched up from " <> Text.pack location <> ")"
@@ -193,13 +225,12 @@ errorExitCode = \case
   UserError{}        -> exitUserError
   NotFound{}         -> exitNotFound
   NetworkError{}     -> exitNetworkError
-  Corruption{}       -> exitCacheError
-  EnvError{}         -> exitEnvironmentError
   ToolMissing{}      -> exitToolMissing
   DiscoveryFailure{} -> exitEnvironmentError
   PlanFailure _ e    -> case e of
     PlanNotFound{}     -> exitEnvironmentError
     PlanParseFailure{} -> exitCacheError
+  HackageFailure _ e  -> hackageErrorExitCode e
   HoogleOffline{}     -> exitNetworkError
   HoogleNotFound{}    -> exitNotFound
   HoogleRemoteError{} -> exitCacheError

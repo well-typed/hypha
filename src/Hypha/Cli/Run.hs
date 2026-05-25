@@ -63,8 +63,6 @@ import Hypha.Hoogle.Remote qualified as HogRemote
 import Hypha.Hoogle.Type (HoogleQuery (..))
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json
-  ( EnvelopeOpts (..), encodeEnvelopeValue, encodeOutcomeEnvelope
-  , parseSelectList )
 import Hypha.Output.Outcome
 import Hypha.Package.Resolver
 import Hypha.Project.Components qualified as Comp
@@ -284,8 +282,7 @@ dispatch
   :: GlobalFlags -> ClientCommand -> IO (Either HyphaError (Outcome Value))
 dispatch flags = runExceptT . dispatchE flags
 
-dispatchE
-  :: GlobalFlags -> ClientCommand -> ExceptT HyphaError IO (Outcome Value)
+dispatchE :: GlobalFlags -> ClientCommand -> ExceptT HyphaError IO (Outcome Value)
 dispatchE flags = \case
   LookupCommand q ->
     ExceptT (runLookupCommand flags q)
@@ -422,10 +419,7 @@ runSourceArm flags ref modPath mSym = do
 -- and project Hoogle handle, then runs the cascade.  Project root
 -- discovery is best-effort: outside a cabal project, only the global
 -- cache and remote Hoogle are consulted.
-runLookupCommand
-  :: GlobalFlags
-  -> Text
-  -> IO (Either HyphaError (Outcome Value))
+runLookupCommand :: GlobalFlags -> Text -> IO (Either HyphaError (Outcome Value))
 runLookupCommand flags q = do
   result <- try @IO @SomeException $ do
     mRoot <- warnOnLeft

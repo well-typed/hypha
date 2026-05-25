@@ -87,6 +87,7 @@ resolveRef _  (PackageRef name (Just v)) = pure $ Right ResolvedPackage
   , rpDepsCount     = 0
   , rpOrigin        = OriginHackage
   }
+
 -- Pinned versions bypass plan / store and go straight to Hackage via
 -- 'resolveSrc'.  Existence is validated when the source is fetched;
 -- a missing version surfaces as 'NotFound' from the tarball
@@ -157,9 +158,8 @@ resolvePackageWith env hclient plan name = do
                 , rpDepsCount     = 0
                 , rpOrigin        = OriginHackage
                 })
-              Nothing  -> pure (Left (Corruption
-                ("Hackage response for '" <> unPackageName name
-                  <> "' lacked a 'version' field")))
+              Nothing  -> pure (Left
+                (HackageFailure name (Hackage.MissingField "version")))
   where
     matchingPid :: PackageName -> PackageId -> Maybe PackageId
     matchingPid target pid
@@ -232,13 +232,14 @@ extractVersion = \case
     Just (Version ver)
   _ -> Nothing
 
--- | Convert a HackageError to a HyphaError.
+-- | Convert a 'Hackage.HackageError' to a 'HyphaError'.  Offline-cache
+-- miss maps to the conceptually-correct 'NotFound' umbrella; every
+-- other variant is preserved structurally under 'HackageFailure', so
+-- the wire layer can dispatch on the variant for the right wire code
+-- / exit code (transport ↔ NETWORK_ERROR, decode/missing-field ↔
+-- CORRUPTION) and the user sees the right message.
 hackageErrorToHypha :: PackageName -> Hackage.HackageError -> HyphaError
 hackageErrorToHypha name = \case
-  Hackage.NetworkError msg -> NetworkError (Text.pack msg)
-  Hackage.OfflineCacheMiss _pn -> NotFound (NotFoundOfflineCache name)
-  Hackage.DecodeError msg -> Corruption
-    ("Hackage decode error for " <> unPackageName name <> ": " <> Text.pack msg)
-  Hackage.HttpError code -> NetworkError
-    ("Hackage HTTP " <> Text.pack (show code) <> " for " <> unPackageName name)
+  Hackage.OfflineCacheMiss _ -> NotFound (NotFoundOfflineCache name)
+  err                        -> HackageFailure name err
 
