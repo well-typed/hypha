@@ -77,14 +77,26 @@ Never work on an issue without moving it to `in_progress` first.
    unclaimed issue but stop and escalate to the user if you notice that the issue you have
    picked has a direct dependency on an issue currently "in progress".
 
+## Well-Typed Ethos
+
+This codebase is held to Well-Typed quality standards. Internalise these before touching code:
+
+- **Make impossible states unrepresentable** (Yaron Minsky). If a runtime branch ends in `error "unreachable"` or `case _ of _ -> error ...`, the type is not precise enough. Refine the type (e.g. split `Command` into `ClientCommand` / `ServerCommand`) so the impossible branch cannot be written.
+- **Types over strings.** Stringly-typed APIs are banished. A `Text` that "is really" a package name, error code, or command tag must become a `newtype` (or a sum type) at the earliest boundary. `case err of NotFound m -> m; _ -> show err` is a code smell that proves the type was too loose.
+- **`mtl` / `transformers` over zig-zags.** Long cascades of `case eX of Left e -> pure (Left e); Right x -> case eY of ...` are banished. Use `ExceptT` / `MaybeT` / `ReaderT` and let `do`-notation linearise the happy path. Typed sub-errors compose under `withExceptT`; `liftMaybe :: HyphaError -> Maybe a -> ExceptT HyphaError m a` beats nested case-of.
+- **No duplication.** If two functions share a body, factor the shared body into a helper (e.g. `sourceFromDirE` shared by `runSource` and `runSourceFromDir`). DRY at the function level, not via macro-style copy-paste.
+- **Errors are first-class.** All boundary failures funnel through `Hypha.Error.HyphaError`, which embeds typed sub-errors (`DiscoveryError`, `PlanError`, ...). Never wrap them back into `Text` and lose the structure.
+- **Never ignore an error branch silently.** `Left _ -> pure fallback`, `either (const fallback) id`, `fromRight fallback`, and friends are banished when applied to a real failure. Even when a degraded fallback is *intentional* (e.g. `hypha lookup` outside a cabal project), the underlying error MUST be surfaced — traced to stderr, attached to the outcome envelope, or propagated. Silent swallowing turns "the tool degraded gracefully" into "the user has no idea what went wrong." If the variable name is `_err`, you're doing it wrong. Use a helper like `warnOnLeft` that makes the fallback explicit and reports the cause.
+
 ## Hard Conventions (Follow Religiously)
 
 1. **Strict bangs:** Every strict field in `data`/`newtype` gets `!`. Lazy fields get a one-line comment explaining why.
-2. **No `error`/`undefined` in production:** Boundary failures go through `Hypha.Error.HyphaError`. Logic errors should be unreachable by construction.
+2. **No `error`/`undefined` in production:** Boundary failures go through `Hypha.Error.HyphaError`. Logic errors should be unreachable by construction (refine the type — see ethos above).
 3. **Imports:** Minimal and sorted. Use `Hypha.Prelude` for shared shorthands.
 4. **Effects:** Records-of-functions over `m`. No effect library. No typeclass effect machinery.
-5. **Types:** Prefer `newtype` with `deriving stock` + `deriving newtype`. Avoid partial records.
+5. **Types:** Prefer `newtype` with `deriving stock` + `deriving newtype`. Avoid partial records. No stringly-typed parameters.
 6. **Output:** Every command produces an `Outcome Value` wrapped in `OutcomeEnvelope`.
+7. **Control flow:** Cascading `case eX of Left _ -> ...; Right _ -> case eY of ...` is banned. Reach for `ExceptT` / `MaybeT` instead.
 
 ## Testing Discipline
 

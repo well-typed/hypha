@@ -15,17 +15,21 @@ module Hypha.Cli.Run
 import Control.Exception (IOException, try, SomeException, fromException)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except
-  ( ExceptT (ExceptT), runExceptT, throwE, withExceptT )
+import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Key qualified as Key
 import Data.Aeson qualified as Aeson
 import Data.Aeson (Value)
+import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (maybeToList)
 import Data.Set qualified as Set
 import Data.Set (Set)
+import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TIO
 import Data.Text qualified as Text
 import Data.Text (Text)
@@ -39,12 +43,7 @@ import System.IO.Error (isDoesNotExistError)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import System.Process (readProcessWithExitCode)
 
-import Crypto.Hash.SHA256 qualified as SHA256
-import Data.ByteString.Base16 qualified as Base16
-import Data.Map.Strict qualified as Map
-import Data.Maybe (maybeToList)
-import Data.Text.Encoding qualified as Text
-import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
+import Hypha.BuildEnv.Cabal (CabalStoreError (..), mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cli.Parser
 import Hypha.Command.Deps qualified as Deps
@@ -57,8 +56,6 @@ import Hypha.Command.Source qualified as Source
 import Hypha.Command.Symbol qualified as Symbol
 import Hypha.Command.Versions qualified as Versions
 import Hypha.Error
-  ( HyphaError (..), errorCode, errorMessage, errorExitCode
-  , discoverProjectRootE, loadBuildPlanE, errorToOutcomeError )
 import Hypha.Exit (toSystemExitCode)
 import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
 import Hypha.Hoogle.Local qualified as HogLocal
@@ -107,8 +104,6 @@ collectOverridesE raws = case traverse parsePackageOverride raws of
   Left  err -> throwE (UserError (Text.pack (show err)))
   Right xs  -> pure xs
 
--- | Build a resolver that can look up packages beyond the plan.
---   Creates the Hackage client, cabal BuildEnv, and wires them together.
 -- | Create a Hackage client respecting the offline flag.
 mkHackageClientForFlags :: GlobalFlags -> IO (HackageClient IO)
 mkHackageClientForFlags flags =
@@ -118,73 +113,95 @@ mkHackageClientForFlags flags =
       mgr <- newManager tlsManagerSettings
       mkHackageClient mgr
 
--- | Build a resolver and associated build-env.  Degrades gracefully on
--- missing project root or unparseable plan (an out-of-project @hypha
--- lookup@ still resolves against the cabal store and Hackage).  The
--- only fatal branch is malformed @--package-override@ values, which
--- surface as 'UserError'.
+-- | Run an 'IO' action returning 'Either'; on 'Left', emit a single
+-- warning line to @stderr@ and substitute the supplied fallback.  Use
+-- at the seams where degraded behaviour is intentional but the
+-- underlying failure MUST be visible to the user.  See the
+-- "Well-Typed Ethos" entry in @CLAUDE.md@: silent error-branch swallow
+-- is banished.
+warnOnLeft
+  :: (err -> Text)   -- ^ render the error for the warning line
+  -> a               -- ^ fallback value substituted on 'Left'
+  -> IO (Either err a)
+  -> IO a
+warnOnLeft renderErr fallback action = action >>= \case
+  Right x  -> pure x
+  Left err -> do
+    hPutStrLn stderr ("warning: " <> Text.unpack (renderErr err))
+    pure fallback
+
+-- | Best-effort project + plan loader.  Each failure is announced on
+-- @stderr@ before the degraded fallback kicks in — no @Left _ -> ...@
+-- silent ignore.  Returns 'Nothing' for the project root when
+-- discovery failed, and 'emptyBuildPlan' when plan loading failed.
+loadProjectAndPlan :: GlobalFlags -> IO (Maybe ProjectRoot, BuildPlan)
+loadProjectAndPlan flags = do
+  mRoot <- warnOnLeft
+             (errorMessage . DiscoveryFailure)
+             Nothing
+             (fmap Just <$> discoverProjectRoot (gfProjectDir flags))
+  plan <- maybe (pure emptyBuildPlan) loadPlanOrWarn mRoot
+  pure (mRoot, plan)
+  where
+    loadPlanOrWarn root =
+      warnOnLeft (errorMessage . PlanFailure root) emptyBuildPlan
+                 (loadBuildPlan root)
+
+-- | Pick the right build-env constructor for the loaded project.
+-- Project-less calls degrade to a store-only env (still announces the
+-- underlying failure inside 'mkBuildEnv' / 'mkBasicBuildEnv').
+mkBuildEnvFor :: Maybe ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
+mkBuildEnvFor Nothing     _    = mkBasicBuildEnv
+mkBuildEnvFor (Just root) plan = mkBuildEnv root plan
+
+-- | Build a resolver and associated build-env.  Degrades gracefully
+-- when no project / plan is reachable, but every degradation is
+-- announced via 'warnOnLeft' so the user is never left guessing why
+-- the answer looks empty.  The only hard-fail branch is malformed
+-- @--package-override@ values, surfaced as 'UserError'.
 loadResolver
   :: GlobalFlags
   -> ExceptT HyphaError IO (PackageResolver IO, BuildEnv IO)
 loadResolver flags = do
-  hclient <- liftIO (mkHackageClientForFlags flags)
-  eRoot   <- liftIO (discoverProjectRoot (gfProjectDir flags))
-  case eRoot of
-    Left _ -> liftIO (mkBareResolver hclient)
-    Right root -> do
-      ePlan <- liftIO (loadBuildPlan root)
-      case ePlan of
-        Left _ -> liftIO $ do
-          env      <- mkBasicBuildEnv
-          resolver <- mkPackageResolver env hclient emptyBuildPlan
-          pure (resolver, env)
-        Right rawPlan -> do
-          overrides <- collectOverridesE (gfPackageOverrides flags)
-          let appliedPlan = applyOverrides overrides rawPlan
-          liftIO $ do
-            env      <- mkBuildEnv root appliedPlan
-            resolver <- mkPackageResolver env hclient appliedPlan
-            pure (resolver, env)
-
--- | Project-less fallback: build a resolver against the cabal store and
--- whatever @plan.json@ is sitting in the CWD.  All failures inside are
--- swallowed because the lookup tier is best-effort by design.
-mkBareResolver
-  :: HackageClient IO -> IO (PackageResolver IO, BuildEnv IO)
-mkBareResolver hclient = do
-  env      <- mkBasicBuildEnv
-  plan     <- mkPlanFromPlanJson
-  resolver <- mkPackageResolver env hclient plan
-  pure (resolver, env)
+  hclient       <- liftIO (mkHackageClientForFlags flags)
+  (mRoot, raw)  <- liftIO (loadProjectAndPlan flags)
+  overrides     <- collectOverridesE (gfPackageOverrides flags)
+  let plan = applyOverrides overrides raw
+  liftIO $ do
+    env      <- mkBuildEnvFor mRoot plan
+    resolver <- mkPackageResolver env hclient plan
+    pure (resolver, env)
 
 -- | Create a basic BuildEnv (store only, no project source dirs).
--- Tries a few common GHC store paths and falls back to a null env.
+-- Probes common GHC store paths.  After every probe has failed, the
+-- aggregated reasons are reported to @stderr@ so the user understands
+-- why the env collapsed to 'offlineNullBuildEnv' rather than a real
+-- store-backed one.
 mkBasicBuildEnv :: IO (BuildEnv IO)
 mkBasicBuildEnv = do
   home <- getHomeDirectory
   let candidates = [ home </> ".cabal" </> "store" </> d
                    | d <- ["ghc-9.10.3-d332", "ghc-9.6.7", "ghc-9.6.6"]
                    ]
-  let tryStore []     = pure offlineNullBuildEnv
-      tryStore (p:ps) = do
-        eEnv <- mkCabalBuildEnv p
-        case eEnv of
-          Right env -> pure env
-          Left _    -> tryStore ps
-  tryStore candidates
+  tryStores candidates []
+  where
+    tryStores [] errs = do
+      hPutStrLn stderr $
+        "warning: no usable cabal store found; falling back to null BuildEnv"
+        <> concatMap (\(p, e) -> "\n  - " <> p <> ": "
+                                 <> Text.unpack (renderCabalStoreError e))
+                     (reverse errs)
+      pure offlineNullBuildEnv
+    tryStores (p:ps) errs = do
+      eEnv <- mkCabalBuildEnv p
+      case eEnv of
+        Right env -> pure env
+        Left  err -> tryStores ps ((p, err) : errs)
 
--- | Attempt to load a plan.json from CWD for basic version info.
---   Falls back to empty plan if not found.
-mkPlanFromPlanJson :: IO BuildPlan
-mkPlanFromPlanJson = do
-  eRoot <- discoverProjectRoot Nothing
-  case eRoot of
-    Left _        -> pure emptyBuildPlan
-    Right root -> do
-      ePlan <- loadBuildPlan root
-      case ePlan of
-        Left _  -> pure emptyBuildPlan
-        Right p -> pure p
+renderCabalStoreError :: CabalStoreError -> Text
+renderCabalStoreError = \case
+  StoreNotFound p   -> "store directory missing (" <> Text.pack p <> ")"
+  GhcVersionUnknown -> "could not determine GHC version from store path"
 
 -- | Per-command dispatch.  Each arm runs inside 'ExceptT HyphaError IO'
 -- so plan loading, resolver wiring, and command execution compose
@@ -273,10 +290,10 @@ runServerInteractive
 runServerInteractive flags port mBind prebuild jobs = do
   result <- runExceptT $ do
     ba              <- bindAddrE port mBind
-    (resolver, env) <- loadResolver flags
-    plan            <- liftIO (loadPlanOrEmpty flags)
-    mRoot           <- liftIO (projectRootOpt flags)
+    (mRoot, plan)   <- liftIO (loadProjectAndPlan flags)
     hclient         <- liftIO (mkHackageClientForFlags flags)
+    env             <- liftIO (mkBuildEnvFor mRoot plan)
+    resolver        <- liftIO (mkPackageResolver env hclient plan)
     let opts = Server.ServerOpts ba prebuild jobs
     withExceptT (UserError . Text.pack . renderBindError) $
       ExceptT (Server.runServer mRoot plan env hclient resolver opts)
@@ -294,20 +311,6 @@ bindAddrE
 bindAddrE port mBind =
   withExceptT (UserError . Text.pack . renderBindError) $
     ExceptT (pure (parseBindFromFlags port mBind))
-
--- | Optional project root; @Nothing@ when no project is in scope.
-projectRootOpt :: GlobalFlags -> IO (Maybe ProjectRoot)
-projectRootOpt flags =
-  either (const Nothing) Just <$> discoverProjectRoot (gfProjectDir flags)
-
--- | Best-effort plan loader for the server arm: returns 'emptyBuildPlan'
--- whenever the project root or plan cannot be loaded.
-loadPlanOrEmpty :: GlobalFlags -> IO BuildPlan
-loadPlanOrEmpty flags = do
-  mRoot <- projectRootOpt flags
-  case mRoot of
-    Nothing   -> pure emptyBuildPlan
-    Just root -> either (const emptyBuildPlan) id <$> loadBuildPlan root
 
 parseBindFromFlags :: Int -> Maybe Text -> Either Server.BindError Server.BindAddr
 parseBindFromFlags port = \case
@@ -345,8 +348,10 @@ runLookupCommand
   -> IO (Either HyphaError (Outcome Value))
 runLookupCommand flags q = do
   result <- try @SomeException $ do
-    eRoot <- discoverProjectRoot (gfProjectDir flags)
-    let mRoot = either (const Nothing) Just eRoot
+    mRoot <- warnOnLeft
+               (errorMessage . DiscoveryFailure)
+               Nothing
+               (fmap Just <$> discoverProjectRoot (gfProjectDir flags))
     cache <- PC.openPackageCache mRoot
     dotHypha <- case mRoot of
       Just (ProjectRoot r) -> do
@@ -515,17 +520,18 @@ defaultDistDocRoot = do
       ok <- doesDirectoryExist p
       if ok then pure p else firstExisting ps
 
--- | Construct a BuildEnv IO from a project root and its build plan.
+-- | Construct a 'BuildEnv' from a project root and its build plan.
+-- Falls through to 'offlineNullBuildEnv' when the cabal store cannot
+-- be opened, announcing the underlying 'CabalStoreError' on @stderr@
+-- so the degraded state is never silent.
 mkBuildEnv :: ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
 mkBuildEnv (ProjectRoot _) plan = do
   home <- getHomeDirectory
   let CompilerId cid = bpCompiler plan
       ghcDir = "ghc-" <> Text.unpack (Text.takeWhileEnd (/= '-') cid)
       storeDir = home </> ".cabal" </> "store" </> ghcDir
-  eEnv <- mkCabalBuildEnv storeDir
-  case eEnv of
-    Right env -> pure env
-    Left _    -> pure offlineNullBuildEnv
+  warnOnLeft renderCabalStoreError offlineNullBuildEnv
+             (mkCabalBuildEnv storeDir)
 
 -- | Empty BuildEnv used when no cabal store is reachable.  All operations
 -- return 'Nothing' / empty sets.  GHC version surfaces as a sentinel
