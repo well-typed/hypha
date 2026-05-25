@@ -176,16 +176,17 @@ loadResolver flags = do
     pure (resolver, env)
 
 -- | Create a basic BuildEnv (store only, no project source dirs).
--- Probes common GHC store paths.  After every probe has failed, the
--- aggregated reasons are reported to @stderr@ so the user understands
--- why the env collapsed to 'offlineNullBuildEnv' rather than a real
--- store-backed one.
+-- The active GHC's version is sniffed from @PATH@ via
+-- @ghc --numeric-version@; if that fails, we fall back to enumerating
+-- the cabal store and picking the first @ghc-*@ directory we find.
+-- After every probe has failed, the aggregated reasons are reported
+-- to @stderr@ so the user understands why the env collapsed to
+-- 'offlineNullBuildEnv' rather than a real store-backed one.
 mkBasicBuildEnv :: IO (BuildEnv IO)
 mkBasicBuildEnv = do
   home <- getHomeDirectory
-  let candidates = [ home </> ".cabal" </> "store" </> d
-                   | d <- ["ghc-9.10.3-d332", "ghc-9.6.7", "ghc-9.6.6"]
-                   ]
+  let storeBase = home </> ".cabal" </> "store"
+  candidates <- candidateStoreDirs storeBase
   tryStores candidates []
   where
     tryStores [] errs = do
@@ -194,12 +195,48 @@ mkBasicBuildEnv = do
         <> concatMap (\(p, e) -> "\n  - " <> p <> ": "
                                  <> Text.unpack (renderCabalStoreError e))
                      (reverse errs)
-      pure offlineNullBuildEnv
+      ghcVer <- sniffGhcOrUnknown
+      pure (offlineNullBuildEnv ghcVer)
     tryStores (p:ps) errs = do
       eEnv <- mkCabalBuildEnv p
       case eEnv of
         Right env -> pure env
         Left  err -> tryStores ps ((p, err) : errs)
+
+-- | Best-effort list of @ghc-*@ store directories to probe.  Prefers
+-- the version reported by @ghc --numeric-version@ on @PATH@; if that
+-- is unavailable, enumerates whatever @ghc-*@ entries the store
+-- already has.
+candidateStoreDirs :: FilePath -> IO [FilePath]
+candidateStoreDirs storeBase = do
+  mFromPath <- detectGhcVersionFromPath
+  enumerated <- enumerateStoreGhcDirs storeBase
+  let preferred = maybeToList (fmap (\v -> "ghc-" <> Text.unpack v) mFromPath)
+      ordered   = preferred <> [ d | d <- enumerated, d `notElem` preferred ]
+  pure (map (storeBase </>) ordered)
+
+-- | Enumerate @ghc-*@ subdirectories of the cabal store, if any.
+enumerateStoreGhcDirs :: FilePath -> IO [FilePath]
+enumerateStoreGhcDirs storeBase = do
+  ok <- doesDirectoryExist storeBase
+  if not ok
+    then pure []
+    else do
+      entries <- listDirectory storeBase
+      pure [ e | e <- entries, "ghc-" `Text.isPrefixOf` Text.pack e ]
+
+-- | Sniff the active GHC's version by running @ghc --numeric-version@
+-- on @PATH@.  Returns 'Nothing' if @ghc@ is not on @PATH@ or returns
+-- an unexpected exit code.
+detectGhcVersionFromPath :: IO (Maybe Text)
+detectGhcVersionFromPath = do
+  r <- try @IO @SomeException
+         (readProcessWithExitCode "ghc" ["--numeric-version"] "")
+  case r of
+    Right (System.ExitSuccess, out, _) ->
+      let v = Text.strip (Text.pack out)
+      in pure (if Text.null v then Nothing else Just v)
+    _ -> pure Nothing
 
 renderCabalStoreError :: CabalStoreError -> Text
 renderCabalStoreError = \case
@@ -537,19 +574,36 @@ mkBuildEnv (ProjectRoot _) plan = do
   let CompilerId cid = bpCompiler plan
       ghcDir = "ghc-" <> Text.unpack (Text.takeWhileEnd (/= '-') cid)
       storeDir = home </> ".cabal" </> "store" </> ghcDir
-  warnOnLeft renderCabalStoreError offlineNullBuildEnv
+  ghcVer <- sniffGhcOrUnknown
+  warnOnLeft renderCabalStoreError (offlineNullBuildEnv ghcVer)
              (mkCabalBuildEnv storeDir)
 
--- | Empty BuildEnv used when no cabal store is reachable.  All operations
--- return 'Nothing' / empty sets.  GHC version surfaces as a sentinel
--- @"unknown"@ so that callers can detect the absence without crashing.
-offlineNullBuildEnv :: BuildEnv IO
-offlineNullBuildEnv = BuildEnv
+-- | Empty BuildEnv used when no cabal store is reachable.  All
+-- operations return 'Nothing' / empty sets.  The GHC version is
+-- supplied by the caller — sniffed from @PATH@ via
+-- 'sniffGhcOrUnknown' so non-project invocations of
+-- @hypha server@ / @hypha doctor@ still report the active
+-- compiler rather than a misleading @"unknown"@ sentinel.
+offlineNullBuildEnv :: Version -> BuildEnv IO
+offlineNullBuildEnv ghcVer = BuildEnv
   { discoverInstalledPackages = pure Set.empty
   , locatePackageSource       = \_ -> pure Nothing
   , locateHaddockHtml         = \_ -> pure Nothing
-  , ghcVersion                = pure (Version "unknown")
+  , ghcVersion                = pure ghcVer
   }
+
+-- | Best-effort sniff of the active GHC on @PATH@.  Returns the
+-- reported version when successful; otherwise emits a one-line
+-- warning to @stderr@ and falls back to the @"unknown"@ sentinel.
+sniffGhcOrUnknown :: IO Version
+sniffGhcOrUnknown = do
+  mv <- detectGhcVersionFromPath
+  case mv of
+    Just v  -> pure (Version v)
+    Nothing -> do
+      hPutStrLn stderr
+        "warning: ghc not on PATH; reporting version 'unknown'"
+      pure (Version "unknown")
 
 -- | Resolve the list of exposed modules for a package.
 --
