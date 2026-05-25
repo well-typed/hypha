@@ -6,15 +6,14 @@
 module Hypha.Cli.Run
   ( -- * Execution
     runCli
+  , reportInternalError
     -- * Internals exposed for testing
   , dispatch
   , humanFromValue
-  , classifyLookupException
   ) where
 
 import Control.Exception (displayException)
-import Control.Exception.Safe (IOException, try, SomeException, fromException)
-import GHC.IO.Exception (IOException (..))
+import Control.Exception.Safe (SomeException, try)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except
 import Crypto.Hash.SHA256 qualified as SHA256
@@ -40,7 +39,6 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory
 import System.Exit qualified as System
 import System.FilePath ((</>), takeDirectory, takeFileName)
-import System.IO.Error (isDoesNotExistError)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import System.Process (readProcessWithExitCode)
 
@@ -57,7 +55,7 @@ import Hypha.Command.Source qualified as Source
 import Hypha.Command.Symbol qualified as Symbol
 import Hypha.Command.Versions qualified as Versions
 import Hypha.Error
-import Hypha.Exit (toSystemExitCode)
+import Hypha.Exit (exitInternalError, toSystemExitCode, unExitCode)
 import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
 import Hypha.Hoogle.Local qualified as HogLocal
 import Hypha.Hoogle.Remote qualified as HogRemote
@@ -422,56 +420,44 @@ runSourceArm flags ref modPath mSym = do
 -- cache and remote Hoogle are consulted.
 runLookupCommand :: GlobalFlags -> Text -> IO (Either HyphaError (Outcome Value))
 runLookupCommand flags q = do
-  result <- try @IO @SomeException $ do
-    mRoot <- warnOnLeft
-               (errorMessage . DiscoveryFailure)
-               Nothing
-               (fmap Just <$> discoverProjectRoot (gfProjectDir flags))
-    cache <- PC.openPackageCache mRoot
-    dotHypha <- case mRoot of
-      Just (ProjectRoot r) -> do
-        let d = r </> ".hypha"
-        createDirectoryIfMissing True d
-        pure d
-      Nothing -> do
-        x <- getXdgDirectory XdgCache "hypha"
-        let d = x </> "no-project"
-        createDirectoryIfMissing True d
-        pure d
-    storeRoot <- defaultStoreRoot
-    distRoot  <- defaultDistDocRoot
-    hoogleLocal <- HogLocal.openLocalHoogle dotHypha storeRoot distRoot
+  -- No catch-all 'try' around this block: HTTP failures are caught
+  -- (and converted to 'RemoteError') inside Hoogle.Remote, every other
+  -- structurally-handled failure flows through 'HyphaError' explicitly,
+  -- and genuinely-unexpected exceptions bubble up to the top-level
+  -- 'catchAny' in @app/hypha/Main.hs@ where they become a single
+  -- structured @INTERNAL_ERROR@ envelope.
+  mRoot <- warnOnLeft
+             (errorMessage . DiscoveryFailure)
+             Nothing
+             (fmap Just <$> discoverProjectRoot (gfProjectDir flags))
+  cache <- PC.openPackageCache mRoot
+  dotHypha <- case mRoot of
+    Just (ProjectRoot r) -> do
+      let d = r </> ".hypha"
+      createDirectoryIfMissing True d
+      pure d
+    Nothing -> do
+      x <- getXdgDirectory XdgCache "hypha"
+      let d = x </> "no-project"
+      createDirectoryIfMissing True d
+      pure d
+  storeRoot <- defaultStoreRoot
+  distRoot  <- defaultDistDocRoot
+  hoogleLocal <- HogLocal.openLocalHoogle dotHypha storeRoot distRoot
 
-    -- Bring the local Hoogle DB up to date before the cascade runs.
-    -- Without this, Tier 2 always opens an empty/missing .hoo and
-    -- every type-signature query falls through to remote Hoogle.
-    for_ mRoot $ \root ->
-      ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
+  -- Bring the local Hoogle DB up to date before the cascade runs.
+  -- Without this, Tier 2 always opens an empty/missing .hoo and
+  -- every type-signature query falls through to remote Hoogle.
+  for_ mRoot $ \root ->
+    ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
 
-    let opts = Lookup.LookupOptions
-          { Lookup.loOffline = gfOffline flags
-          , Lookup.loRemote  =
-              HogRemote.defaultRemoteOptions
-                { HogRemote.roOffline = gfOffline flags }
-          }
-    Lookup.runLookup cache hoogleLocal opts (HoogleQuery q)
-  case result of
-    Left e  -> pure (Left (classifyLookupException e))
-    Right o -> pure o
-
--- | Classify a 'SomeException' raised inside the @hypha lookup@
--- pipeline.  An @ENOENT@ from a child-process spawn (typically the
--- @haddock@ binary missing on @PATH@, or hidden by a sandbox) becomes
--- 'ToolMissing' so callers can distinguish "this environment lacks a
--- required tool" from "the network died" — and so the CLI exits with
--- the dedicated code instead of pretending it was a network error.
-classifyLookupException :: SomeException -> HyphaError
-classifyLookupException se
-  | Just (ioe :: IOException) <- fromException se
-  , isDoesNotExistError ioe
-  = ToolMissing (toolFromFilename (ioe_filename ioe)) ioe
-  | otherwise
-  = NetworkError se
+  let opts = Lookup.LookupOptions
+        { Lookup.loOffline = gfOffline flags
+        , Lookup.loRemote  =
+            HogRemote.defaultRemoteOptions
+              { HogRemote.roOffline = gfOffline flags }
+        }
+  Lookup.runLookup cache hoogleLocal opts (HoogleQuery q)
 
 -- | Materialise the project Hoogle DB: load the plan, derive a
 -- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),
@@ -714,6 +700,35 @@ processOutcome flags cmd result = do
   hFlush stdout
   reportError result
   System.exitWith (resultExitCode result)
+
+-- | Last-resort handler for the top-level 'catchAny' in
+-- @app/hypha/Main.hs@.  Library code only catches exceptions it
+-- knows how to handle structurally ('HttpException' inside
+-- "Hypha.Hoogle.Remote" / "Hypha.Hackage.*"); everything else
+-- propagates and lands here.  We emit a single @INTERNAL_ERROR@
+-- envelope on stdout (so JSON consumers still see a well-formed
+-- response), the exception on stderr, then exit with the dedicated
+-- 'exitInternalError' code so callers can distinguish "hypha itself
+-- crashed" from any other failure class.
+reportInternalError :: SomeException -> IO ()
+reportInternalError e = do
+  let msg      = Text.pack (displayException e)
+      code     = exitInternalError
+      envelope = Aeson.object
+        [ "schema"   Aeson..= ("hypha/v0" :: Text)
+        , "command"  Aeson..= ("<internal>" :: Text)
+        , "ok"       Aeson..= False
+        , "error"    Aeson..= Aeson.object
+            [ "code"      Aeson..= ("INTERNAL_ERROR" :: Text)
+            , "message"   Aeson..= msg
+            , "exit_code" Aeson..= unExitCode code
+            ]
+        , "actions"  Aeson..= Aeson.object []
+        ]
+  LBS.hPut stdout (Aeson.encode envelope)
+  hFlush stdout
+  hPutStrLn stderr ("INTERNAL_ERROR: " <> Text.unpack msg)
+  System.exitWith (toSystemExitCode code)
 
 -- | Surface the structured error to @stderr@ (so the user sees the
 -- @CODE: message@ line that complements the JSON envelope on stdout).

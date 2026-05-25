@@ -19,7 +19,7 @@ module Hypha.Hoogle.Remote
   ) where
 
 import Control.Exception (displayException)
-import Control.Exception.Safe (SomeException, try)
+import Control.Exception.Safe (try)
 import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:?))
 import Data.ByteString.Lazy (ByteString)
@@ -30,7 +30,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import Network.HTTP.Client
-  ( Manager, Request (..), Response, httpLbs, newManager
+  ( HttpException, Manager, Request (..), Response, httpLbs, newManager
   , parseRequest, responseBody, responseTimeoutMicro )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
@@ -197,15 +197,20 @@ httpGet
   -> Text
   -> IO (Either RemoteError ByteString)
 httpGet mgr opts url = do
+  -- Narrow exception scope: only catch 'HttpException' from
+  -- 'http-client'.  parseRequest and httpLbs are the only operations
+  -- inside this block, and both throw 'HttpException' in IO; any
+  -- other (genuinely-unexpected) exception bubbles up to the
+  -- top-level catchAny in app/hypha/Main.hs.
   reqE <- try (parseRequest (Text.unpack url))
-            :: IO (Either SomeException Request)
+            :: IO (Either HttpException Request)
   case reqE of
     Left e -> pure (Left (RemoteHttp (Text.pack (displayException e))))
     Right req0 -> do
       let req = req0 { responseTimeout =
                          responseTimeoutMicro (roTimeoutMicros opts) }
       r <- try (httpLbs req mgr)
-             :: IO (Either SomeException (Response ByteString))
+             :: IO (Either HttpException (Response ByteString))
       case r of
         Left  e    -> pure (Left (RemoteHttp (Text.pack (displayException e))))
         Right resp -> pure (Right (responseBody resp))

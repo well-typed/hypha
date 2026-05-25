@@ -5,12 +5,13 @@ module Hypha.Hackage.Source
   , enumerateSourceCache
   ) where
 
-import Control.Exception.Safe (IOException, try)
+import Control.Exception (displayException)
+import Control.Exception.Safe (try)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Network.HTTP.Client
-  ( Response, httpLbs, newManager, parseRequest, requestHeaders
+  ( HttpException, Response, httpLbs, newManager, parseRequest, requestHeaders
   , responseStatus, responseBody
   )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -37,9 +38,12 @@ fetchAndExtractSource _hclient pid destDir = do
   mgr <- newManager tlsManagerSettings
   req <- parseRequest url
   let req' = req { requestHeaders = [(hUserAgent, userAgent)] }
-  result <- try (httpLbs req' mgr) :: IO (Either IOException (Response LBS.ByteString))
+  -- Only catch 'HttpException' here: it's what 'httpLbs' throws.
+  -- Anything else (filesystem permission errors, async cancellation,
+  -- ...) bubbles up to the top-level catchAny in @app/hypha/Main.hs@.
+  result <- try (httpLbs req' mgr) :: IO (Either HttpException (Response LBS.ByteString))
   case result of
-    Left ex -> pure (Left (NetworkError (show ex)))
+    Left ex -> pure (Left (NetworkError (displayException ex)))
     Right resp -> do
       let status = statusCode (responseStatus resp)
       if status >= 200 && status < 300

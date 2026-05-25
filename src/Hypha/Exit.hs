@@ -10,6 +10,7 @@ module Hypha.Exit
   , exitCacheError
   , exitEnvironmentError
   , exitToolMissing
+  , exitInternalError
     -- * Conversion
   , toSystemExitCode
   ) where
@@ -52,6 +53,14 @@ exitEnvironmentError = ExitCode 7
 -- exposing the tool, not by reconfiguring the project.
 exitToolMissing :: ExitCode
 exitToolMissing = ExitCode 8
+
+-- | Internal error — an exception escaped the library and was caught
+-- by the top-level @catchAny@ in @app/hypha/Main.hs@.  Distinct from
+-- every other code because it signals a /bug or genuinely unhandled
+-- environment failure/ in hypha itself, not a user- or input-level
+-- problem.
+exitInternalError :: ExitCode
+exitInternalError = ExitCode 9
 
 -- | Convert our typed 'ExitCode' to 'System.Exit.ExitCode'.
 toSystemExitCode :: ExitCode -> System.ExitCode

@@ -17,7 +17,8 @@ module Hypha.Hackage.Api
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_)
-import Control.Exception.Safe (try, SomeException)
+import Control.Exception (displayException)
+import Control.Exception.Safe (try)
 import Data.Aeson (Value, decode)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
@@ -32,7 +33,8 @@ import Data.Time
   , defaultTimeLocale, formatTime, parseTimeM, rfc822DateFormat
   )
 import Network.HTTP.Client
-  ( Manager
+  ( HttpException
+  , Manager
   , Response
   , httpLbs
   , parseRequest
@@ -276,9 +278,11 @@ revalidate manager url mEtag mLastMod = do
            : maybe [] (\e -> [(hIfNoneMatch,    e)]) mEtag
           ++ maybe [] (\t -> [(hIfModifiedSince, formatHttpDate t)]) mLastMod
       req' = req { requestHeaders = hdrs }
-  result <- try (httpLbs req' manager) :: IO (Either SomeException (Response LBS.ByteString))
+  -- Narrow to 'HttpException' — what 'httpLbs' actually throws.
+  -- Anything else bubbles to the top-level catchAny in Main.
+  result <- try (httpLbs req' manager) :: IO (Either HttpException (Response LBS.ByteString))
   case result of
-    Left ex -> pure (Left (NetworkError (show ex)))
+    Left ex -> pure (Left (NetworkError (displayException ex)))
     Right resp -> do
       let status = statusCode (responseStatus resp)
       case status of

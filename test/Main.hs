@@ -32,7 +32,6 @@ import qualified Unit.Module
 import qualified Unit.Project
 import qualified Unit.Server
 import qualified Unit.ServerSlots
-import qualified Unit.Errors
 import qualified Unit.Haddock
 
 main :: IO ()
@@ -69,5 +68,4 @@ main = defaultMain (testGroup "hypha"
   , Unit.Server.tests
   , Unit.ServerSlots.tests
   , Unit.Haddock.tests
-  , Unit.Errors.tests
   ])

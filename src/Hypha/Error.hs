@@ -9,9 +9,6 @@ module Hypha.Error
   , renderUserErrorReason
   , NotFoundReason (..)
   , renderNotFoundReason
-  , Tool (..)
-  , renderTool
-  , toolFromFilename
     -- * Classification
   , errorCode
   , errorMessage
@@ -22,7 +19,6 @@ module Hypha.Error
   , loadBuildPlanE
   ) where
 
-import Control.Exception (IOException, SomeException, displayException)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Except (ExceptT (ExceptT))
 import Data.Bifunctor (first)
@@ -33,7 +29,7 @@ import qualified Data.Text as Text
 
 import Hypha.Exit
   ( ExitCode, exitUserError, exitNotFound, exitNetworkError, exitCacheError
-  , exitEnvironmentError, exitToolMissing )
+  , exitEnvironmentError )
 import Hypha.Hackage.Api (HackageError, renderHackageError)
 import qualified Hypha.Hackage.Api as Hackage
 import Hypha.Hoogle.Remote (RemoteError, renderRemoteError)
@@ -126,38 +122,6 @@ renderNotFoundReason = \case
 renderPid :: PackageId -> Text
 renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v
 
--- | External binary hypha depends on.  Used by 'ToolMissing' to name
--- which executable was absent from @PATH@ when the cascade caught an
--- @ENOENT@.  'ToolUnknown' carries the filename so the message stays
--- informative even when we don't recognise the binary.
-data Tool
-  = ToolHaddock
-  | ToolCabal
-  | ToolGhc
-  | ToolTar
-  | ToolUnknown !Text
-  deriving stock (Show, Eq)
-
-renderTool :: Tool -> Text
-renderTool = \case
-  ToolHaddock     -> "haddock"
-  ToolCabal       -> "cabal"
-  ToolGhc         -> "ghc"
-  ToolTar         -> "tar"
-  ToolUnknown nm  -> nm
-
--- | Classify a binary name (typically lifted from 'ioe_filename') into
--- a known 'Tool'.  Falls back to 'ToolUnknown' so the classifier
--- remains total.
-toolFromFilename :: Maybe FilePath -> Tool
-toolFromFilename = \case
-  Just "haddock" -> ToolHaddock
-  Just "cabal"   -> ToolCabal
-  Just "ghc"     -> ToolGhc
-  Just "tar"     -> ToolTar
-  Just other     -> ToolUnknown (Text.pack other)
-  Nothing        -> ToolUnknown "<unknown>"
-
 -- | Umbrella error type produced by hypha.  Every fallible boundary of
 -- the CLI funnels through this ADT.  Constructors embed precise
 -- sub-errors and any envelope context (query, tiers consulted, ...)
@@ -173,28 +137,22 @@ toolFromFilename = \case
 -- Per the project ethos (CLAUDE.md, \"Render at the edge\"): error
 -- constructors carry domain types — 'UserErrorReason',
 -- 'NotFoundReason', 'HoogleQuery', @['Tier']@, 'RemoteError',
--- 'HackageError', 'Tool', 'IOException', 'SomeException' — never
--- pre-rendered 'Text'.  Rendering happens in 'errorMessage' /
--- 'errorActions', at the wire boundary.
+-- 'HackageError' — never pre-rendered 'Text'.  Rendering happens in
+-- 'errorMessage' / 'errorActions', at the wire boundary.
 --
--- 'Eq' is intentionally not derived: 'SomeException' has no useful
--- structural equality and 'IOException' likewise.  Tests pattern-match
--- on constructors rather than comparing whole values.
+-- There is no catch-all umbrella constructor for "any exception at
+-- all".  Library code only catches the specific exception types it
+-- knows how to handle structurally (e.g. 'HttpException' inside
+-- 'Hypha.Hoogle.Remote' and 'Hypha.Hackage.*' for transport failures);
+-- everything else propagates and is rendered as a single
+-- @INTERNAL_ERROR@ envelope by the top-level @catchAny@ in
+-- @app/hypha/Main.hs@.
 data HyphaError
   = UserError         !UserErrorReason
   | NotFound          !NotFoundReason
   | HackageFailure    !PackageName !HackageError
     -- ^ Structured Hackage cause.  Dispatch on the variant for wire
     --   code / exit code mapping.
-  | NetworkError      !SomeException
-    -- ^ Catch-all transport bottom raised inside @hypha lookup@.
-    --   Carries the originating exception so debug output / future
-    --   structured matching is still possible; rendering happens at
-    --   the wire layer via 'displayException'.
-  | ToolMissing       !Tool !IOException
-    -- ^ Required external binary was not on @PATH@.  Carries the
-    --   recognised 'Tool' tag and the originating 'IOException'
-    --   (typically a @posix_spawnp@ ENOENT).
   | DiscoveryFailure  !DiscoveryError
   | PlanFailure       !ProjectRoot !PlanError
     -- | @hypha lookup@: @--offline@ suppressed the remote tier.
@@ -203,14 +161,12 @@ data HyphaError
   | HoogleNotFound     !HoogleQuery ![Tier]
     -- | @hypha lookup@: the remote Hoogle tier failed.
   | HoogleRemoteError  !HoogleQuery ![Tier] !RemoteError
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 errorCode :: HyphaError -> Text
 errorCode = \case
   UserError{}        -> "USER_ERROR"
   NotFound{}         -> "NOT_FOUND"
-  NetworkError{}     -> "NETWORK_ERROR"
-  ToolMissing{}      -> "TOOL_MISSING"
   DiscoveryFailure{} -> "ENV_ERROR"
   PlanFailure _ e    -> case e of
     PlanNotFound{}     -> "ENV_ERROR"
@@ -244,9 +200,6 @@ errorMessage = \case
   UserError         reason -> renderUserErrorReason reason
   NotFound          reason -> renderNotFoundReason  reason
   HackageFailure    name e -> renderHackageError    name e
-  NetworkError      se     -> Text.pack (displayException se)
-  ToolMissing       t  ioe ->
-    renderTool t <> " not available: " <> Text.pack (displayException ioe)
   DiscoveryFailure  (NoProjectFound location)
     -> "no cabal project found (searched up from " <> Text.pack location <> ")"
   PlanFailure (ProjectRoot r) e -> case e of
@@ -265,8 +218,6 @@ errorExitCode :: HyphaError -> ExitCode
 errorExitCode = \case
   UserError{}        -> exitUserError
   NotFound{}         -> exitNotFound
-  NetworkError{}     -> exitNetworkError
-  ToolMissing{}      -> exitToolMissing
   DiscoveryFailure{} -> exitEnvironmentError
   PlanFailure _ e    -> case e of
     PlanNotFound{}     -> exitEnvironmentError
