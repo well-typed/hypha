@@ -294,9 +294,9 @@ runServerInteractive flags port mBind prebuild jobs = do
     hclient         <- liftIO (mkHackageClientForFlags flags)
     env             <- liftIO (mkBuildEnvFor mRoot plan)
     resolver        <- liftIO (mkPackageResolver env hclient plan)
-    let opts = Server.ServerOpts ba prebuild jobs
+    let opts = Server.ServerOpts ba prebuild (fromIntegral (max 1 jobs))
     withExceptT (UserError . Text.pack . renderBindError) $
-      ExceptT (Server.runServer mRoot plan env hclient resolver opts)
+      ExceptT (Server.runServer mRoot plan env resolver opts)
   case result of
     Left err -> do
       hPutStrLn stderr (Text.unpack (errorMessage err))
@@ -314,8 +314,11 @@ bindAddrE port mBind =
 
 parseBindFromFlags :: Int -> Maybe Text -> Either Server.BindError Server.BindAddr
 parseBindFromFlags port = \case
-  Nothing   -> Right (Server.BindAddr "127.0.0.1" port)
-  Just raw  -> Server.parseBind raw
+  Just raw -> Server.parseBind raw
+  Nothing  -> case Server.portFromInt port of
+    Just pn -> Right (Server.defaultBindAddr pn)
+    Nothing -> Left (Server.BindMalformed
+      (Text.pack ("--port out of range: " <> show port)))
 
 renderBindError :: Server.BindError -> String
 renderBindError = \case

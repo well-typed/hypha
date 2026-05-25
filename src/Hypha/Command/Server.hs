@@ -1,6 +1,6 @@
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DerivingStrategies  #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- | The @hypha server@ subcommand.
 --
@@ -14,60 +14,62 @@ module Hypha.Command.Server
   , BindError (..)
     -- * Bind parsing
   , parseBind
+  , defaultBindAddr
+  , portFromInt
+  , renderBindUrl
     -- * Entry points
   , runServer
   , buildServerConfig
   ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
-import Control.Concurrent.Async (mapConcurrently_)
-import Control.Exception.Safe (SomeException, bracket_, try)
-import qualified Data.IORef as IORef
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Map.Strict as Map
-import qualified Data.Text as Text
+import Control.Concurrent.Stream (mapConcurrentlyBounded)
+import Control.Exception.Safe (SomeException, try)
+import Control.Monad
+import Data.ByteString.Lazy qualified as LBS
+import Data.IORef qualified as IORef
+import Data.IP ( AddrRange, IP (..), IPv4, IPv6, isMatchedTo, makeAddrRange, toIPv4, toIPv6 )
+import Data.List (sortOn)
+import Data.Map.Strict qualified as Map
+import Data.Maybe
+import Data.Ord (Down (..))
+import Data.String qualified as String
+import Data.Text.Encoding qualified as Text
+import Data.Text.IO qualified as TIO
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text.Encoding as Text
-import qualified Data.Text.IO as TIO
-import Network.Wai.Handler.Warp
-  ( defaultSettings, runSettings, setHost, setPort )
-import qualified Data.String as String
+import GHC.Natural (Natural)
+import Network.Socket (PortNumber)
+import Network.URI ( URI (..), URIAuth (..), parseURIReference, uriToString )
+import Network.Wai.Handler.Warp ( defaultSettings, runSettings, setHost, setPort )
+import System.Directory qualified as Dir
+import System.FilePath qualified as FP
 import System.IO (hPutStrLn, stderr)
+import Text.Read (readMaybe)
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Hackage.Api (HackageClient (..))
 import Hypha.Haddock.Generate (ensureHaddockFor, haddockDirFor)
-import Hypha.Package.Resolver
-  ( PackageResolver (..), ResolvedPackage (..) )
-import Data.List (sortOn)
-import Data.Ord (Down (..))
-import qualified Hypha.Project.Components as Comp
-import qualified Hypha.Search.PackageCache as Cache
+import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
+import Hypha.Project.Components qualified as Comp
+import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.PackageCache (CacheOrigin (..))
-import qualified Hypha.Search.Fuzzy as Fuzzy
-import qualified Hypha.Server.App as App
-import qualified Hypha.Server.Haddock.Rewrite as Rewrite
-import qualified Hypha.Server.Slots as Slots
-import qualified Hypha.Source.Extract as Extract
-import qualified Hypha.Source.Locate as Locate
+import Hypha.Search.PackageCache qualified as Cache
+import Hypha.Server.App qualified as App
+import Hypha.Server.Haddock.Rewrite qualified as Rewrite
+import Hypha.Server.Slots qualified as Slots
+import Hypha.Source.Extract qualified as Extract
+import Hypha.Source.Locate qualified as Locate
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), ProjectRoot
-  , lookupUnit )
 import Hypha.Types.ComponentName
-  ( ComponentName (..), cnKind, cnPackage, parseComponentName )
 import Hypha.Types.Doc (DocText (..))
 import Hypha.Types.PackageId
-  ( PackageId (..), PackageName (..), Version (..) )
-import qualified System.Directory as Dir
-import qualified System.FilePath as FP
 
--- | Bind address.  Loopback only — explicit guard in 'parseBind'.
+-- | Bind address — a typed IP plus a bounded port.  Loopback membership
+-- enforced at construction time by 'parseBind' / 'defaultBindAddr'.
 data BindAddr = BindAddr
-  { baHost :: !String
-  , baPort :: !Int
-  }
-  deriving stock (Show, Eq)
+  { baIP   :: !IP
+  , baPort :: !PortNumber
+  } deriving stock (Show, Eq)
 
 -- | Parse failure or refusal.
 data BindError
@@ -81,26 +83,112 @@ data ServerOpts = ServerOpts
     -- ^ Resolved bind address.
   , soPrebuild     :: !Bool
     -- ^ Walk plan and pre-render Haddocks.
-  , soPrebuildJobs :: !Int
+  , soPrebuildJobs :: !Natural
     -- ^ Max concurrent prebuild workers.
   }
   deriving stock (Show, Eq)
 
--- | Parse a bind string of the form @HOST:PORT@.  Only loopback hosts are
--- accepted — anything else returns 'BindNonLoopback'.
+-- | IPv4 loopback range: @127.0.0.0/8@.
+ipv4Loopback :: AddrRange IPv4
+ipv4Loopback = makeAddrRange (toIPv4 [127,0,0,0]) 8
+
+-- | IPv6 loopback range: @::1/128@.
+ipv6Loopback :: AddrRange IPv6
+ipv6Loopback = makeAddrRange (toIPv6 [0,0,0,0,0,0,0,1]) 128
+
+-- | Is this IP inside the standard loopback ranges?
+isLoopbackIP :: IP -> Bool
+isLoopbackIP = \case
+  IPv4 a -> a `isMatchedTo` ipv4Loopback
+  IPv6 a -> a `isMatchedTo` ipv6Loopback
+
+-- | Default IPv4 loopback bind: @127.0.0.1:<port>@.
+defaultBindAddr :: PortNumber -> BindAddr
+defaultBindAddr = BindAddr (IPv4 (toIPv4 [127,0,0,1]))
+
+-- | Convert a raw 'Int' (from the CLI) to a bounded 'PortNumber'.
+portFromInt :: Int -> Maybe PortNumber
+portFromInt n
+  | n >= 1 && n <= 65535 = Just (fromIntegral n)
+  | otherwise            = Nothing
+
+-- | Render a 'BindAddr' as an @http://@ URL.  IPv6 addresses are wrapped
+-- in square brackets per RFC 3986; rendering is delegated to
+-- @network-uri@ to keep the encoding rules in one place.
+renderBindUrl :: BindAddr -> String
+renderBindUrl = ($ "") . uriToString id . bindAsURI
+
+-- | Reflect a 'BindAddr' back into a 'URI' value so the @network-uri@
+-- machinery handles bracket placement and serialisation.
+bindAsURI :: BindAddr -> URI
+bindAsURI (BindAddr ip port) = URI
+  { uriScheme    = "http:"
+  , uriAuthority = Just URIAuth
+      { uriUserInfo = ""
+      , uriRegName  = case ip of
+          IPv4 a -> show a
+          IPv6 a -> "[" <> show a <> "]"
+      , uriPort     = ':' : show port
+      }
+  , uriPath      = ""
+  , uriQuery     = ""
+  , uriFragment  = ""
+  }
+
+-- | Parse a bind string.  Accepts:
+--
+--   * @127.0.0.1:4287@ — IPv4 with port;
+--   * @localhost:4287@ — short-circuited to @127.0.0.1@ (no DNS);
+--   * @[::1]:4287@     — IPv6 in RFC 3986 brackets.
+--
+-- A 'URI' authority is built eagerly via 'parseBindAuthority'; the
+-- typed @host@ and @port@ are then derived from it.  Only loopback
+-- ranges (@127.0.0.0/8@ and @::1/128@) are accepted; any routable
+-- address returns 'BindNonLoopback'.
 parseBind :: Text -> Either BindError BindAddr
-parseBind raw =
-  case Text.splitOn ":" raw of
-    [h, p] | Just port <- readPortMaybe (Text.unpack p) ->
-      if isLoopback h
-        then Right (BindAddr (Text.unpack h) port)
-        else Left  (BindNonLoopback raw)
-    _ -> Left (BindMalformed raw)
+parseBind raw = do
+  auth <- noteMalformed (parseBindAuthority raw)
+  ip   <- noteMalformed (parseBindHost (uriRegName auth))
+  port <- noteMalformed (parseBindPort (uriPort auth))
+  if isLoopbackIP ip
+    then Right (BindAddr ip port)
+    else Left (BindNonLoopback raw)
   where
-    isLoopback h = h == "localhost" || h == "127.0.0.1" || h == "::1"
-    readPortMaybe s = case reads s of
-      [(n, "")] | n >= 1 && n <= 65535 -> Just n
-      _                                -> Nothing
+    noteMalformed = maybe (Left (BindMalformed raw)) Right
+
+-- | Parse the raw bind string as a strict RFC 3986 authority via
+-- @network-uri@'s 'parseURIReference' (fed as the network-path
+-- reference @"//<raw>"@).  Every URI component outside the
+-- authority (scheme, path, query, fragment, userinfo) is rejected
+-- so only pure @HOST:PORT@ shapes survive.
+parseBindAuthority :: Text -> Maybe URIAuth
+parseBindAuthority raw = do
+  uri <- parseURIReference ("//" <> Text.unpack raw)
+  guardEmpty (uriScheme uri)
+  guardEmpty (uriPath uri)
+  guardEmpty (uriQuery uri)
+  guardEmpty (uriFragment uri)
+  auth <- uriAuthority uri
+  guardEmpty (uriUserInfo auth)
+  pure auth
+  where
+    guardEmpty s = if null s then Just () else Nothing
+
+-- | Parse the @host@ component of a 'URIAuth' as an 'IP'.  Strips
+-- the IPv6 brackets that 'parseURIReference' keeps on @uriRegName@,
+-- and short-circuits @localhost@ to IPv4 loopback (no DNS lookup).
+parseBindHost :: String -> Maybe IP
+parseBindHost "localhost" = Just (IPv4 (toIPv4 [127,0,0,1]))
+parseBindHost regName     = readMaybe (stripBrackets regName)
+  where
+    stripBrackets ('[' : rest@(_:_)) | last rest == ']' = init rest
+    stripBrackets s                                     = s
+
+-- | Parse the @port@ component of a 'URIAuth' (which 'network-uri'
+-- delivers including its leading @\':'@) as a bounded 'PortNumber'.
+parseBindPort :: String -> Maybe PortNumber
+parseBindPort (':' : s) | not (null s) = readMaybe s
+parseBindPort _                        = Nothing
 
 -- | Boot the server.  Returns 'Left' on bind refusal; otherwise blocks
 -- inside Warp's event loop.
@@ -108,37 +196,54 @@ runServer
   :: Maybe ProjectRoot
   -> BuildPlan
   -> BuildEnv IO
-  -> HackageClient IO
   -> PackageResolver IO
   -> ServerOpts
   -> IO (Either BindError ())
-runServer mRoot plan env hclient resolver opts = do
-  cfg <- buildServerConfig mRoot plan env hclient resolver
-  hPutStrLn stderr
-    ( "hypha server listening on http://" <> baHost (soBind opts)
-   <> ":" <> show (baPort (soBind opts))
-    )
-  case soPrebuild opts of
-    False -> pure ()
-    True  -> prebuildAll plan env (soPrebuildJobs opts) (planPackageIds plan)
-  let settings = setHost (String.fromString (baHost (soBind opts)))
-               $ setPort (baPort (soBind opts))
+runServer mRoot plan env resolver opts = do
+  cfg <- buildServerConfig mRoot plan resolver
+  let bind = soBind opts
+  hPutStrLn stderr ("hypha server listening on " <> renderBindUrl bind)
+  when (soPrebuild opts) $
+    prebuildAll plan env (soPrebuildJobs opts) (planPackageIds plan)
+  let settings = setHost (String.fromString (show (baIP bind)))
+               $ setPort (fromIntegral (baPort bind))
                  defaultSettings
   runSettings settings (App.appWith cfg)
   pure (Right ())
 
 -- | Concurrently warm the Haddock cache for every package in the plan.
-prebuildAll :: BuildPlan -> BuildEnv IO -> Int -> [PackageId] -> IO ()
+-- Bounded by a worker pool of 'soPrebuildJobs' threads.  Every
+-- per-package outcome is collected and reported on @stderr@ after the
+-- pool drains — neither exceptions nor empty haddock results are
+-- silently swallowed.
+prebuildAll :: BuildPlan -> BuildEnv IO -> Natural -> [PackageId] -> IO ()
 prebuildAll plan env jobs pids = do
-  sem <- newQSem (max 1 jobs)
-  mapConcurrently_ (withSem sem . ensureOne) pids
+  outcomes <- mapConcurrentlyBounded (max 1 (fromEnum jobs)) ensureOne pids
+  reportPrebuildOutcomes outcomes
   where
+    ensureOne :: PackageId -> IO (PackageId, Either SomeException (Maybe FilePath))
     ensureOne pid = do
-      r <- try (ensureHaddockFor plan env pid) :: IO (Either SomeException (Maybe FilePath))
-      case r of
-        Right (Just _) -> pure ()
-        _              -> pure ()
-    withSem sem action = bracket_ (waitQSem sem) (signalQSem sem) action
+      r <- try (ensureHaddockFor plan env pid)
+      pure (pid, r)
+
+-- | Walk every '(pid, outcome)' returned by 'prebuildAll' and surface
+-- the interesting ones.  Concurrent stderr writes are linearised here
+-- after the pool has drained so the log isn't interleaved.
+reportPrebuildOutcomes
+  :: [(PackageId, Either SomeException (Maybe FilePath))] -> IO ()
+reportPrebuildOutcomes outcomes = do
+  mapM_ logFailure [ (pid, e) | (pid, Left  e)       <- outcomes ]
+  mapM_ logMissing [  pid     | (pid, Right Nothing) <- outcomes ]
+  where
+    logFailure (pid, e) = hPutStrLn stderr
+      ("warning: prebuild failed for " <> renderPkgId pid <> ": " <> show e)
+    logMissing pid      = hPutStrLn stderr
+      ("note: prebuild produced no haddock for " <> renderPkgId pid)
+
+-- | Render a 'PackageId' as @<pkg>-<version>@ for log lines.
+renderPkgId :: PackageId -> String
+renderPkgId (PackageId (PackageName n) (Version v)) =
+  Text.unpack n <> "-" <> Text.unpack v
 
 -- | Extract every distinct 'PackageId' from a plan.
 planPackageIds :: BuildPlan -> [PackageId]
@@ -149,11 +254,9 @@ planPackageIds = map puId . Map.elems . bpUnits
 buildServerConfig
   :: Maybe ProjectRoot
   -> BuildPlan
-  -> BuildEnv IO
-  -> HackageClient IO
   -> PackageResolver IO
   -> IO App.ServerConfig
-buildServerConfig mRoot plan _env _hclient resolver = do
+buildServerConfig mRoot plan resolver = do
   let pids     = planPackageIds plan
       packages = concatMap (componentNames plan) pids
   slots <- Slots.initialiseSlots pids
@@ -235,7 +338,7 @@ buildServerConfig mRoot plan _env _hclient resolver = do
                           modT' = modulePathFromFile parentDir (Locate.slPath loc)
                       pure (info', modT', Just (Locate.slLine loc))
                     _ -> pure (info0, modT, Nothing)
-                let sig = maybe "" id (Extract.siSignature info)
+                let sig = fromMaybe "" (Extract.siSignature info)
                     hd  = maybe "" unDocText (Extract.siHaddock  info)
                     mLine = case (Extract.siSigLine info, Extract.siLine info, lineOverride) of
                       (Just n, _, _)        -> Just n

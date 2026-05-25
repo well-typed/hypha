@@ -19,12 +19,10 @@ module Hypha.Error
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Except (ExceptT (ExceptT))
 import Data.Bifunctor (first)
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
 
 import Hypha.Exit
-  ( ExitCode, exitUserError, exitNotFound, exitNetworkError, exitCacheError
-  , exitEnvironmentError, exitToolMissing, unExitCode )
 import Hypha.Output.Outcome (OutcomeError (..))
 import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
 import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
@@ -50,31 +48,40 @@ data HyphaError
 
 errorCode :: HyphaError -> Text
 errorCode = \case
-  UserError         _   -> "USER_ERROR"
-  NotFound          _   -> "NOT_FOUND"
-  NetworkError      _   -> "NETWORK_ERROR"
-  Corruption        _   -> "CORRUPTION"
-  EnvError          _   -> "ENV_ERROR"
-  ToolMissing       _   -> "TOOL_MISSING"
-  DiscoveryFailure  _   -> "ENV_ERROR"
-  PlanFailure       _ e -> case e of
-    PlanNotFound     _ -> "ENV_ERROR"
-    PlanParseFailure _ -> "CORRUPTION"
+  UserError{}        -> "USER_ERROR"
+  NotFound{}         -> "NOT_FOUND"
+  NetworkError{}     -> "NETWORK_ERROR"
+  Corruption{}       -> "CORRUPTION"
+  EnvError{}         -> "ENV_ERROR"
+  ToolMissing{}      -> "TOOL_MISSING"
+  DiscoveryFailure{} -> "ENV_ERROR"
+  PlanFailure _ e -> case e of
+    PlanNotFound{} -> "ENV_ERROR"
+    PlanParseFailure{} -> "CORRUPTION"
 
 errorMessage :: HyphaError -> Text
 errorMessage = \case
-  UserError         msg -> msg
-  NotFound          msg -> msg
-  NetworkError      msg -> msg
-  Corruption        msg -> msg
-  EnvError          msg -> msg
-  ToolMissing       msg -> msg
-  DiscoveryFailure  (NoProjectFound where_) ->
-    "no cabal project found (searched up from " <> Text.pack where_ <> ")"
-  PlanFailure (ProjectRoot r) e -> case e of
-    PlanNotFound _    -> "plan.json missing under " <> Text.pack r
-                          <> "; run `cabal build --dry-run`"
-    PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
+  UserError msg
+    -> msg
+  NotFound msg
+    -> msg
+  NetworkError msg
+    -> msg
+  Corruption msg
+    -> msg
+  EnvError msg
+    -> msg
+  ToolMissing msg
+    -> msg
+  DiscoveryFailure (NoProjectFound location)
+    -> "no cabal project found (searched up from " <> Text.pack location <> ")"
+  PlanFailure (ProjectRoot r) e
+    -> case e of
+         PlanNotFound pth ->
+              "plan.json (searched at " <> Text.pack pth
+           <> " missing under " <> Text.pack r
+           <> "; run `cabal build --dry-run`"
+         PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
 
 errorExitCode :: HyphaError -> ExitCode
 errorExitCode = \case
