@@ -23,7 +23,7 @@ import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), NotFoundReason (..), UserErrorReason (..))
 import Hypha.Output.Outcome (Outcome (..), Related (..), tagOutsidePlan)
 import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..), resolveRef )
@@ -83,16 +83,14 @@ runSymbol env plan rawArg = runExceptT $ do
   let pkgName = spPackage sp
       sym     = unSymbolName symName
       modTxt  = unModulePath modPath
-  ver       <- liftMaybe (NotFound ("package '" <> unPackageName pkgName
-                              <> "' not in build plan"))
+  ver       <- liftMaybe (NotFound (NotFoundPackageInPlan pkgName))
                 (lookupPackage pkgName plan)
   let pid = PackageId pkgName ver
-  d         <- liftMaybe (EnvError ("source directory not found for "
-                              <> unPackageName pkgName <> "-" <> unVersion ver))
+  d         <- liftMaybe (NotFound (NotFoundSourceDir pid))
                 =<< liftIO (locatePackageSource env pid)
   let f = d </> modulePathToFile modTxt
   ok        <- liftIO (doesFileExist f)
-  unless ok (throwE (NotFound ("module file not found: " <> Text.pack f)))
+  unless ok (throwE (NotFound (NotFoundModuleFile pid modTxt f)))
   src       <- liftIO (TIO.readFile f)
   let info = extractSymbolInfo src sym
   pure (mkOutcome pkgName ver modTxt sym f info)
@@ -120,9 +118,8 @@ runSymbolWith _env resolver rawArg = runExceptT $ do
   mFile     <- liftIO (findModuleFile d modTxt)
   f         <- case mFile of
                  Just p  -> pure p
-                 Nothing -> throwE (NotFound
-                   ("module file not found under " <> Text.pack d
-                     <> " for " <> modTxt))
+                 Nothing -> throwE
+                   (NotFound (NotFoundModuleFileUnder d modTxt))
   src       <- liftIO (TIO.readFile f)
   let info = extractSymbolInfo src sym
       outcome = mkOutcome pkgName ver modTxt sym f info
@@ -130,18 +127,16 @@ runSymbolWith _env resolver rawArg = runExceptT $ do
 
 -- | Convert a 'SymbolPath' parse failure into a 'UserError'.
 liftParseError :: Text -> Either e SymbolPath -> ExceptT HyphaError IO SymbolPath
-liftParseError rawArg = ExceptT . pure . first (const (UserError
-  ("expected PKG/MOD/SYM (got: " <> rawArg <> ")")))
+liftParseError rawArg = ExceptT . pure . first
+  (const (UserError (UserExpectedSymbolPath rawArg)))
 
 -- | Require both module and symbol segments from a 'SymbolPath'.
 requireModuleAndSymbol :: SymbolPath -> Text -> ExceptT HyphaError IO (ModulePath, SymbolName)
 requireModuleAndSymbol sp rawArg =
   case (spModule sp, spSymbol sp) of
     (Just m, Just s) -> pure (m, s)
-    (Nothing, _)     -> throwE $ UserError
-      ("expected PKG/MOD/SYM — module segment missing (got: " <> rawArg <> ")")
-    (_, Nothing)     -> throwE $ UserError
-      ("expected PKG/MOD/SYM — symbol segment missing (got: " <> rawArg <> ")")
+    (Nothing, _)     -> throwE (UserError (UserSymbolPathMissingModule rawArg))
+    (_, Nothing)     -> throwE (UserError (UserSymbolPathMissingSymbol rawArg))
 
 -- | Lift a 'Maybe' into 'ExceptT' with the given error on 'Nothing'.
 liftMaybe :: Monad m => HyphaError -> Maybe a -> ExceptT HyphaError m a

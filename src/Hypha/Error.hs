@@ -4,6 +4,11 @@
 module Hypha.Error
   ( -- * Umbrella error
     HyphaError (..)
+    -- * Typed sub-reasons
+  , UserErrorReason (..)
+  , renderUserErrorReason
+  , NotFoundReason (..)
+  , renderNotFoundReason
     -- * Classification
   , errorCode
   , errorMessage
@@ -29,8 +34,91 @@ import Hypha.Hoogle.Remote (RemoteError, renderRemoteError)
 import Hypha.Hoogle.Tier (Tier, renderTierList)
 import Hypha.Hoogle.Type (HoogleQuery (..))
 import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
+import Hypha.Project.Overrides (OverrideError, renderOverrideError)
 import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
+import Hypha.Server.Bind (BindError, renderBindError)
 import Hypha.Types.BuildPlan (BuildPlan, ProjectRoot (..))
+import Hypha.Types.PackageId
+  ( PackageId (..), PackageName (..), Version (..) )
+
+-- | Typed reasons a CLI invocation can be rejected as user error.  Each
+-- variant captures the structured input that failed validation
+-- (raw argument, 'OverrideError', 'BindError') — never a pre-rendered
+-- message.  Rendering happens in 'renderUserErrorReason'.
+data UserErrorReason
+    -- | Expected @PKG/MOD@; got the embedded raw argument.
+  = UserExpectedPkgMod          !Text
+    -- | Expected @PKG/MOD[/SYM]@; got the embedded raw argument.
+  | UserExpectedPkgModOptSym    !Text
+    -- | Expected @PKG/MOD/SYM@; got the embedded raw argument.
+  | UserExpectedSymbolPath      !Text
+    -- | Symbol-path argument was missing its module segment.
+  | UserSymbolPathMissingModule !Text
+    -- | Symbol-path argument was missing its symbol segment.
+  | UserSymbolPathMissingSymbol !Text
+    -- | @--package-override@ failed to parse.
+  | UserOverrideParse           !OverrideError
+    -- | @--bind@ value rejected (malformed or non-loopback).
+  | UserBindError               !BindError
+  deriving stock (Show, Eq)
+
+renderUserErrorReason :: UserErrorReason -> Text
+renderUserErrorReason = \case
+  UserExpectedPkgMod          arg -> "expected PKG/MOD (got: "       <> arg <> ")"
+  UserExpectedPkgModOptSym    arg -> "expected PKG/MOD[/SYM] (got: " <> arg <> ")"
+  UserExpectedSymbolPath      arg -> "expected PKG/MOD/SYM (got: "   <> arg <> ")"
+  UserSymbolPathMissingModule arg ->
+    "expected PKG/MOD/SYM — module segment missing (got: " <> arg <> ")"
+  UserSymbolPathMissingSymbol arg ->
+    "expected PKG/MOD/SYM — symbol segment missing (got: " <> arg <> ")"
+  UserOverrideParse err -> renderOverrideError err
+  UserBindError     err -> renderBindError err
+
+-- | Typed reasons a lookup boundary returned no result.  Carries the
+-- structured pid / module / symbol involved so the wire layer
+-- renders the message uniformly and downstream consumers can still
+-- pattern-match on the cause.
+data NotFoundReason
+    -- | Package not present in the resolved build plan.
+  = NotFoundPackageInPlan    !PackageName
+    -- | Package not present in the local @--offline@ cache.
+  | NotFoundOfflineCache     !PackageName
+    -- | Source directory not on disk for the resolved package.
+  | NotFoundSourceDir        !PackageId
+    -- | Package source could not be located (plan / store / Hackage).
+  | NotFoundSource           !PackageId
+    -- | Specific module file not found at a known location.
+  | NotFoundModuleFile       !PackageId !Text !FilePath
+    -- | Module file not found anywhere under a search directory.
+  | NotFoundModuleFileUnder  !FilePath !Text
+    -- | Symbol not found inside an otherwise-located module.
+  | NotFoundSymbol           !PackageId !Text !Text
+  deriving stock (Show, Eq)
+
+renderNotFoundReason :: NotFoundReason -> Text
+renderNotFoundReason = \case
+  NotFoundPackageInPlan    n ->
+    "package '" <> unPackageName n <> "' not in build plan"
+  NotFoundOfflineCache     n ->
+    "package '" <> unPackageName n
+      <> "' not cached; can't fetch from Hackage in offline mode"
+  NotFoundSourceDir        pid ->
+    "source directory not found for " <> renderPid pid
+  NotFoundSource           pid ->
+    "source not found for " <> renderPid pid
+      <> "; run `cabal build` first"
+  NotFoundModuleFile       pid modPath path ->
+    "module file not found for " <> renderPid pid
+      <> "/" <> modPath <> ": " <> Text.pack path
+  NotFoundModuleFileUnder  srcDir modPath ->
+    "module file not found under " <> Text.pack srcDir
+      <> " for " <> modPath
+  NotFoundSymbol           pid modPath sym ->
+    "symbol '" <> sym <> "' not found in " <> renderPid pid
+      <> "/" <> modPath
+
+renderPid :: PackageId -> Text
+renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v
 
 -- | Umbrella error type produced by hypha.  Every fallible boundary of the
 -- CLI funnels through this ADT.  Constructors embed precise sub-errors
@@ -40,66 +128,52 @@ import Hypha.Types.BuildPlan (BuildPlan, ProjectRoot (..))
 -- Each constructor maps to exactly one 'ExitCode'; totality is checked
 -- by the unit tests in @test/Unit/Errors.hs@.
 --
--- Per the project ethos (CLAUDE.md, \"Render at the edge\"): the
--- @Hoogle*@ constructors carry domain types — 'HoogleQuery', @['Tier']@,
--- 'RemoteError' — never pre-rendered 'Text'.  Stringification happens
--- in 'errorMessage' \/ 'errorActions', at the wire boundary.
+-- Per the project ethos (CLAUDE.md, \"Render at the edge\"): error
+-- constructors carry domain types — 'UserErrorReason',
+-- 'NotFoundReason', 'HoogleQuery', @['Tier']@, 'RemoteError' — never
+-- pre-rendered 'Text'.  Stringification happens in 'errorMessage' /
+-- 'errorActions', at the wire boundary.
 data HyphaError
-  = UserError         !Text             -- ^ bad CLI args, malformed path
-  | NotFound          !Text             -- ^ pkg/symbol absent from fallback chain
-  | NetworkError      !Text             -- ^ --offline cache miss, 429, 503
-  | Corruption        !Text             -- ^ cache / parse / on-disk corruption
-  | EnvError          !Text             -- ^ store unreachable, generic env failure
-  | ToolMissing       !Text             -- ^ haddock/cabal/ghc not on PATH
-  | DiscoveryFailure  !DiscoveryError   -- ^ project root discovery failed
-  | PlanFailure       !ProjectRoot !PlanError -- ^ plan.json missing/unparseable
-    -- | @hypha lookup@: @--offline@ suppressed the remote tier.  Carries
-    --   the original query and the tiers actually consulted so the
-    --   failure envelope can suggest a retry.
+  = UserError         !UserErrorReason   -- ^ bad CLI args / malformed input
+  | NotFound          !NotFoundReason    -- ^ pkg/symbol/source absent
+  | NetworkError      !Text              -- ^ catch-all transport bottom
+  | Corruption        !Text              -- ^ cache / parse / on-disk corruption
+  | EnvError          !Text              -- ^ generic environment failure
+  | ToolMissing       !Text              -- ^ haddock/cabal/ghc not on PATH
+  | DiscoveryFailure  !DiscoveryError    -- ^ project root discovery failed
+  | PlanFailure       !ProjectRoot !PlanError
+    -- | @hypha lookup@: @--offline@ suppressed the remote tier.
   | HoogleOffline      !HoogleQuery ![Tier]
     -- | @hypha lookup@: no providers found across every tier consulted.
   | HoogleNotFound     !HoogleQuery ![Tier]
-    -- | @hypha lookup@: the remote Hoogle tier failed.  The embedded
-    --   'RemoteError' is kept structured (not flattened to 'Text') so
-    --   downstream consumers can still pattern-match on the cause.
+    -- | @hypha lookup@: the remote Hoogle tier failed.
   | HoogleRemoteError  !HoogleQuery ![Tier] !RemoteError
   deriving stock (Show, Eq)
 
 errorCode :: HyphaError -> Text
 errorCode = \case
-  UserError{}
-    -> "USER_ERROR"
-  NotFound{}
-    -> "NOT_FOUND"
-  NetworkError{}
-    -> "NETWORK_ERROR"
-  Corruption{}
-    -> "CORRUPTION"
-  EnvError{}
-    -> "ENV_ERROR"
-  ToolMissing{}
-    -> "TOOL_MISSING"
-  DiscoveryFailure{}
-    -> "ENV_ERROR"
-  PlanFailure _ e
-    -> case e of
-         PlanNotFound{}     -> "ENV_ERROR"
-         PlanParseFailure{} -> "CORRUPTION"
-  HoogleOffline{}
-    -> "HOOGLE_OFFLINE"
-  HoogleNotFound{}
-    -> "NOT_FOUND"
-  HoogleRemoteError{}
-    -> "HOOGLE_REMOTE_ERROR"
+  UserError{}        -> "USER_ERROR"
+  NotFound{}         -> "NOT_FOUND"
+  NetworkError{}     -> "NETWORK_ERROR"
+  Corruption{}       -> "CORRUPTION"
+  EnvError{}         -> "ENV_ERROR"
+  ToolMissing{}      -> "TOOL_MISSING"
+  DiscoveryFailure{} -> "ENV_ERROR"
+  PlanFailure _ e    -> case e of
+    PlanNotFound{}     -> "ENV_ERROR"
+    PlanParseFailure{} -> "CORRUPTION"
+  HoogleOffline{}     -> "HOOGLE_OFFLINE"
+  HoogleNotFound{}    -> "NOT_FOUND"
+  HoogleRemoteError{} -> "HOOGLE_REMOTE_ERROR"
 
 errorMessage :: HyphaError -> Text
 errorMessage = \case
-  UserError         msg -> msg
-  NotFound          msg -> msg
-  NetworkError      msg -> msg
-  Corruption        msg -> msg
-  EnvError          msg -> msg
-  ToolMissing       msg -> msg
+  UserError         reason -> renderUserErrorReason reason
+  NotFound          reason -> renderNotFoundReason  reason
+  NetworkError      msg    -> msg
+  Corruption        msg    -> msg
+  EnvError          msg    -> msg
+  ToolMissing       msg    -> msg
   DiscoveryFailure  (NoProjectFound location)
     -> "no cabal project found (searched up from " <> Text.pack location <> ")"
   PlanFailure (ProjectRoot r) e -> case e of
@@ -116,30 +190,19 @@ errorMessage = \case
 
 errorExitCode :: HyphaError -> ExitCode
 errorExitCode = \case
-  UserError{}
-    -> exitUserError
-  NotFound{}
-    -> exitNotFound
-  NetworkError{}
-    -> exitNetworkError
-  Corruption{}
-    -> exitCacheError
-  EnvError{}
-    -> exitEnvironmentError
-  ToolMissing{}
-    -> exitToolMissing
-  DiscoveryFailure{}
-    -> exitEnvironmentError
-  PlanFailure _ e
-    -> case e of
-         PlanNotFound{}     -> exitEnvironmentError
-         PlanParseFailure{} -> exitCacheError
-  HoogleOffline{}
-    -> exitNetworkError
-  HoogleNotFound{}
-    -> exitNotFound
-  HoogleRemoteError{}
-    -> exitCacheError
+  UserError{}        -> exitUserError
+  NotFound{}         -> exitNotFound
+  NetworkError{}     -> exitNetworkError
+  Corruption{}       -> exitCacheError
+  EnvError{}         -> exitEnvironmentError
+  ToolMissing{}      -> exitToolMissing
+  DiscoveryFailure{} -> exitEnvironmentError
+  PlanFailure _ e    -> case e of
+    PlanNotFound{}     -> exitEnvironmentError
+    PlanParseFailure{} -> exitCacheError
+  HoogleOffline{}     -> exitNetworkError
+  HoogleNotFound{}    -> exitNotFound
+  HoogleRemoteError{} -> exitCacheError
 
 -- | Envelope-level @actions@ map derived from the error constructor.
 -- Most errors carry no command-specific recovery hints; the lookup

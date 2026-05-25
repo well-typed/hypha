@@ -16,7 +16,8 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import Test.Tasty (TestTree, testGroup)
 
 import Hypha.Cli.Types
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), NotFoundReason (..))
+import Hypha.Types.PackageId (PackageName (..))
 import Hypha.Output.Json (ToOutcomeJson (..), encodeEnvelope, filterSelect, objectKeys)
 import Hypha.Output.Outcome (successOutcome)
 
@@ -124,7 +125,7 @@ testSuccessEnvelope = do
 
 testFailureEnvelope :: IO ()
 testFailureEnvelope = do
-  let err  = NotFound (Text.pack "missing")
+  let err  = NotFound (NotFoundPackageInPlan (PackageName "missing"))
       val  = encodeEnvelope SymbolCmd (Left err)
       keys = objectKeys val
   keys @?= Set.fromList [ "schema", "command", "ok", "error", "actions" ]

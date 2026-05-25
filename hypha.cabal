@@ -79,6 +79,7 @@ library
     Hypha.Hackage.Api
     Hypha.Hoogle.Type
     Hypha.Hoogle.Tier
+    Hypha.Server.Bind
     Hypha.Haddock.Generate
     Hypha.Cli.Parser
     Hypha.Cli.Run

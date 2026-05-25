@@ -70,7 +70,7 @@ import Hypha.Package.Resolver
 import Hypha.Project.Components qualified as Comp
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
-import Hypha.Project.Overrides (parsePackageOverride, renderOverrideError)
+import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (loadBuildPlan, planHash)
 import Hypha.Search.PackageCache qualified as PC
 import Hypha.Source.Modules qualified as SourceModules
@@ -104,7 +104,7 @@ loadPlan flags = do
 collectOverridesE
   :: Monad m => [Text] -> ExceptT HyphaError m [PackageOverride]
 collectOverridesE raws = case traverse parsePackageOverride raws of
-  Left  err -> throwE (UserError (renderOverrideError err))
+  Left  err -> throwE (UserError (UserOverrideParse err))
   Right xs  -> pure xs
 
 -- | Create a Hackage client respecting the offline flag.
@@ -349,8 +349,7 @@ dispatchE flags = \case
 parsePkgMod :: Monad m => Text -> ExceptT HyphaError m (Text, Text)
 parsePkgMod arg = case Text.splitOn "/" arg of
   [pkg, modPath] -> pure (pkg, modPath)
-  _              -> throwE
-    (UserError ("expected PKG/MOD (got: " <> arg <> ")"))
+  _              -> throwE (UserError (UserExpectedPkgMod arg))
 
 -- | Parse @PKG/MOD[/SYM]@ inside 'ExceptT'.
 parsePkgModOptSym
@@ -358,8 +357,7 @@ parsePkgModOptSym
 parsePkgModOptSym arg = case Text.splitOn "/" arg of
   [pkg, modPath]      -> pure (pkg, modPath, Nothing)
   [pkg, modPath, sym] -> pure (pkg, modPath, Just sym)
-  _                   -> throwE
-    (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")"))
+  _                   -> throwE (UserError (UserExpectedPkgModOptSym arg))
 
 -- | Server interactive arm.  Refuses non-loopback binds with exit 2; on
 -- successful bind it blocks inside Warp until interrupted.
@@ -379,7 +377,7 @@ runServerInteractive flags port mBind prebuild jobs = do
     plan            <- liftIO (enrichPlanFromStore env plan0)
     resolver        <- liftIO (mkPackageResolver env hclient plan)
     let opts = Server.ServerOpts ba prebuild (fromIntegral (max 1 jobs))
-    withExceptT (UserError . Text.pack . renderBindError) $
+    withExceptT (UserError . UserBindError) $
       ExceptT (Server.runServer mRoot plan env resolver opts)
   case result of
     Left err -> do
@@ -393,7 +391,7 @@ bindAddrE
   :: Monad m
   => Int -> Maybe Text -> ExceptT HyphaError m Server.BindAddr
 bindAddrE port mBind =
-  withExceptT (UserError . Text.pack . renderBindError) $
+  withExceptT (UserError . UserBindError) $
     ExceptT (pure (parseBindFromFlags port mBind))
 
 parseBindFromFlags :: Int -> Maybe Text -> Either Server.BindError Server.BindAddr
@@ -403,11 +401,6 @@ parseBindFromFlags port = \case
     Just pn -> Right (Server.defaultBindAddr pn)
     Nothing -> Left (Server.BindMalformed
       (Text.pack ("--port out of range: " <> show port)))
-
-renderBindError :: Server.BindError -> String
-renderBindError = \case
-  Server.BindMalformed raw   -> "malformed --bind value: " <> Text.unpack raw
-  Server.BindNonLoopback raw -> "refusing non-loopback bind: " <> Text.unpack raw
 
 -- | Source command arm: resolve package (plan → store → Hackage), locate
 -- source directory (local → Hackage tarball), then extract snippet.

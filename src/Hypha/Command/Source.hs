@@ -22,7 +22,7 @@ import qualified Data.Text as Text
 import qualified Data.Text.IO as TIO
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
 import Hypha.Source.Locate
   ( SourceLocation (..), findModuleFile, locateSymbolDefinitionInDir )
@@ -66,9 +66,7 @@ runSource
   :: BuildEnv IO -> BuildPlan -> PackageId -> Text -> Maybe Text
   -> IO (Either HyphaError (Outcome Value))
 runSource env _plan pid modPath mSym = runExceptT $ do
-  srcDir <- liftMaybe
-    (NotFound ("source not found for " <> renderPid pid
-               <> "; run `cabal build` first"))
+  srcDir <- liftMaybe (NotFound (NotFoundSource pid))
     =<< liftIO (locatePackageSource env pid)
   sourceFromDirE pid srcDir modPath mSym
 
@@ -92,12 +90,11 @@ sourceFromDirE
   -> ExceptT HyphaError IO (Outcome Value)
 sourceFromDirE pid srcDir modPath mSym = do
   filePath <- liftMaybe
-    (NotFound ("module file not found under " <> Text.pack srcDir
-               <> " for " <> modPath))
+    (NotFound (NotFoundModuleFileUnder srcDir modPath))
     =<< liftIO (findModuleFile srcDir modPath)
   loc <- liftMaybe
-    (NotFound ("symbol '" <> maybe "" id mSym
-               <> "' not found in " <> modPath))
+    (NotFound
+      (NotFoundSymbol pid modPath (maybe "" id mSym)))
     =<< liftIO (locateSourceLoc filePath srcDir modPath mSym)
   content <- liftIO (TIO.readFile (slPath loc))
   let snippet = extractSnippet (slLine loc) (Text.lines content)
@@ -146,6 +143,3 @@ sourceResultToJSON sr = Aeson.object $ concat
     ]
   ]
 
--- Helper
-renderPid :: PackageId -> Text
-renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v

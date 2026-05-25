@@ -16,7 +16,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome (..), Related (..))
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
@@ -33,8 +33,7 @@ fullKeys    = compactKeys
 runVersions :: BuildPlan -> PackageName -> Either HyphaError (Outcome Value)
 runVersions plan pkgName =
   case lookupPackage pkgName plan of
-    Nothing -> Left $ NotFound
-      ("Package '" <> unPackageName pkgName <> "' not in build plan")
+    Nothing -> Left (NotFound (NotFoundPackageInPlan pkgName))
     Just ver -> Right (mkSuccessOutcome pkgName ver)
 
 mkSuccessOutcome :: PackageName -> Version -> Outcome Value

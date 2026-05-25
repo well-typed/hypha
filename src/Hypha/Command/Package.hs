@@ -21,7 +21,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome (..), Related (..))
 import Hypha.Types.BuildPlan
   ( BuildPlan, PackageOrigin (..), PlannedUnit (..), lookupUnit )
@@ -63,8 +63,7 @@ runPackage plan rawArg =
        Just pu -> Right (mkSuccessOutcome nameT
          (pkgVersion (puId pu)) (puIsLocal pu) (length (puDeps pu))
          (puOrigin pu) [])
-       Nothing -> Left $ NotFound
-         ("package '" <> nameT <> "' not in build plan")
+       Nothing -> Left (NotFound (NotFoundPackageInPlan pkg))
 
 -- | Build a success outcome from package metadata and a (possibly empty)
 -- list of exposed modules.  When modules are provided, per-module related

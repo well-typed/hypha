@@ -36,7 +36,7 @@ import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cache (cacheRoot)
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import qualified Hypha.Hackage.Api as Hackage
 import Hypha.Hackage.Api (HackageClient (..))
 import Hypha.Hackage.Source (fetchAndExtractSource)
@@ -236,8 +236,7 @@ extractVersion = \case
 hackageErrorToHypha :: PackageName -> Hackage.HackageError -> HyphaError
 hackageErrorToHypha name = \case
   Hackage.NetworkError msg -> NetworkError (Text.pack msg)
-  Hackage.OfflineCacheMiss _pn -> NotFound
-    ("package '" <> unPackageName name <> "' not cached; can't fetch from Hackage in offline mode")
+  Hackage.OfflineCacheMiss _pn -> NotFound (NotFoundOfflineCache name)
   Hackage.DecodeError msg -> Corruption
     ("Hackage decode error for " <> unPackageName name <> ": " <> Text.pack msg)
   Hackage.HttpError code -> NetworkError
