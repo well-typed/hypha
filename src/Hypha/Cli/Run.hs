@@ -157,6 +157,40 @@ mkBuildEnvFor :: Maybe ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
 mkBuildEnvFor Nothing     _    = mkBasicBuildEnv
 mkBuildEnvFor (Just root) plan = mkBuildEnv root plan
 
+-- | When the build plan is empty (no project / @plan.json@), synthesise
+-- one from the packages the 'BuildEnv' reports as installed in the
+-- cabal store.  Each synthetic unit carries only the 'PackageId' — no
+-- deps, no source directory, no plan-derived metadata — but the
+-- @hypha server@ UI and the resolver chain can still browse and look
+-- up those packages.  Returns the input plan unchanged when it
+-- already has units.
+enrichPlanFromStore :: BuildEnv IO -> BuildPlan -> IO BuildPlan
+enrichPlanFromStore env plan
+  | not (Map.null (bpUnits plan)) = pure plan
+  | otherwise = do
+      installed <- discoverInstalledPackages env
+      ghcVer    <- ghcVersion env
+      let units = Map.fromList
+            [ (pkgName pid, syntheticUnit pid) | pid <- Set.toList installed ]
+      hPutStrLn stderr $
+        "note: no cabal plan in scope; browsing "
+        <> show (Map.size units)
+        <> " packages from the cabal store"
+      pure plan
+        { bpCompiler = CompilerId ("ghc-" <> unVersion ghcVer)
+        , bpUnits    = units
+        }
+  where
+    syntheticUnit pid = PlannedUnit
+      { puId            = pid
+      , puDeps          = []
+      , puIsLocal       = False
+      , puOrigin        = OriginHackage
+      , puSrcDir        = Nothing
+      , puDistDir       = Nothing
+      , puLibComponents = []
+      }
+
 -- | Build a resolver and associated build-env.  Degrades gracefully
 -- when no project / plan is reachable, but every degradation is
 -- announced via 'warnOnLeft' so the user is never left guessing why
@@ -331,9 +365,10 @@ runServerInteractive
 runServerInteractive flags port mBind prebuild jobs = do
   result <- runExceptT $ do
     ba              <- bindAddrE port mBind
-    (mRoot, plan)   <- liftIO (loadProjectAndPlan flags)
+    (mRoot, plan0)  <- liftIO (loadProjectAndPlan flags)
     hclient         <- liftIO (mkHackageClientForFlags flags)
-    env             <- liftIO (mkBuildEnvFor mRoot plan)
+    env             <- liftIO (mkBuildEnvFor mRoot plan0)
+    plan            <- liftIO (enrichPlanFromStore env plan0)
     resolver        <- liftIO (mkPackageResolver env hclient plan)
     let opts = Server.ServerOpts ba prebuild (fromIntegral (max 1 jobs))
     withExceptT (UserError . Text.pack . renderBindError) $
