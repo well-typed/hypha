@@ -1,23 +1,23 @@
 {-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings  #-}
 module Property.OutputJson (tests) where
 
 import Data.Aeson (object, (.=))
-import qualified Data.Set as Set
+import Data.Set qualified as Set
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
 
-import Test.Tasty (TestTree, testGroup)
+import Test.Falsify.Generator qualified as Gen
+import Test.Falsify.Predicate qualified as P
+import Test.Falsify.Property (gen, assert)
+import Test.Falsify.Range qualified as Range
 import Test.Tasty.Falsify (testProperty)
 import Test.Tasty.HUnit (testCase, (@?=))
-import qualified Test.Falsify.Generator as Gen
-import qualified Test.Falsify.Range as Range
-import Test.Falsify.Property (gen, assert)
-import qualified Test.Falsify.Predicate as P
+import Test.Tasty (TestTree, testGroup)
 
+import Hypha.Cli.Types
 import Hypha.Output.Json (ToOutcomeJson (..), encodeEnvelope, filterSelect, objectKeys)
-import Hypha.Output.Outcome
-  ( OutcomeError (..), successOutcome, failureOutcome )
+import Hypha.Output.Outcome ( OutcomeError (..), successOutcome, failureOutcome )
 
 -------------------------------------------------------------------------------
 -- Sample command result: SymbolCard
@@ -116,7 +116,7 @@ tests = testGroup "OutputJson"
 testSuccessEnvelope :: IO ()
 testSuccessEnvelope = do
   let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      val     = encodeEnvelope (Text.pack "symbol") outcome
+      val     = encodeEnvelope SymbolCmd outcome
       keys    = objectKeys val
   keys @?= Set.fromList
     [ "schema", "command", "ok", "outside_plan", "overrides", "result", "actions", "related" ]
@@ -125,14 +125,14 @@ testFailureEnvelope :: IO ()
 testFailureEnvelope = do
   let err     = OutcomeError (Text.pack "NOT_FOUND") (Text.pack "missing") 3
       outcome = failureOutcome err
-      val     = encodeEnvelope (Text.pack "symbol") outcome
+      val     = encodeEnvelope SymbolCmd outcome
       keys    = objectKeys val
   keys @?= Set.fromList [ "schema", "command", "ok", "error", "actions" ]
 
 testFilterSelect :: IO ()
 testFilterSelect = do
   let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeEnvelope (Text.pack "symbol") outcome
+      env     = encodeEnvelope SymbolCmd outcome
       filtered = filterSelect ["schema", "ok", "result"] env
       keys    = objectKeys filtered
   keys @?= Set.fromList [ "schema", "ok", "result" ]
@@ -140,6 +140,6 @@ testFilterSelect = do
 testFilterSelectNoop :: IO ()
 testFilterSelectNoop = do
   let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeEnvelope (Text.pack "symbol") outcome
+      env     = encodeEnvelope SymbolCmd outcome
       filtered = filterSelect [] env
   filtered @?= env

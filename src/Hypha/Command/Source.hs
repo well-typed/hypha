@@ -11,6 +11,8 @@ module Hypha.Command.Source
   , runSourceFromDir
   ) where
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Data.Aeson (Value (..), (.=))
 import qualified Data.Aeson as Aeson
 import Data.Set (Set)
@@ -60,13 +62,15 @@ fullKeys = Set.fromList
 --
 --   Parses the argument as @PKG/MOD[/SYM]@ and returns a 30-line snippet
 --   around the symbol definition (or the module header if no symbol).
-runSource :: BuildEnv IO -> BuildPlan -> PackageId -> Text -> Maybe Text -> IO (Either HyphaError (Outcome Value))
-runSource env _plan pid modPath mSym = do
-  mSrcDir <- locatePackageSource env pid
-  case mSrcDir of
-    Nothing -> pure (Left $ NotFound
-      ("source not found for " <> renderPid pid <> "; run `cabal build` first"))
-    Just srcDir -> runSourceFromDir env pid srcDir modPath mSym
+runSource
+  :: BuildEnv IO -> BuildPlan -> PackageId -> Text -> Maybe Text
+  -> IO (Either HyphaError (Outcome Value))
+runSource env _plan pid modPath mSym = runExceptT $ do
+  srcDir <- liftMaybe
+    (NotFound ("source not found for " <> renderPid pid
+               <> "; run `cabal build` first"))
+    =<< liftIO (locatePackageSource env pid)
+  sourceFromDirE pid srcDir modPath mSym
 
 -- | Variant that takes an already-resolved source directory.  Used by the
 -- 'PackageResolver'-driven dispatch path so the full fallback chain (plan
@@ -78,34 +82,46 @@ runSourceFromDir
   -> Text       -- ^ Module path (dotted).
   -> Maybe Text -- ^ Optional symbol name.
   -> IO (Either HyphaError (Outcome Value))
-runSourceFromDir _env pid srcDir modPath mSym = do
-  mFile <- findModuleFile srcDir modPath
-  case mFile of
-    Nothing -> pure (Left $ NotFound
-      ("module file not found under " <> Text.pack srcDir
-        <> " for " <> modPath))
-    Just filePath -> do
-      mLoc <- case mSym of
-        Nothing  -> pure (Just (SourceLocation filePath 1))
-        Just sym -> locateSymbolDefinitionInDir srcDir modPath sym
-      case mLoc of
-        Nothing -> pure (Left $ NotFound
-          ("symbol '" <> fromMaybe "" mSym <> "' not found in " <> modPath))
-        Just loc -> do
-          content <- TIO.readFile (slPath loc)
-          let allLines = Text.lines content
-              targetLine = slLine loc
-              snippet = extractSnippet targetLine allLines
-              result = SourceResult
-                { srcPackage = unPackageName (pkgName pid)
-                , srcVersion = unVersion (pkgVersion pid)
-                , srcModule  = modPath
-                , srcSymbol  = mSym
-                , srcPath    = slPath loc
-                , srcLine    = slLine loc
-                , srcSnippet = snippet
-                }
-          pure (Right $ successOutcome (sourceResultToJSON result))
+runSourceFromDir _env pid srcDir modPath mSym =
+  runExceptT (sourceFromDirE pid srcDir modPath mSym)
+
+-- | Shared ExceptT body: find the module file, locate the (optional)
+-- symbol, then build the snippet.
+sourceFromDirE
+  :: PackageId -> FilePath -> Text -> Maybe Text
+  -> ExceptT HyphaError IO (Outcome Value)
+sourceFromDirE pid srcDir modPath mSym = do
+  filePath <- liftMaybe
+    (NotFound ("module file not found under " <> Text.pack srcDir
+               <> " for " <> modPath))
+    =<< liftIO (findModuleFile srcDir modPath)
+  loc <- liftMaybe
+    (NotFound ("symbol '" <> maybe "" id mSym
+               <> "' not found in " <> modPath))
+    =<< liftIO (locateSourceLoc filePath srcDir modPath mSym)
+  content <- liftIO (TIO.readFile (slPath loc))
+  let snippet = extractSnippet (slLine loc) (Text.lines content)
+      result = SourceResult
+        { srcPackage = unPackageName (pkgName pid)
+        , srcVersion = unVersion (pkgVersion pid)
+        , srcModule  = modPath
+        , srcSymbol  = mSym
+        , srcPath    = slPath loc
+        , srcLine    = slLine loc
+        , srcSnippet = snippet
+        }
+  pure (successOutcome (sourceResultToJSON result))
+
+-- | When a symbol is provided, locate its definition inside the module;
+-- otherwise pin to line 1 of the resolved module file.
+locateSourceLoc
+  :: FilePath -> FilePath -> Text -> Maybe Text -> IO (Maybe SourceLocation)
+locateSourceLoc filePath _      _       Nothing    = pure (Just (SourceLocation filePath 1))
+locateSourceLoc _        srcDir modPath (Just sym) = locateSymbolDefinitionInDir srcDir modPath sym
+
+-- | Lift a 'Maybe' into 'ExceptT' with a typed error on 'Nothing'.
+liftMaybe :: Monad m => HyphaError -> Maybe a -> ExceptT HyphaError m a
+liftMaybe err = maybe (throwE err) pure
 
 -- | Extract a 30-line snippet around the target line (15 lines before, 15 after).
 extractSnippet :: Int -> [Text] -> Text
@@ -133,8 +149,3 @@ sourceResultToJSON sr = Aeson.object $ concat
 -- Helper
 renderPid :: PackageId -> Text
 renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v
-
--- Helper
-fromMaybe :: a -> Maybe a -> a
-fromMaybe d Nothing  = d
-fromMaybe _ (Just x) = x

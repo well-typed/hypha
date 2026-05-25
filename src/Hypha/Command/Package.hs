@@ -22,9 +22,9 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), errorToOutcomeError)
 import Hypha.Output.Outcome
-  ( Outcome (..), Related (..), OutcomeError (..)
+  ( Outcome (..), Related (..)
   , failureOutcome
   )
 import Hypha.Types.BuildPlan
@@ -70,12 +70,7 @@ runPackage plan rawArg =
 -- as a structured 'OutcomeFailure' so the envelope shape stays consistent.
 runPackagePure :: BuildPlan -> Text -> Outcome Value
 runPackagePure plan rawArg =
-  case runPackage plan rawArg of
-    Right o  -> o
-    Left err -> failureOutcome $ OutcomeError
-      "NOT_FOUND"
-      (case err of NotFound m -> m; _ -> Text.pack (show err))
-      3
+  either (failureOutcome . errorToOutcomeError) id (runPackage plan rawArg)
 
 splitVersionHint :: Text -> (Text, Maybe Text)
 splitVersionHint raw =

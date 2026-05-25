@@ -1,5 +1,4 @@
 {-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE OverloadedStrings #-}
 module Hypha.Output.Outcome
   ( Outcome (..)
   , OutcomeError (..)

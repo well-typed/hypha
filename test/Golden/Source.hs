@@ -10,6 +10,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 
 import Hypha.BuildEnv.Mock (MockBuildEnv (..), emptyMock, mkMockBuildEnv)
+import Hypha.Cli.Types (ClientCommandTag (..))
 import Hypha.Command.Source (runSource)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes)
 import Hypha.Types.BuildPlan
@@ -66,7 +67,7 @@ runSourceCommand = do
             , eoSelect = []
             , eoPrettyJson = False
             }
-      pure (encodeOutcomeBytes opts "source" compactKeys fullKeys outcome)
+      pure (encodeOutcomeBytes opts SourceCmd compactKeys fullKeys outcome)
 
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList ["package", "module", "symbol", "path", "line", "snippet"]

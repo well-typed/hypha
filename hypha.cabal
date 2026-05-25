@@ -81,6 +81,7 @@ library
     Hypha.Haddock.Generate
     Hypha.Cli.Parser
     Hypha.Cli.Run
+    Hypha.Cli.Types
     Hypha.Command.Doctor
     Hypha.Command.Module
     Hypha.Command.Deps
@@ -226,4 +227,5 @@ test-suite hypha-tests
     , temporary
     , text
     , time
+    , transformers
     , vector

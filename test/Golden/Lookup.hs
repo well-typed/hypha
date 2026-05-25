@@ -13,6 +13,7 @@ import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 
+import Hypha.Cli.Types (ClientCommandTag (..))
 import Hypha.Command.Lookup
   ( Provider (..), Tier (..), buildOutcome )
 import Hypha.Hoogle.Remote (RemoteError (..))
@@ -34,7 +35,7 @@ tests = testGroup "Golden.Lookup"
     goldPath n = "test" </> "Golden" </> "golden" </> (n <> ".compact.json")
     encode outcome = encodeOutcomeBytes
       (EnvelopeOpts False [] False)
-      "lookup"
+      LookupCmd
       (Set.fromList ["query", "providers", "tiers_consulted"])
       (Set.fromList ["query", "providers", "tiers_consulted"])
       outcome

@@ -1,85 +1,80 @@
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DerivingStrategies  #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeApplications    #-}
 module Hypha.Cli.Run
   ( -- * Execution
     runCli
     -- * Internals exposed for testing
-  , withPlan
   , dispatch
   , humanFromValue
   , classifyLookupException
   ) where
 
 import Control.Exception (IOException, try, SomeException, fromException)
-import System.IO.Error (isDoesNotExistError)
-import Data.Aeson (Value)
-import qualified Data.Aeson as Aeson
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except
+  ( ExceptT (ExceptT), runExceptT, throwE, withExceptT )
 import Data.Aeson.Key (Key)
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KM
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Lazy.Char8 as LBS8
+import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Key qualified as Key
+import Data.Aeson qualified as Aeson
+import Data.Aeson (Value)
+import Data.ByteString.Lazy.Char8 qualified as LBS8
+import Data.ByteString.Lazy qualified as LBS
+import Data.Foldable (for_)
+import Data.Set qualified as Set
 import Data.Set (Set)
-import qualified Data.Set as Set
+import Data.Text.IO qualified as TIO
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified Data.Text.IO as TIO
-import qualified Data.Vector as V
+import Data.Vector qualified as V
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory
-  ( XdgDirectory (..), createDirectoryIfMissing, doesDirectoryExist
-  , getHomeDirectory, getXdgDirectory, listDirectory )
+import System.Exit qualified as System
 import System.FilePath ((</>), takeDirectory, takeFileName)
-import System.Process (readProcessWithExitCode)
+import System.IO.Error (isDoesNotExistError)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
-import qualified System.Exit as System
+import System.Process (readProcessWithExitCode)
 
+import Crypto.Hash.SHA256 qualified as SHA256
+import Data.ByteString.Base16 qualified as Base16
+import Data.Map.Strict qualified as Map
+import Data.Maybe (maybeToList)
+import Data.Text.Encoding qualified as Text
 import Hypha.BuildEnv.Cabal (mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import qualified Hypha.Command.Deps       as Deps
-import qualified Hypha.Command.Doctor   as Doctor
-import qualified Hypha.Command.Module   as Module
-import qualified Hypha.Command.Package  as Package
-import qualified Hypha.Source.Modules   as SourceModules
-import qualified Hypha.Command.Lookup        as Lookup
-import qualified Hypha.Command.Server        as Server
-import qualified Hypha.Command.Source        as Source
-import qualified Hypha.Command.Symbol        as Symbol
-import qualified Hypha.Command.Versions      as Versions
-import Hypha.Cli.Parser (GlobalFlags (..), Command (..))
-import Hypha.Error (HyphaError (..), errorCode, errorMessage, errorExitCode, toOutcomeError)
+import Hypha.Cli.Parser
+import Hypha.Command.Deps qualified as Deps
+import Hypha.Command.Doctor qualified as Doctor
+import Hypha.Command.Lookup qualified as Lookup
+import Hypha.Command.Module qualified as Module
+import Hypha.Command.Package qualified as Package
+import Hypha.Command.Server qualified as Server
+import Hypha.Command.Source qualified as Source
+import Hypha.Command.Symbol qualified as Symbol
+import Hypha.Command.Versions qualified as Versions
+import Hypha.Error
+  ( HyphaError (..), errorCode, errorMessage, errorExitCode
+  , discoverProjectRootE, loadBuildPlanE, errorToOutcomeError )
 import Hypha.Exit (toSystemExitCode)
 import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
-import qualified Crypto.Hash.SHA256          as SHA256
-import qualified Data.ByteString.Base16      as Base16
-import Data.Maybe                            (maybeToList)
-import qualified Data.Map.Strict             as Map
-import qualified Data.Text.Encoding          as Text
-import qualified Hypha.Hoogle.Local          as HogLocal
-import qualified Hypha.Project.Components    as Comp
-import qualified Hypha.Project.Fingerprint   as Fingerprint
-import Hypha.Project.Plan                    (planHash)
-import Hypha.Types.BuildPlan                 (PlannedUnit (..))
-import qualified Hypha.Hoogle.Remote         as HogRemote
-import qualified Hypha.Search.PackageCache   as PC
+import Hypha.Hoogle.Local qualified as HogLocal
+import Hypha.Hoogle.Remote qualified as HogRemote
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
 import Hypha.Output.Outcome
-  ( Outcome (..), OutcomeError (..)
-  , failureOutcome, tagOutsidePlan
-  )
 import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..), mkPackageResolver)
-import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
+import Hypha.Project.Components qualified as Comp
+import Hypha.Project.Discovery (discoverProjectRoot)
+import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Overrides (parsePackageOverride)
-import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
+import Hypha.Project.Plan (loadBuildPlan, planHash)
+import Hypha.Search.PackageCache qualified as PC
+import Hypha.Source.Modules qualified as SourceModules
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), CompilerId (..), PackageOverride (..), ProjectRoot (..)
-  , applyOverrides, emptyBuildPlan
-  )
 import Hypha.Types.PackageId (PackageName (..), Version (..), PackageId (..))
 
 -- | Top-level entry point.  Wires global flags and the chosen subcommand to
@@ -90,48 +85,27 @@ runCli flags cmd = do
   let tracer = if gfVerbose flags then verboseTracer else silentTracer
   tracer (LogInfo "starting hypha")
   case cmd of
-    ServerCommand port mBind prebuild jobs ->
+    ServerCommands (ServerCommand port mBind prebuild jobs) ->
       runServerInteractive flags port mBind prebuild jobs
-    _ -> do
-      result <- dispatch flags cmd
-      emit flags (commandName cmd) result
-      case result of
-        Right{}  -> System.exitWith System.ExitSuccess
-        Left err -> System.exitWith (toSystemExitCode (errorExitCode err))
+    ClientCommands ccmd ->
+      processOutcome flags (clientCommandTag ccmd) =<< dispatch flags ccmd
 
--- | Run the body action with the loaded build plan (project resolution +
--- overrides applied).  Returns an environment error if no plan is reachable.
-withPlan
-  :: GlobalFlags
-  -> (ProjectRoot -> BuildPlan -> IO (Either HyphaError (Outcome Value)))
-  -> IO (Either HyphaError (Outcome Value))
-withPlan flags k = do
-  eRoot <- discoverProjectRoot (gfProjectDir flags)
-  case eRoot of
-    Left (NoProjectFound where_) ->
-      pure (Left (EnvError
-        ("no cabal project found (searched up from " <> Text.pack where_ <> ")")))
-    Right root -> do
-      ePlan <- loadBuildPlan root
-      case ePlan of
-        Left e -> pure (Left (planErrorToHypha root e))
-        Right rawPlan -> do
-          overrides <- collectOverrides (gfPackageOverrides flags)
-          case overrides of
-            Left e   -> pure (Left e)
-            Right os -> k root (applyOverrides os rawPlan)
+-- | Load the project root + build plan (with overrides applied) inside
+-- 'ExceptT'.  Used by command arms that need a typed plan but do not
+-- need full resolver/build-env machinery.
+loadPlan :: GlobalFlags -> ExceptT HyphaError IO (ProjectRoot, BuildPlan)
+loadPlan flags = do
+  root      <- discoverProjectRootE (gfProjectDir flags)
+  rawPlan   <- loadBuildPlanE root
+  overrides <- collectOverridesE (gfPackageOverrides flags)
+  pure (root, applyOverrides overrides rawPlan)
 
-planErrorToHypha :: ProjectRoot -> PlanError -> HyphaError
-planErrorToHypha (ProjectRoot r) = \case
-  PlanNotFound _msg -> EnvError
-    ("plan.json missing under " <> Text.pack r <> "; run `cabal build --dry-run`")
-  PlanParseFailure msg -> Corruption ("plan.json parse failure: " <> Text.pack msg)
-
-collectOverrides :: [Text] -> IO (Either HyphaError [PackageOverride])
-collectOverrides raws =
-  case traverse parsePackageOverride raws of
-    Left  err -> pure (Left (UserError (Text.pack (show err))))
-    Right xs  -> pure (Right xs)
+-- | Parse the @--package-override@ list inside 'ExceptT'.
+collectOverridesE
+  :: Monad m => [Text] -> ExceptT HyphaError m [PackageOverride]
+collectOverridesE raws = case traverse parsePackageOverride raws of
+  Left  err -> throwE (UserError (Text.pack (show err)))
+  Right xs  -> pure xs
 
 -- | Build a resolver that can look up packages beyond the plan.
 --   Creates the Hackage client, cabal BuildEnv, and wires them together.
@@ -144,40 +118,44 @@ mkHackageClientForFlags flags =
       mgr <- newManager tlsManagerSettings
       mkHackageClient mgr
 
--- | Build a resolver that can look up packages beyond the plan.
---   Creates the Hackage client, cabal BuildEnv, and wires them together.
-withResolver
+-- | Build a resolver and associated build-env.  Degrades gracefully on
+-- missing project root or unparseable plan (an out-of-project @hypha
+-- lookup@ still resolves against the cabal store and Hackage).  The
+-- only fatal branch is malformed @--package-override@ values, which
+-- surface as 'UserError'.
+loadResolver
   :: GlobalFlags
-  -> ((PackageResolver IO, BuildEnv IO) -> IO (Either HyphaError a))
-  -> IO (Either HyphaError a)
-withResolver flags k = do
-  eRoot <- discoverProjectRoot (gfProjectDir flags)
+  -> ExceptT HyphaError IO (PackageResolver IO, BuildEnv IO)
+loadResolver flags = do
+  hclient <- liftIO (mkHackageClientForFlags flags)
+  eRoot   <- liftIO (discoverProjectRoot (gfProjectDir flags))
   case eRoot of
-    Left _noProject -> do
-      -- No project?  Try a bare resolver with store-only BuildEnv.
-      env       <- mkBasicBuildEnv
-      hclient   <- mkHackageClientForFlags flags
-      plan      <- mkPlanFromPlanJson
-      resolver  <- mkPackageResolver env hclient plan
-      k (resolver, env)
+    Left _ -> liftIO (mkBareResolver hclient)
     Right root -> do
-      hclient   <- mkHackageClientForFlags flags
-      ePlan     <- loadBuildPlan root
+      ePlan <- liftIO (loadBuildPlan root)
       case ePlan of
-        Left _planErr -> do
-          env       <- mkBasicBuildEnv
-          let emptyPlan = emptyBuildPlan
-          resolver <- mkPackageResolver env hclient emptyPlan
-          k (resolver, env)
+        Left _ -> liftIO $ do
+          env      <- mkBasicBuildEnv
+          resolver <- mkPackageResolver env hclient emptyBuildPlan
+          pure (resolver, env)
         Right rawPlan -> do
-          overrides <- collectOverrides (gfPackageOverrides flags)
-          case overrides of
-            Left e       -> pure (Left e)
-            Right os -> do
-              let appliedPlan = applyOverrides os rawPlan
-              env       <- mkBuildEnv root appliedPlan
-              resolver <- mkPackageResolver env hclient appliedPlan
-              k (resolver, env)
+          overrides <- collectOverridesE (gfPackageOverrides flags)
+          let appliedPlan = applyOverrides overrides rawPlan
+          liftIO $ do
+            env      <- mkBuildEnv root appliedPlan
+            resolver <- mkPackageResolver env hclient appliedPlan
+            pure (resolver, env)
+
+-- | Project-less fallback: build a resolver against the cabal store and
+-- whatever @plan.json@ is sitting in the CWD.  All failures inside are
+-- swallowed because the lookup tier is best-effort by design.
+mkBareResolver
+  :: HackageClient IO -> IO (PackageResolver IO, BuildEnv IO)
+mkBareResolver hclient = do
+  env      <- mkBasicBuildEnv
+  plan     <- mkPlanFromPlanJson
+  resolver <- mkPackageResolver env hclient plan
+  pure (resolver, env)
 
 -- | Create a basic BuildEnv (store only, no project source dirs).
 -- Tries a few common GHC store paths and falls back to a null env.
@@ -208,79 +186,80 @@ mkPlanFromPlanJson = do
         Left _  -> pure emptyBuildPlan
         Right p -> pure p
 
--- | Per-command dispatch.  Each arm returns either an error or a successful
--- outcome.
-dispatch :: GlobalFlags -> Command -> IO (Either HyphaError (Outcome Value))
-dispatch flags = \case
+-- | Per-command dispatch.  Each arm runs inside 'ExceptT HyphaError IO'
+-- so plan loading, resolver wiring, and command execution compose
+-- without case-cascades on 'Either'.
+dispatch
+  :: GlobalFlags -> ClientCommand -> IO (Either HyphaError (Outcome Value))
+dispatch flags = runExceptT . dispatchE flags
+
+dispatchE
+  :: GlobalFlags -> ClientCommand -> ExceptT HyphaError IO (Outcome Value)
+dispatchE flags = \case
   LookupCommand q ->
-    runLookupCommand flags q
+    ExceptT (runLookupCommand flags q)
 
-  PackageCommand rawArg ->
-    withResolver flags $ \(resolver, env) -> do
-      let (rawName, _mVerHint) = splitVersionHint rawArg
-      result <- resolvePkg resolver (PackageName rawName)
-      case result of
-        Left hyErr -> pure (Left hyErr)
-        Right rp -> do
-          modules0 <- resolveExposedModules resolver env (rpPkgId rp)
-          pure (Right (Package.mkSuccessOutcome
-            rawName
-            (pkgVersion (rpPkgId rp))
-            (rpIsLocal rp)
-            (rpDepsCount rp)
-            (rpOrigin rp)
-            modules0))
+  PackageCommand rawArg -> do
+    (resolver, env) <- loadResolver flags
+    let (rawName, _) = splitVersionHint rawArg
+    rp       <- ExceptT (resolvePkg resolver (PackageName rawName))
+    modules0 <- liftIO (resolveExposedModules resolver env (rpPkgId rp))
+    pure $ Package.mkSuccessOutcome
+      rawName
+      (pkgVersion (rpPkgId rp))
+      (rpIsLocal rp)
+      (rpDepsCount rp)
+      (rpOrigin rp)
+      modules0
 
-  VersionsCommand pkg ->
-    withResolver flags $ \(resolver, _env) -> do
-      let pkgName = PackageName pkg
-      avResult <- fetchVrs resolver pkgName
-      case avResult of
-        Left _err ->
-          withPlan flags $ \_root plan ->
-            pure (Right (Versions.runVersionsPure plan pkgName))
-        Right versions ->
-          withPlan flags $ \_root plan ->
-            pure (Right (Versions.runVersionsWithAvail plan pkgName versions))
+  VersionsCommand pkg -> do
+    (resolver, _env) <- loadResolver flags
+    let pkgName = PackageName pkg
+    eAvail    <- liftIO (fetchVrs resolver pkgName)
+    (_, plan) <- loadPlan flags
+    pure $ case eAvail of
+      Left _         -> Versions.runVersionsPure plan pkgName
+      Right versions -> Versions.runVersionsWithAvail plan pkgName versions
 
-  ModuleCommand arg ->
-    case Text.splitOn "/" arg of
-      [pkg, modPath] ->
-        withResolver flags $ \(resolver, _env) -> do
-          let pkgName = PackageName pkg
-          result <- resolvePkg resolver pkgName
-          case result of
-            Left hyErr -> pure (Left hyErr)
-            Right rp -> do
-              let pid = rpPkgId rp
-              eDir <- resolveSrc resolver pid
-              case eDir of
-                Left err -> pure (Left err)
-                Right d  -> do
-                  oc <- Module.runModuleFromDir d pid modPath
-                  pure (Right (tagOutsidePlan oc (rpIsOutsidePlan rp)))
-      _ -> pure (Left (UserError ("expected PKG/MOD (got: " <> arg <> ")")))
+  ModuleCommand arg -> do
+    (pkg, modPath)   <- parsePkgMod arg
+    (resolver, _env) <- loadResolver flags
+    rp <- ExceptT (resolvePkg resolver (PackageName pkg))
+    let pid = rpPkgId rp
+    d  <- ExceptT (resolveSrc resolver pid)
+    oc <- liftIO (Module.runModuleFromDir d pid modPath)
+    pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
-  SymbolCommand arg ->
-    withResolver flags $ \(resolver, env) ->
-      Symbol.runSymbolWith env resolver arg
+  SymbolCommand arg -> do
+    (resolver, env) <- loadResolver flags
+    ExceptT (Symbol.runSymbolWith env resolver arg)
 
-  SourceCommand arg ->
-    case Text.splitOn "/" arg of
-      [pkg, modPath]      -> runSourceArm flags pkg modPath Nothing
-      [pkg, modPath, sym] -> runSourceArm flags pkg modPath (Just sym)
-      _ -> pure (Left (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")")))
+  SourceCommand arg -> do
+    (pkg, modPath, mSym) <- parsePkgModOptSym arg
+    runSourceArm flags pkg modPath mSym
 
-  DepsCommand pkgName reverseMode mDepth ->
-    withPlan flags $ \_root plan -> do
-      outcome <- Deps.runDeps plan (PackageName pkgName) reverseMode mDepth
-      pure (Right outcome)
+  DepsCommand pkgName reverseMode mDepth -> do
+    (_, plan) <- loadPlan flags
+    liftIO (Deps.runDeps plan (PackageName pkgName) reverseMode mDepth)
 
   DoctorCommand ->
-    Doctor.runDoctor >>= \outcome -> pure (Right outcome)
+    liftIO Doctor.runDoctor
 
-  ServerCommand{} ->
-    pure (Left (UserError "server command is handled in runCli; should not reach dispatch"))
+-- | Parse @PKG/MOD@ inside 'ExceptT'.
+parsePkgMod :: Monad m => Text -> ExceptT HyphaError m (Text, Text)
+parsePkgMod arg = case Text.splitOn "/" arg of
+  [pkg, modPath] -> pure (pkg, modPath)
+  _              -> throwE
+    (UserError ("expected PKG/MOD (got: " <> arg <> ")"))
+
+-- | Parse @PKG/MOD[/SYM]@ inside 'ExceptT'.
+parsePkgModOptSym
+  :: Monad m => Text -> ExceptT HyphaError m (Text, Text, Maybe Text)
+parsePkgModOptSym arg = case Text.splitOn "/" arg of
+  [pkg, modPath]      -> pure (pkg, modPath, Nothing)
+  [pkg, modPath, sym] -> pure (pkg, modPath, Just sym)
+  _                   -> throwE
+    (UserError ("expected PKG/MOD[/SYM] (got: " <> arg <> ")"))
 
 -- | Server interactive arm.  Refuses non-loopback binds with exit 2; on
 -- successful bind it blocks inside Warp until interrupted.
@@ -292,28 +271,43 @@ runServerInteractive
   -> Int
   -> IO ()
 runServerInteractive flags port mBind prebuild jobs = do
-  case parseBindFromFlags port mBind of
-    Left be -> do
-      hPutStrLn stderr (renderBindError be)
-      System.exitWith (System.ExitFailure 2)
-    Right ba -> do
-      let opts = Server.ServerOpts ba prebuild jobs
-      e <- withResolver flags $ \(resolver, env) -> do
-        eRoot <- discoverProjectRoot (gfProjectDir flags)
-        let mRoot = either (const Nothing) Just eRoot
-        plan  <- case eRoot of
-          Left _    -> pure emptyBuildPlan
-          Right rt  -> either (const emptyBuildPlan) id <$> loadBuildPlan rt
-        hclient <- mkHackageClientForFlags flags
-        r <- Server.runServer mRoot plan env hclient resolver opts
-        case r of
-          Left be   -> pure (Left (UserError (Text.pack (renderBindError be))))
-          Right ()  -> pure (Right ())
-      case e of
-        Left err -> do
-          hPutStrLn stderr (Text.unpack (errorMessage err))
-          System.exitWith (toSystemExitCode (errorExitCode err))
-        Right () -> System.exitWith System.ExitSuccess
+  result <- runExceptT $ do
+    ba              <- bindAddrE port mBind
+    (resolver, env) <- loadResolver flags
+    plan            <- liftIO (loadPlanOrEmpty flags)
+    mRoot           <- liftIO (projectRootOpt flags)
+    hclient         <- liftIO (mkHackageClientForFlags flags)
+    let opts = Server.ServerOpts ba prebuild jobs
+    withExceptT (UserError . Text.pack . renderBindError) $
+      ExceptT (Server.runServer mRoot plan env hclient resolver opts)
+  case result of
+    Left err -> do
+      hPutStrLn stderr (Text.unpack (errorMessage err))
+      System.exitWith (toSystemExitCode (errorExitCode err))
+    Right () -> System.exitSuccess
+
+-- | Resolve the @--bind@ flag inside 'ExceptT'.  Malformed binds map to
+-- 'UserError' so the exit code (2) matches user-input failures.
+bindAddrE
+  :: Monad m
+  => Int -> Maybe Text -> ExceptT HyphaError m Server.BindAddr
+bindAddrE port mBind =
+  withExceptT (UserError . Text.pack . renderBindError) $
+    ExceptT (pure (parseBindFromFlags port mBind))
+
+-- | Optional project root; @Nothing@ when no project is in scope.
+projectRootOpt :: GlobalFlags -> IO (Maybe ProjectRoot)
+projectRootOpt flags =
+  either (const Nothing) Just <$> discoverProjectRoot (gfProjectDir flags)
+
+-- | Best-effort plan loader for the server arm: returns 'emptyBuildPlan'
+-- whenever the project root or plan cannot be loaded.
+loadPlanOrEmpty :: GlobalFlags -> IO BuildPlan
+loadPlanOrEmpty flags = do
+  mRoot <- projectRootOpt flags
+  case mRoot of
+    Nothing   -> pure emptyBuildPlan
+    Just root -> either (const emptyBuildPlan) id <$> loadBuildPlan root
 
 parseBindFromFlags :: Int -> Maybe Text -> Either Server.BindError Server.BindAddr
 parseBindFromFlags port = \case
@@ -332,20 +326,14 @@ runSourceArm
   -> Text
   -> Text
   -> Maybe Text
-  -> IO (Either HyphaError (Outcome Value))
-runSourceArm flags pkg modPath mSym =
-  withResolver flags $ \(resolver, env) -> do
-    eRp <- resolvePkg resolver (PackageName pkg)
-    case eRp of
-      Left err -> pure (Left err)
-      Right rp -> do
-        let pid = rpPkgId rp
-        eDir <- resolveSrc resolver pid
-        case eDir of
-          Left err   -> pure (Left err)
-          Right dir  -> do
-            oc <- Source.runSourceFromDir env pid dir modPath mSym
-            pure (fmap (`tagOutsidePlan` rpIsOutsidePlan rp) oc)
+  -> ExceptT HyphaError IO (Outcome Value)
+runSourceArm flags pkg modPath mSym = do
+  (resolver, env) <- loadResolver flags
+  rp  <- ExceptT (resolvePkg resolver (PackageName pkg))
+  let pid = rpPkgId rp
+  dir <- ExceptT (resolveSrc resolver pid)
+  oc  <- ExceptT (Source.runSourceFromDir env pid dir modPath mSym)
+  pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
 -- | Drive the tiered @lookup@ command.  Builds the package cache
 -- and project Hoogle handle, then runs the cascade.  Project root
@@ -377,10 +365,8 @@ runLookupCommand flags q = do
     -- Bring the local Hoogle DB up to date before the cascade runs.
     -- Without this, Tier 2 always opens an empty/missing .hoo and
     -- every type-signature query falls through to remote Hoogle.
-    case mRoot of
-      Nothing   -> pure ()                  -- no plan, nothing to feed
-      Just root ->
-        ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
+    for_ mRoot $ \root ->
+      ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
 
     let opts = Lookup.LookupOptions
           { Lookup.loOffline = gfOffline flags
@@ -578,8 +564,8 @@ resolveExposedModules resolver env pid = do
         Right dir -> SourceModules.getExposedModules dir
 
 -- | Emit the outcome to stdout, honouring all output-shaping flags.
-emit :: GlobalFlags -> Text -> Either HyphaError (Outcome Value) -> IO ()
-emit flags cmd result = do
+processOutcome :: GlobalFlags -> ClientCommandTag -> Either HyphaError (Outcome Value) -> IO ()
+processOutcome flags cmd result = do
   let oc      = either errorOutcome id result
       compact = compactKeysFor cmd
       full    = fullKeysFor cmd
@@ -597,15 +583,14 @@ emit flags cmd result = do
     else LBS.hPut stdout (encodeOutcomeBytes opts cmd compact full oc)
   hFlush stdout
   case result of
-    Left err -> hPutStrLn stderr
-                  (Text.unpack (errorCode err) <> ": "
-                   <> Text.unpack (errorMessage err))
-    Right _  -> pure ()
+    Left err -> do
+      hPutStrLn stderr $
+        Text.unpack (errorCode err) <> ": " <> Text.unpack (errorMessage err)
+      System.exitWith (toSystemExitCode (errorExitCode err))
+    Right _  -> System.exitSuccess
 
 errorOutcome :: HyphaError -> Outcome Value
-errorOutcome err =
-  let (code, msg, ec) = toOutcomeError err
-  in failureOutcome (OutcomeError code msg ec)
+errorOutcome = failureOutcome . errorToOutcomeError
 
 -- | Split @PKG[@VER]@ into its parts.
 splitVersionHint :: Text -> (Text, Maybe Text)
@@ -619,39 +604,25 @@ splitVersionHint raw =
 -- | Compact / full field sets per command name.  Keep in sync with each
 -- command module's local key declarations.  Equal sets where there is no
 -- distinction yet (alpha).
-compactKeysFor, fullKeysFor :: Text -> Set Text
+compactKeysFor, fullKeysFor :: ClientCommandTag -> Set Text
 compactKeysFor = \case
-  "lookup"       -> Set.fromList ["query", "providers", "tiers_consulted"]
-  "package"      -> Package.compactKeys
-  "versions"     -> Versions.compactKeys
-  "module"       -> Module.compactKeys
-  "source"       -> Source.compactKeys
-  "doctor"       -> Doctor.compactKeys
-  "deps"         -> Deps.compactKeys
-  "symbol"       -> Symbol.compactKeys
-  _              -> Set.empty
+  LookupCmd   -> Set.fromList ["query", "providers", "tiers_consulted"]
+  PackageCmd  -> Package.compactKeys
+  VersionsCmd -> Versions.compactKeys
+  ModuleCmd   -> Module.compactKeys
+  SourceCmd   -> Source.compactKeys
+  DoctorCmd   -> Doctor.compactKeys
+  DepsCmd     -> Deps.compactKeys
+  SymbolCmd   -> Symbol.compactKeys
 fullKeysFor = \case
-  "lookup"       -> Set.fromList ["query", "providers", "tiers_consulted"]
-  "package"      -> Package.fullKeys
-  "versions"     -> Versions.fullKeys
-  "module"       -> Module.fullKeys
-  "source"       -> Source.fullKeys
-  "doctor"       -> Doctor.fullKeys
-  "deps"         -> Deps.fullKeys
-  "symbol"       -> Symbol.fullKeys
-  _              -> Set.empty
-
-commandName :: Command -> Text
-commandName = \case
-  LookupCommand _        -> "lookup"
-  PackageCommand _       -> "package"
-  ModuleCommand _        -> "module"
-  SymbolCommand _        -> "symbol"
-  SourceCommand _        -> "source"
-  VersionsCommand _      -> "versions"
-  DepsCommand _ _ _      -> "deps"
-  DoctorCommand          -> "doctor"
-  ServerCommand{}        -> "server"
+  LookupCmd   -> Set.fromList ["query", "providers", "tiers_consulted"]
+  PackageCmd  -> Package.fullKeys
+  VersionsCmd -> Versions.fullKeys
+  ModuleCmd   -> Module.fullKeys
+  SourceCmd   -> Source.fullKeys
+  DoctorCmd   -> Doctor.fullKeys
+  DepsCmd     -> Deps.fullKeys
+  SymbolCmd   -> Symbol.fullKeys
 
 -- | A small, dependency-free human renderer used by @--human@.  Walks the
 -- envelope and prints a readable summary.  This is a stop-gap until the

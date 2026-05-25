@@ -1,18 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Golden.Versions (tests) where
 
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Aeson as Aeson
+import Data.Aeson qualified as Aeson
+import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
 import System.FilePath ((</>))
-import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
+import Test.Tasty (TestTree, testGroup)
 
+import Hypha.Cli.Types
 import Hypha.Command.Versions (runVersions)
 import Hypha.Output.Json (encodeEnvelope)
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
-import qualified Data.Map.Strict as Map
 
 tests :: TestTree
 tests = testGroup "Golden.Versions"
@@ -53,4 +53,4 @@ runVersionsCommand = do
       result = runVersions plan pkgName
   case result of
     Left _ -> error "Versions command failed unexpectedly"
-    Right outcome -> pure (Aeson.encode (encodeEnvelope "versions" outcome))
+    Right outcome -> pure (Aeson.encode (encodeEnvelope VersionsCmd outcome))

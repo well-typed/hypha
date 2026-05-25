@@ -24,6 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 
 import Hypha.Output.Outcome (Outcome (..), OutcomeError (..), Related (..))
+import Hypha.Cli.Types
 
 -- | Two field-set variants: compact (default) and full (--full).
 -- Each command result type implements this class.
@@ -54,12 +55,12 @@ defaultEnvelopeOpts = EnvelopeOpts
 --
 -- This is the low-level builder; most callers should use 'encodeOutcomeBytes',
 -- which additionally projects fields and chooses compact vs pretty encoding.
-encodeEnvelope :: Text -> Outcome Value -> Value
+encodeEnvelope :: ClientCommandTag -> Outcome Value -> Value
 encodeEnvelope cmdName = \case
   OutcomeSuccess result outside overrides actions related ->
     object
       [ "schema"       .= ("hypha/v0" :: Text)
-      , "command"      .= cmdName
+      , "command"      .= clientCommandName cmdName
       , "ok"           .= True
       , "outside_plan" .= outside
       , "overrides"    .= overrides
@@ -70,7 +71,7 @@ encodeEnvelope cmdName = \case
   OutcomeFailure err actions ->
     object
       [ "schema"   .= ("hypha/v0" :: Text)
-      , "command"  .= cmdName
+      , "command"  .= clientCommandName cmdName
       , "ok"       .= False
       , "error"    .= object
           [ "code"      .= oeCode err
@@ -94,9 +95,9 @@ encodeEnvelope cmdName = \case
 -- is no real distinction yet for a particular command.
 encodeOutcomeBytes
   :: EnvelopeOpts
-  -> Text          -- ^ command name
-  -> Set Text      -- ^ compact key set for the result body
-  -> Set Text      -- ^ full key set for the result body
+  -> ClientCommandTag -- ^ command name
+  -> Set Text         -- ^ compact key set for the result body
+  -> Set Text         -- ^ full key set for the result body
   -> Outcome Value
   -> LBS.ByteString
 encodeOutcomeBytes opts cmdName compact full oc =

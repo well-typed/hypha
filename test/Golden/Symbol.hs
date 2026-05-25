@@ -1,19 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Golden.Symbol (tests) where
 
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Aeson as Aeson
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
+import Data.Aeson (Value)
+import Data.Aeson qualified as Aeson
+import Data.ByteString.Lazy qualified as LBS
+import Data.Set qualified as Set
 import System.FilePath ((</>))
-import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
+import Test.Tasty (TestTree, testGroup)
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import Hypha.Cli.Types
 import Hypha.Command.Symbol (runSymbol)
+import Hypha.Error
+  ( HyphaError, discoverProjectRootE, loadBuildPlanE, errorMessage )
 import Hypha.Output.Json (encodeEnvelope)
-import Hypha.Project.Discovery (discoverProjectRoot)
-import Hypha.Project.Plan (loadBuildPlan)
+import Hypha.Output.Outcome (Outcome)
 import Hypha.Types.PackageId (Version (..))
-import qualified Data.Set as Set
 
 -- | Mock BuildEnv that points to the fixture source directory.
 mockBuildEnv :: FilePath -> BuildEnv IO
@@ -36,17 +41,19 @@ tests = testGroup "Golden.Symbol"
 
 runSymbolCommand :: IO LBS.ByteString
 runSymbolCommand = do
-  let fixtureDir = "test" </> "fixtures" </> "tiny-project"
-  rootResult <- discoverProjectRoot (Just fixtureDir)
-  case rootResult of
-    Left err -> error $ "Could not discover project root: " ++ show err
-    Right root -> do
-      planResult <- loadBuildPlan root
-      case planResult of
-        Left err -> error $ "Could not load plan: " ++ show err
-        Right plan -> do
-          let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"
-          result <- runSymbol env plan "async/Control.Concurrent.Async/concurrently"
-          case result of
-            Left err  -> error $ "Symbol command failed: " ++ show err
-            Right outcome -> pure (Aeson.encode (encodeEnvelope "symbol" outcome))
+  result <- runExceptT pipeline
+  case result of
+    Left err      -> fail ("Symbol golden failed: " <> show (errorMessage err))
+    Right outcome -> pure (Aeson.encode (encodeEnvelope SymbolCmd outcome))
+  where
+    fixtureDir = "test" </> "fixtures" </> "tiny-project"
+    asyncDir   = "test" </> "fixtures"
+              </> "fake-cabal-store" </> "ghc-9.6.7"
+              </> "async-2.2.5-abc123456789" </> "share" </> "async"
+
+    pipeline :: ExceptT HyphaError IO (Outcome Value)
+    pipeline = do
+      root <- discoverProjectRootE (Just fixtureDir)
+      plan <- loadBuildPlanE root
+      let env = mockBuildEnv asyncDir
+      ExceptT (liftIO (runSymbol env plan "async/Control.Concurrent.Async/concurrently"))

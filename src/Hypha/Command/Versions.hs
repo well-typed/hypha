@@ -16,11 +16,10 @@ import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
-import qualified Data.Text as Text
 
-import Hypha.Error (HyphaError (..))
+import Hypha.Error (HyphaError (..), errorToOutcomeError)
 import Hypha.Output.Outcome
-  ( Outcome (..), Related (..), OutcomeError (..)
+  ( Outcome (..), Related (..)
   , failureOutcome
   )
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
@@ -46,12 +45,7 @@ runVersions plan pkgName =
 -- 'Either'.  Used by the CLI dispatcher.
 runVersionsPure :: BuildPlan -> PackageName -> Outcome Value
 runVersionsPure plan pkgName =
-  case runVersions plan pkgName of
-    Right o  -> o
-    Left err -> failureOutcome $ OutcomeError
-      "NOT_FOUND"
-      (case err of NotFound m -> m; _ -> Text.pack (show err))
-      3
+  either (failureOutcome . errorToOutcomeError) id (runVersions plan pkgName)
 
 mkSuccessOutcome :: PackageName -> Version -> Outcome Value
 mkSuccessOutcome (PackageName name) (Version ver) =
