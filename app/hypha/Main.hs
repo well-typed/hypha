@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Control.Exception.Safe (catchAny)
+import Control.Exception.Safe
 
 import Hypha.Cli.Parser (parseCli)
 import Hypha.Cli.Run (reportInternalError, runCli)
@@ -13,7 +13,6 @@ import Hypha.Cli.Run (reportInternalError, runCli)
 -- propagates here and is reported as a single, well-formed
 -- @INTERNAL_ERROR@ envelope by 'reportInternalError'.
 main :: IO ()
-main = (do
+main = handleAny reportInternalError $ do
   (flags, cmd) <- parseCli
   runCli flags cmd
-  ) `catchAny` reportInternalError
