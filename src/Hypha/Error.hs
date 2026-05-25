@@ -9,6 +9,9 @@ module Hypha.Error
   , renderUserErrorReason
   , NotFoundReason (..)
   , renderNotFoundReason
+  , Tool (..)
+  , renderTool
+  , toolFromFilename
     -- * Classification
   , errorCode
   , errorMessage
@@ -19,6 +22,7 @@ module Hypha.Error
   , loadBuildPlanE
   ) where
 
+import Control.Exception (IOException, SomeException, displayException)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Except (ExceptT (ExceptT))
 import Data.Bifunctor (first)
@@ -122,6 +126,38 @@ renderNotFoundReason = \case
 renderPid :: PackageId -> Text
 renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v
 
+-- | External binary hypha depends on.  Used by 'ToolMissing' to name
+-- which executable was absent from @PATH@ when the cascade caught an
+-- @ENOENT@.  'ToolUnknown' carries the filename so the message stays
+-- informative even when we don't recognise the binary.
+data Tool
+  = ToolHaddock
+  | ToolCabal
+  | ToolGhc
+  | ToolTar
+  | ToolUnknown !Text
+  deriving stock (Show, Eq)
+
+renderTool :: Tool -> Text
+renderTool = \case
+  ToolHaddock     -> "haddock"
+  ToolCabal       -> "cabal"
+  ToolGhc         -> "ghc"
+  ToolTar         -> "tar"
+  ToolUnknown nm  -> nm
+
+-- | Classify a binary name (typically lifted from 'ioe_filename') into
+-- a known 'Tool'.  Falls back to 'ToolUnknown' so the classifier
+-- remains total.
+toolFromFilename :: Maybe FilePath -> Tool
+toolFromFilename = \case
+  Just "haddock" -> ToolHaddock
+  Just "cabal"   -> ToolCabal
+  Just "ghc"     -> ToolGhc
+  Just "tar"     -> ToolTar
+  Just other     -> ToolUnknown (Text.pack other)
+  Nothing        -> ToolUnknown "<unknown>"
+
 -- | Umbrella error type produced by hypha.  Every fallible boundary of
 -- the CLI funnels through this ADT.  Constructors embed precise
 -- sub-errors and any envelope context (query, tiers consulted, ...)
@@ -137,24 +173,28 @@ renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v
 -- Per the project ethos (CLAUDE.md, \"Render at the edge\"): error
 -- constructors carry domain types — 'UserErrorReason',
 -- 'NotFoundReason', 'HoogleQuery', @['Tier']@, 'RemoteError',
--- 'HackageError' — never pre-rendered 'Text'.  The remaining
--- @!'Text'@ constructors ('NetworkError', 'ToolMissing') are
--- catch-all bottoms for opaque exceptions where no structure
--- survives the @Control.Exception@ boundary.
+-- 'HackageError', 'Tool', 'IOException', 'SomeException' — never
+-- pre-rendered 'Text'.  Rendering happens in 'errorMessage' /
+-- 'errorActions', at the wire boundary.
+--
+-- 'Eq' is intentionally not derived: 'SomeException' has no useful
+-- structural equality and 'IOException' likewise.  Tests pattern-match
+-- on constructors rather than comparing whole values.
 data HyphaError
   = UserError         !UserErrorReason
   | NotFound          !NotFoundReason
   | HackageFailure    !PackageName !HackageError
     -- ^ Structured Hackage cause.  Dispatch on the variant for wire
     --   code / exit code mapping.
-  | NetworkError      !Text
-    -- ^ Catch-all transport bottom: 'classifyLookupException' for
-    --   non-IO 'SomeException' values; we have no better type to
-    --   preserve at this point.
-  | ToolMissing       !Text
-    -- ^ Required external binary (haddock / cabal / ghc) was not
-    --   on @PATH@.  Carries the 'displayException' of the originating
-    --   'IOException'.
+  | NetworkError      !SomeException
+    -- ^ Catch-all transport bottom raised inside @hypha lookup@.
+    --   Carries the originating exception so debug output / future
+    --   structured matching is still possible; rendering happens at
+    --   the wire layer via 'displayException'.
+  | ToolMissing       !Tool !IOException
+    -- ^ Required external binary was not on @PATH@.  Carries the
+    --   recognised 'Tool' tag and the originating 'IOException'
+    --   (typically a @posix_spawnp@ ENOENT).
   | DiscoveryFailure  !DiscoveryError
   | PlanFailure       !ProjectRoot !PlanError
     -- | @hypha lookup@: @--offline@ suppressed the remote tier.
@@ -163,7 +203,7 @@ data HyphaError
   | HoogleNotFound     !HoogleQuery ![Tier]
     -- | @hypha lookup@: the remote Hoogle tier failed.
   | HoogleRemoteError  !HoogleQuery ![Tier] !RemoteError
-  deriving stock (Show, Eq)
+  deriving stock (Show)
 
 errorCode :: HyphaError -> Text
 errorCode = \case
@@ -204,8 +244,9 @@ errorMessage = \case
   UserError         reason -> renderUserErrorReason reason
   NotFound          reason -> renderNotFoundReason  reason
   HackageFailure    name e -> renderHackageError    name e
-  NetworkError      msg    -> msg
-  ToolMissing       msg    -> msg
+  NetworkError      se     -> Text.pack (displayException se)
+  ToolMissing       t  ioe ->
+    renderTool t <> " not available: " <> Text.pack (displayException ioe)
   DiscoveryFailure  (NoProjectFound location)
     -> "no cabal project found (searched up from " <> Text.pack location <> ")"
   PlanFailure (ProjectRoot r) e -> case e of

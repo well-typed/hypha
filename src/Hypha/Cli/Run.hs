@@ -14,6 +14,7 @@ module Hypha.Cli.Run
 
 import Control.Exception (displayException)
 import Control.Exception.Safe (IOException, try, SomeException, fromException)
+import GHC.IO.Exception (IOException (..))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except
 import Crypto.Hash.SHA256 qualified as SHA256
@@ -468,9 +469,9 @@ classifyLookupException :: SomeException -> HyphaError
 classifyLookupException se
   | Just (ioe :: IOException) <- fromException se
   , isDoesNotExistError ioe
-  = ToolMissing (Text.pack (displayException ioe))
+  = ToolMissing (toolFromFilename (ioe_filename ioe)) ioe
   | otherwise
-  = NetworkError (Text.pack (displayException se))
+  = NetworkError se
 
 -- | Materialise the project Hoogle DB: load the plan, derive a
 -- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),
