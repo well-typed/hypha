@@ -5,7 +5,7 @@ module Hypha.Hackage.Source
   , enumerateSourceCache
   ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception.Safe (IOException, try)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map

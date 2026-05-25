@@ -17,7 +17,7 @@ module Hypha.Hoogle.Remote
   , defaultTransport
   ) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception.Safe (SomeException, try)
 import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:?))
 import Data.ByteString.Lazy (ByteString)

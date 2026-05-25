@@ -10,7 +10,8 @@
 -- carry the right signal.
 module Unit.Errors (tests) where
 
-import Control.Exception (ErrorCall (..), SomeException, toException)
+import Control.Exception (ErrorCall (..))
+import Control.Exception.Safe (SomeException, toException)
 import GHC.IO.Exception
   ( IOErrorType (NoSuchThing), IOException (..) )
 import Test.Tasty (TestTree, testGroup)

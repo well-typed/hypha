@@ -12,7 +12,7 @@ module Hypha.Cli.Run
   , classifyLookupException
   ) where
 
-import Control.Exception (IOException, try, SomeException, fromException)
+import Control.Exception.Safe (IOException, try, SomeException, fromException)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except
 import Crypto.Hash.SHA256 qualified as SHA256
@@ -347,7 +347,7 @@ runLookupCommand
   -> Text
   -> IO (Either HyphaError (Outcome Value))
 runLookupCommand flags q = do
-  result <- try @SomeException $ do
+  result <- try @IO @SomeException $ do
     mRoot <- warnOnLeft
                (errorMessage . DiscoveryFailure)
                Nothing
@@ -416,7 +416,7 @@ ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
   -- abort the lookup. The cascade in 'Lookup.runLookup' is designed
   -- to fall through to remote Hoogle when Tier 2 yields no hits, so
   -- we swallow the exception and let it proceed.
-  _ <- try @SomeException $ do
+  _ <- try @IO @SomeException $ do
     ePlan <- loadBuildPlan root
     case ePlan of
       Left _     -> pure ()
@@ -487,7 +487,7 @@ defaultStoreRoot = do
 -- not on PATH; scavenging treats that as \"disabled\".
 defaultDistDocRoot :: IO FilePath
 defaultDistDocRoot = do
-  r <- try @SomeException (readProcessWithExitCode "ghc"
+  r <- try @IO @SomeException (readProcessWithExitCode "ghc"
          ["--print-libdir"] "")
   case r of
     Right (System.ExitSuccess, out, _) -> do

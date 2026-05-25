@@ -28,7 +28,7 @@ module Hypha.Hoogle.Local
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
-import Control.Exception (IOException, SomeException, try)
+import Control.Exception.Safe (IOException, SomeException, try)
 import System.IO.Error (isDoesNotExistError)
 import Control.Monad (when)
 import Data.List (isPrefixOf)
@@ -227,7 +227,7 @@ defaultHaddockRunner = HaddockRunner $ \req -> do
   case files of
     [] -> pure (Left (HaddockError "no .hs files found"))
     _  -> do
-      r <- try @IOException $ readProcessWithExitCode "haddock"
+      r <- try @IO @IOException $ readProcessWithExitCode "haddock"
         ( ["--hoogle", "-o", takeDirectory (hrOutput req)]
         ++ files ) ""
       case r of

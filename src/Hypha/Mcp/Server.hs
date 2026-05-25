@@ -7,7 +7,7 @@ module Hypha.Mcp.Server
   , execHypha
   ) where
 
-import Control.Exception (try, SomeException)
+import Control.Exception.Safe (try, SomeException)
 import Control.Monad (unless)
 import Data.Aeson
   ( FromJSON (..), ToJSON (..), Value (..)
@@ -232,7 +232,7 @@ hyphaBinPath = maybe "hypha" id <$> lookupEnv "HYPHA_BIN"
 -- stderr, and the exit code.
 execHypha :: FilePath -> [String] -> IO (ExitCode, Text, Text)
 execHypha bin args = do
-  result <- try @SomeException $ do
+  result <- try @IO @SomeException $ do
     (ec, out, err) <- readProcess (proc bin args)
     let decodeBS = TE.decodeUtf8 . LBS.toStrict
     pure (ec, decodeBS out, decodeBS err)

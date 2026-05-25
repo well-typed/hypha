@@ -16,7 +16,7 @@ module Hypha.Hackage.Api
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_)
-import Control.Exception (try, SomeException)
+import Control.Exception.Safe (try, SomeException)
 import Data.Aeson (Value, decode)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key

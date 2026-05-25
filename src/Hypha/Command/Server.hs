@@ -22,7 +22,7 @@ module Hypha.Command.Server
 import Control.Concurrent (forkIO)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.Concurrent.Async (mapConcurrently_)
-import Control.Exception (SomeException, bracket_, try)
+import Control.Exception.Safe (SomeException, bracket_, try)
 import qualified Data.IORef as IORef
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map

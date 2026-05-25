@@ -18,7 +18,7 @@ module Hypha.Command.Doctor
   , runDoctor
   ) where
 
-import Control.Exception (try, SomeException)
+import Control.Exception.Safe (try, SomeException)
 import Data.Aeson (Value, (.=))
 import qualified Data.Aeson as Aeson
 import Data.Set (Set)
@@ -67,7 +67,7 @@ runDoctor = do
 
 checkGhc :: IO CheckResult
 checkGhc = do
-  eGhc <- try @SomeException (findExecutable "ghc")
+  eGhc <- try @IO @SomeException (findExecutable "ghc")
   case eGhc of
     Left _ -> pure (CheckFail "ghc not found on PATH")
     Right Nothing -> pure (CheckFail "ghc not found on PATH")
@@ -75,7 +75,7 @@ checkGhc = do
 
 checkHaddock :: IO CheckResult
 checkHaddock = do
-  eHaddock <- try @SomeException (findExecutable "haddock")
+  eHaddock <- try @IO @SomeException (findExecutable "haddock")
   case eHaddock of
     Left _ -> pure (CheckWarn "haddock not found on PATH (documentation generation unavailable)")
     Right Nothing -> pure (CheckWarn "haddock not found on PATH (documentation generation unavailable)")

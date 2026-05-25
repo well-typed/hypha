@@ -7,7 +7,7 @@ module Hypha.BuildEnv.Cabal
   , mkCabalBuildEnv
   ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception.Safe (IOException, try)
 import Data.List (find, isPrefixOf)
 import Data.Maybe (mapMaybe)
 import Data.Set (Set)
@@ -63,7 +63,7 @@ detectGhcVersion storeRoot = do
 -- | Discover all installed packages in the cabal store.
 discoverInStore :: FilePath -> IO (Set PackageId)
 discoverInStore storeRoot = do
-  result <- try @IOException (listDirectory storeRoot)
+  result <- try @IO @IOException (listDirectory storeRoot)
   case result of
     Left _  -> pure Set.empty
     Right entries -> do
@@ -121,7 +121,7 @@ locateSource storeRoot pid@(PackageId (PackageName name) (Version ver)) = do
   where
     findInStoreEntry :: FilePath -> PackageId -> IO (Maybe FilePath)
     findInStoreEntry sr (PackageId (PackageName n) (Version v)) = do
-      r <- try @IOException (listDirectory sr)
+      r <- try @IO @IOException (listDirectory sr)
       case r of
         Left _ -> pure Nothing
         Right entries -> do
@@ -139,7 +139,7 @@ locateSource storeRoot pid@(PackageId (PackageName name) (Version ver)) = do
 locateHaddock :: FilePath -> PackageId -> IO (Maybe FilePath)
 locateHaddock storeRoot (PackageId (PackageName name) (Version ver)) = do
   -- Find the store entry directory for this package
-  result <- try @IOException (listDirectory storeRoot)
+  result <- try @IO @IOException (listDirectory storeRoot)
   case result of
     Left _ -> pure Nothing
     Right entries -> do

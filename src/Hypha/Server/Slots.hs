@@ -8,7 +8,7 @@ module Hypha.Server.Slots
 
 import Control.Concurrent.Async (Async, async, wait)
 import Control.Concurrent.MVar  (MVar, newMVar, modifyMVar, modifyMVar_)
-import Control.Exception        (SomeException, try)
+import Control.Exception.Safe   (SomeException, try)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict          (Map)
 

@@ -8,7 +8,7 @@ module Hypha.Hackage.Cache
   , isFresh
   ) where
 
-import Control.Exception (try, SomeException)
+import Control.Exception.Safe (try, SomeException)
 import Crypto.Hash.SHA256 (hash)
 import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict, encode)
 import qualified Data.ByteString as BS

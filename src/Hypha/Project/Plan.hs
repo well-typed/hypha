@@ -10,7 +10,7 @@ module Hypha.Project.Plan
   , planHash
   ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception.Safe (IOException, try)
 import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString.Base16 as Base16
 import Data.List (sort)
@@ -49,7 +49,7 @@ data PlanError
 --   sub-library indexing in @hypha server@.
 loadBuildPlan :: ProjectRoot -> IO (Either PlanError BuildPlan)
 loadBuildPlan (ProjectRoot root) = do
-  result <- try @IOException
+  result <- try @IO @IOException
               (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
   case result of
     Left e   -> pure (Left (PlanNotFound (show e)))

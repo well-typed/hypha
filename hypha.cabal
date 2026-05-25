@@ -147,6 +147,7 @@ library
     , wai                   >= 3.2
     , warp                  >= 3.3
     , prettyprinter-ansi-terminal >= 1.1
+    , safe-exceptions       >= 0.1
     , skylighting           >= 0.14
     , sqlite-simple         >= 0.4
     , tagsoup               >= 0.14
@@ -224,6 +225,7 @@ test-suite hypha-tests
     , tasty-golden
     , tasty-hunit
     , falsify
+    , safe-exceptions
     , temporary
     , text
     , time

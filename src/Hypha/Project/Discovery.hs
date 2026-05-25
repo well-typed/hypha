@@ -6,7 +6,7 @@ module Hypha.Project.Discovery
   , discoverProjectRoot
   ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception.Safe (IOException, try)
 import Data.List (isSuffixOf)
 import System.Directory (doesFileExist, getCurrentDirectory, canonicalizePath, listDirectory)
 import System.FilePath ((</>), takeDirectory)
@@ -49,7 +49,7 @@ discoverProjectRoot mDir = do
 -- | Check if a directory contains any @*.cabal@ file.
 hasAnyCabalFile :: FilePath -> IO Bool
 hasAnyCabalFile dir = do
-  result <- try @IOException (listDirectory dir)
+  result <- try @IO @IOException (listDirectory dir)
   case result of
     Left _        -> pure False
     Right entries -> pure (any (isSuffixOf ".cabal") entries)

@@ -15,7 +15,7 @@ module Hypha.Project.Components
   , findCabalFile
   ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception.Safe (IOException, try)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -66,7 +66,7 @@ parseLibComponents
   -> FilePath  -- ^ package root (for resolving relative source dirs)
   -> IO [ComponentInfo]
 parseLibComponents cabalPath pkgRoot = do
-  eBs <- try @IOException (BS.readFile cabalPath)
+  eBs <- try @IO @IOException (BS.readFile cabalPath)
   case eBs of
     Left _   -> pure []
     Right bs -> case PDP.parseGenericPackageDescriptionMaybe bs of
