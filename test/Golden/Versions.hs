@@ -53,4 +53,4 @@ runVersionsCommand = do
       result = runVersions plan pkgName
   case result of
     Left _ -> error "Versions command failed unexpectedly"
-    Right outcome -> pure (Aeson.encode (encodeEnvelope VersionsCmd outcome))
+    Right outcome -> pure (Aeson.encode (encodeEnvelope VersionsCmd (Right outcome)))

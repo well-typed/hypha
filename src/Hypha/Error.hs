@@ -8,9 +8,7 @@ module Hypha.Error
   , errorCode
   , errorMessage
   , errorExitCode
-    -- * Conversion
-  , toOutcomeError
-  , errorToOutcomeError
+  , errorActions
     -- * ExceptT helpers
   , discoverProjectRootE
   , loadBuildPlanE
@@ -19,94 +17,155 @@ module Hypha.Error
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Except (ExceptT (ExceptT))
 import Data.Bifunctor (first)
-import Data.Text qualified as Text
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
+import qualified Data.Text as Text
 
 import Hypha.Exit
-import Hypha.Output.Outcome (OutcomeError (..))
+  ( ExitCode, exitUserError, exitNotFound, exitNetworkError, exitCacheError
+  , exitEnvironmentError, exitToolMissing )
+import Hypha.Hoogle.Remote (RemoteError, renderRemoteError)
+import Hypha.Hoogle.Tier (Tier, renderTierList)
+import Hypha.Hoogle.Type (HoogleQuery (..))
 import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
 import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
 import Hypha.Types.BuildPlan (BuildPlan, ProjectRoot (..))
 
 -- | Umbrella error type produced by hypha.  Every fallible boundary of the
 -- CLI funnels through this ADT.  Constructors embed precise sub-errors
--- (e.g. 'DiscoveryError', 'PlanError') so callers can pattern-match
--- without resorting to stringly-typed inspection.
+-- and any envelope context (query, tiers consulted, ...) needed to
+-- render the wire-format error/actions without an auxiliary type.
 --
--- Each constructor maps to exactly one 'ExitCode'; totality is checked by
--- the unit tests in @test/Unit/Errors.hs@.
+-- Each constructor maps to exactly one 'ExitCode'; totality is checked
+-- by the unit tests in @test/Unit/Errors.hs@.
+--
+-- Per the project ethos (CLAUDE.md, \"Render at the edge\"): the
+-- @Hoogle*@ constructors carry domain types — 'HoogleQuery', @['Tier']@,
+-- 'RemoteError' — never pre-rendered 'Text'.  Stringification happens
+-- in 'errorMessage' \/ 'errorActions', at the wire boundary.
 data HyphaError
-  = UserError         !Text             -- ^ bad CLI args, malformed path, conflicting flags
-  | NotFound          !Text             -- ^ symbol/pkg absent from full fallback chain
-  | NetworkError      !Text             -- ^ --offline with cache miss, 429, 503, ...
+  = UserError         !Text             -- ^ bad CLI args, malformed path
+  | NotFound          !Text             -- ^ pkg/symbol absent from fallback chain
+  | NetworkError      !Text             -- ^ --offline cache miss, 429, 503
   | Corruption        !Text             -- ^ cache / parse / on-disk corruption
   | EnvError          !Text             -- ^ store unreachable, generic env failure
-  | ToolMissing       !Text             -- ^ external binary (haddock/cabal/ghc) absent
+  | ToolMissing       !Text             -- ^ haddock/cabal/ghc not on PATH
   | DiscoveryFailure  !DiscoveryError   -- ^ project root discovery failed
-  | PlanFailure       !ProjectRoot !PlanError -- ^ plan.json missing or unparseable
+  | PlanFailure       !ProjectRoot !PlanError -- ^ plan.json missing/unparseable
+    -- | @hypha lookup@: @--offline@ suppressed the remote tier.  Carries
+    --   the original query and the tiers actually consulted so the
+    --   failure envelope can suggest a retry.
+  | HoogleOffline      !HoogleQuery ![Tier]
+    -- | @hypha lookup@: no providers found across every tier consulted.
+  | HoogleNotFound     !HoogleQuery ![Tier]
+    -- | @hypha lookup@: the remote Hoogle tier failed.  The embedded
+    --   'RemoteError' is kept structured (not flattened to 'Text') so
+    --   downstream consumers can still pattern-match on the cause.
+  | HoogleRemoteError  !HoogleQuery ![Tier] !RemoteError
   deriving stock (Show, Eq)
 
 errorCode :: HyphaError -> Text
 errorCode = \case
-  UserError{}        -> "USER_ERROR"
-  NotFound{}         -> "NOT_FOUND"
-  NetworkError{}     -> "NETWORK_ERROR"
-  Corruption{}       -> "CORRUPTION"
-  EnvError{}         -> "ENV_ERROR"
-  ToolMissing{}      -> "TOOL_MISSING"
-  DiscoveryFailure{} -> "ENV_ERROR"
-  PlanFailure _ e -> case e of
-    PlanNotFound{} -> "ENV_ERROR"
-    PlanParseFailure{} -> "CORRUPTION"
+  UserError{}
+    -> "USER_ERROR"
+  NotFound{}
+    -> "NOT_FOUND"
+  NetworkError{}
+    -> "NETWORK_ERROR"
+  Corruption{}
+    -> "CORRUPTION"
+  EnvError{}
+    -> "ENV_ERROR"
+  ToolMissing{}
+    -> "TOOL_MISSING"
+  DiscoveryFailure{}
+    -> "ENV_ERROR"
+  PlanFailure _ e
+    -> case e of
+         PlanNotFound{}     -> "ENV_ERROR"
+         PlanParseFailure{} -> "CORRUPTION"
+  HoogleOffline{}
+    -> "HOOGLE_OFFLINE"
+  HoogleNotFound{}
+    -> "NOT_FOUND"
+  HoogleRemoteError{}
+    -> "HOOGLE_REMOTE_ERROR"
 
 errorMessage :: HyphaError -> Text
 errorMessage = \case
-  UserError msg
-    -> msg
-  NotFound msg
-    -> msg
-  NetworkError msg
-    -> msg
-  Corruption msg
-    -> msg
-  EnvError msg
-    -> msg
-  ToolMissing msg
-    -> msg
-  DiscoveryFailure (NoProjectFound location)
+  UserError         msg -> msg
+  NotFound          msg -> msg
+  NetworkError      msg -> msg
+  Corruption        msg -> msg
+  EnvError          msg -> msg
+  ToolMissing       msg -> msg
+  DiscoveryFailure  (NoProjectFound location)
     -> "no cabal project found (searched up from " <> Text.pack location <> ")"
-  PlanFailure (ProjectRoot r) e
-    -> case e of
-         PlanNotFound pth ->
-              "plan.json missing under " <> Text.pack r
-           <> " (cabal-plan: " <> Text.pack pth <> ")"
-           <> "; run `cabal build --dry-run`"
-         PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
+  PlanFailure (ProjectRoot r) e -> case e of
+    PlanNotFound pth ->
+         "plan.json missing under " <> Text.pack r
+      <> " (cabal-plan: " <> Text.pack pth <> ")"
+      <> "; run `cabal build --dry-run`"
+    PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
+  HoogleOffline      _ _ ->
+    "--offline (or HYPHA_OFFLINE) suppresses remote tier"
+  HoogleNotFound     _ _ ->
+    "no providers found"
+  HoogleRemoteError  _ _ remoteErr -> renderRemoteError remoteErr
 
 errorExitCode :: HyphaError -> ExitCode
 errorExitCode = \case
-  UserError         _   -> exitUserError
-  NotFound          _   -> exitNotFound
-  NetworkError      _   -> exitNetworkError
-  Corruption        _   -> exitCacheError
-  EnvError          _   -> exitEnvironmentError
-  ToolMissing       _   -> exitToolMissing
-  DiscoveryFailure  _   -> exitEnvironmentError
-  PlanFailure       _ e -> case e of
-    PlanNotFound     _ -> exitEnvironmentError
-    PlanParseFailure _ -> exitCacheError
+  UserError{}
+    -> exitUserError
+  NotFound{}
+    -> exitNotFound
+  NetworkError{}
+    -> exitNetworkError
+  Corruption{}
+    -> exitCacheError
+  EnvError{}
+    -> exitEnvironmentError
+  ToolMissing{}
+    -> exitToolMissing
+  DiscoveryFailure{}
+    -> exitEnvironmentError
+  PlanFailure _ e
+    -> case e of
+         PlanNotFound{}     -> exitEnvironmentError
+         PlanParseFailure{} -> exitCacheError
+  HoogleOffline{}
+    -> exitNetworkError
+  HoogleNotFound{}
+    -> exitNotFound
+  HoogleRemoteError{}
+    -> exitCacheError
 
--- | Convert a 'HyphaError' into the wire-format 'OutcomeError' triple.
--- Kept for legacy callers; new code should prefer 'errorToOutcomeError'.
-toOutcomeError :: HyphaError -> (Text, Text, Int)
-toOutcomeError e = (errorCode e, errorMessage e, unExitCode (errorExitCode e))
-
--- | Convert a 'HyphaError' into a structured 'OutcomeError'.
-errorToOutcomeError :: HyphaError -> OutcomeError
-errorToOutcomeError e = OutcomeError
-  (errorCode e)
-  (errorMessage e)
-  (unExitCode (errorExitCode e))
+-- | Envelope-level @actions@ map derived from the error constructor.
+-- Most errors carry no command-specific recovery hints; the lookup
+-- variants do, and the query / tier list / 'RemoteError' embedded in
+-- the constructor are rendered here — never at the call site.
+errorActions :: HyphaError -> Map Text Text
+errorActions = \case
+  HoogleOffline (HoogleQuery q) tiers -> Map.fromList
+    [ ("retry_online",    "hypha lookup " <> q)
+    , ("query",           q)
+    , ("tiers_consulted", renderTierList tiers)
+    ]
+  HoogleNotFound (HoogleQuery q) tiers -> Map.fromList
+    [ ("retry_with_prefix", "hypha lookup " <> q <> "*")
+    , ("query",             q)
+    , ("tiers_consulted",   renderTierList tiers)
+    ]
+  HoogleRemoteError (HoogleQuery q) tiers _remoteErr -> Map.fromList
+    [ ("retry_offline",
+        "hypha lookup " <> q <> " --offline")
+    , ("raise_timeout",
+        "HYPHA_HOOGLE_TIMEOUT=30 hypha lookup " <> q)
+    , ("query",           q)
+    , ("tiers_consulted", renderTierList tiers)
+    ]
+  _ -> Map.empty
 
 -- | 'ExceptT'-friendly wrapper around 'discoverProjectRoot'.
 discoverProjectRootE

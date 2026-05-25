@@ -63,7 +63,7 @@ runDoctor = do
         [ "checks"   .= checks
         , "all_pass" .= allPass
         ]
-  pure $ OutcomeSuccess body allPass [] mempty mempty
+  pure $ Outcome body allPass [] mempty mempty
 
 checkGhc :: IO CheckResult
 checkGhc = do

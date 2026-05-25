@@ -26,7 +26,7 @@ runDeps :: Monad m
         -> Bool        -- ^ reverse?
         -> Maybe Int   -- ^ depth bound
         -> m (Outcome Value)
-runDeps bp name reverseMode mDepth = pure $ OutcomeSuccess
+runDeps bp name reverseMode mDepth = pure $ Outcome
     (object
       [ "package"   .= unPackageName name
       , "direction" .= (if reverseMode then "reverse" :: Text else "forward")

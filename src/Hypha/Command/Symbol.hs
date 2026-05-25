@@ -177,7 +177,7 @@ mkOutcome pkgName ver modTxt sym f info =
         [ Related "module_index" ("hypha module " <> pkg <> "/" <> modTxt)
         , Related "package" ("hypha package " <> pkg)
         ]
-  in OutcomeSuccess body False [] actions related
+  in Outcome body False [] actions related
 
 -- | Build a 'SourceLoc' from a file path and a line number.
 mkSourceLoc :: FilePath -> Int -> SourceLoc

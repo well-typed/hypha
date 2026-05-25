@@ -22,7 +22,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson qualified as Aeson
 import Data.Aeson (Value)
 import Data.ByteString.Base16 qualified as Base16
-import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
@@ -60,11 +59,13 @@ import Hypha.Exit (toSystemExitCode)
 import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
 import Hypha.Hoogle.Local qualified as HogLocal
 import Hypha.Hoogle.Remote qualified as HogRemote
+import Hypha.Hoogle.Type (HoogleQuery (..))
 import Hypha.Logging (LogEvent (..), silentTracer, verboseTracer)
-import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes, parseSelectList)
+import Hypha.Output.Json
+  ( EnvelopeOpts (..), encodeEnvelopeValue, encodeOutcomeEnvelope
+  , parseSelectList )
 import Hypha.Output.Outcome
 import Hypha.Package.Resolver
-  ( PackageResolver (..), ResolvedPackage (..), mkPackageResolver, resolveRef )
 import Hypha.Project.Components qualified as Comp
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
@@ -74,8 +75,6 @@ import Hypha.Search.PackageCache qualified as PC
 import Hypha.Source.Modules qualified as SourceModules
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId
-  ( PackageName (..), Version (..), PackageId (..), PackageRef (..)
-  , parsePackageRef )
 
 -- | Top-level entry point.  Wires global flags and the chosen subcommand to
 -- their handlers and emits exactly one JSON envelope (or, with @--human@, a
@@ -308,9 +307,17 @@ dispatchE flags = \case
     (resolver, _env) <- loadResolver flags
     eAvail    <- liftIO (fetchVrs resolver pkgName)
     (_, plan) <- loadPlan flags
-    pure $ case eAvail of
-      Left _         -> Versions.runVersionsPure plan pkgName
-      Right versions -> Versions.runVersionsWithAvail plan pkgName versions
+    case eAvail of
+      Left err -> do
+        -- Hackage availability is best-effort; surface the cause on
+        -- stderr (per the "never ignore an error branch silently"
+        -- ethos in CLAUDE.md) and fall back to the plan-only view.
+        liftIO $ hPutStrLn stderr $
+          "warning: hackage availability lookup failed: "
+          <> Text.unpack (errorMessage err)
+        pure (Versions.runVersionsWithAvail plan pkgName [])
+      Right versions ->
+        pure (Versions.runVersionsWithAvail plan pkgName versions)
 
   ModuleCommand arg -> do
     (pkgT, modPath)  <- parsePkgMod arg
@@ -458,10 +465,10 @@ runLookupCommand flags q = do
               HogRemote.defaultRemoteOptions
                 { HogRemote.roOffline = gfOffline flags }
           }
-    Lookup.runLookup cache hoogleLocal opts q
+    Lookup.runLookup cache hoogleLocal opts (HoogleQuery q)
   case result of
     Left e  -> pure (Left (classifyLookupException e))
-    Right o -> pure (Right o)
+    Right o -> pure o
 
 -- | Classify a 'SomeException' raised inside the @hypha lookup@
 -- pipeline.  An @ENOENT@ from a child-process spawn (typically the
@@ -678,33 +685,50 @@ resolveExposedModules resolver env pid = do
         Right dir -> SourceModules.getExposedModules dir
 
 -- | Emit the outcome to stdout, honouring all output-shaping flags.
-processOutcome :: GlobalFlags -> ClientCommandTag -> Either HyphaError (Outcome Value) -> IO ()
+--
+-- The envelope is built /once/ as a typed 'Value'; both the JSON path
+-- and the @--human@ path consume that value directly.  Earlier the
+-- @--human@ path round-tripped through bytes and "handled" a decode
+-- failure that could never actually occur (we had just produced those
+-- bytes ourselves) — that was a fake fallback and a silent swallow.
+processOutcome
+  :: GlobalFlags
+  -> ClientCommandTag
+  -> Either HyphaError (Outcome Value)
+  -> IO ()
 processOutcome flags cmd result = do
-  let oc      = either errorOutcome id result
-      compact = compactKeysFor cmd
+  let compact = compactKeysFor cmd
       full    = fullKeysFor cmd
       opts    = EnvelopeOpts
                   { eoFull       = gfFull flags
                   , eoSelect     = maybe [] parseSelectList (gfSelect flags)
                   , eoPrettyJson = gfPrettyJson flags
                   }
+      envelope = encodeOutcomeEnvelope opts cmd compact full result
   if gfHuman flags
-    then do
-      let bs = encodeOutcomeBytes opts cmd compact full oc
-      case Aeson.eitherDecode bs of
-        Right v -> TIO.putStrLn (humanFromValue v)
-        Left  _ -> LBS8.putStrLn bs
-    else LBS.hPut stdout (encodeOutcomeBytes opts cmd compact full oc)
+    then TIO.putStrLn (humanFromValue envelope)
+    else LBS.hPut stdout (encodeEnvelopeValue opts envelope)
   hFlush stdout
-  case result of
-    Left err -> do
-      hPutStrLn stderr $
-        Text.unpack (errorCode err) <> ": " <> Text.unpack (errorMessage err)
-      System.exitWith (toSystemExitCode (errorExitCode err))
-    Right _  -> System.exitSuccess
+  reportError result
+  System.exitWith (resultExitCode result)
 
-errorOutcome :: HyphaError -> Outcome Value
-errorOutcome = failureOutcome . errorToOutcomeError
+-- | Surface the structured error to @stderr@ (so the user sees the
+-- @CODE: message@ line that complements the JSON envelope on stdout).
+-- 'Right' is a no-op — the success outcome is already on stdout.
+reportError :: Either HyphaError a -> IO ()
+reportError (Left err) =
+  hPutStrLn stderr $
+    Text.unpack (errorCode err) <> ": " <> Text.unpack (errorMessage err)
+reportError (Right _) = pure ()
+
+-- | Total mapping from a command result to a process exit code.  The
+-- 'Outcome' carries no exit-status field, so success uniformly maps to
+-- 'System.ExitSuccess'; failure delegates to the typed code embedded in
+-- the 'HyphaError'.
+resultExitCode :: Either HyphaError a -> System.ExitCode
+resultExitCode = \case
+  Left err -> toSystemExitCode (errorExitCode err)
+  Right _  -> System.ExitSuccess
 
 
 -- | Compact / full field sets per command name.  Keep in sync with each

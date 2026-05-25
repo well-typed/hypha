@@ -7,7 +7,8 @@ import qualified Test.Falsify.Generator as Gen
 import qualified Test.Falsify.Predicate as P
 import Test.Falsify.Property (gen, assert)
 
-import Hypha.Command.Lookup (Tier (..), chooseTiers)
+import Hypha.Command.Lookup (chooseTiers)
+import Hypha.Hoogle.Tier (Tier (..))
 
 tests :: TestTree
 tests = testGroup "Property.LookupCascade"

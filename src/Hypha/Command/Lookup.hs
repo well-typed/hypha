@@ -15,8 +15,8 @@ module Hypha.Command.Lookup
   ( -- * Types
     LookupResult (..)
   , Provider (..)
-  , Tier (..)
   , LookupOptions (..)
+  , RemoteTierOutcome (..)
     -- * Cascade
   , runLookup
     -- * Pure helpers used by tests
@@ -28,21 +28,16 @@ module Hypha.Command.Lookup
   ) where
 
 import Data.Aeson (Value, (.=), object)
-import qualified Data.Map.Strict as Map
 import Data.Text (Text)
-import qualified Data.Text as Text
 
 import Hypha.Hoogle.Local (HyphaHoogle, searchLocal)
 import Hypha.Hoogle.Remote
   ( RemoteError (..), RemoteOptions, searchRemote )
+import Hypha.Hoogle.Tier (Tier (..), tierLabel)
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
-import Hypha.Output.Outcome
-  ( Outcome (..), OutcomeError (..), Related (..) )
+import Hypha.Error (HyphaError (..))
+import Hypha.Output.Outcome (Outcome (..), Related (..))
 import Hypha.Search.PackageCache (HyphaPackageCache, lookupByName)
-
--- | Which tier produced a 'Provider'.
-data Tier = TierCache | TierLocalHoogle | TierRemoteHoogle
-  deriving stock (Show, Eq, Ord)
 
 -- | A single hit, tagged with its origin tier.
 data Provider = Provider
@@ -67,108 +62,96 @@ data LookupOptions = LookupOptions
   , loRemote  :: !RemoteOptions
   }
 
+-- | What happened on the remote tier, when the earlier tiers were empty
+-- and the cascade actually reached it.  Used by 'buildOutcome' so we
+-- never have to overload a 'RemoteError' constructor with a sentinel
+-- value (the prior @RemoteHttp \"NOT_FOUND\"@ trick was banished).
+data RemoteTierOutcome
+    -- | Earlier tier hit; remote tier never consulted.
+  = RemoteNotConsulted
+    -- | @--offline@ (or @HYPHA_OFFLINE@) suppressed the remote call.
+  | RemoteSkippedOffline
+    -- | Remote returned with zero hits.
+  | RemoteEmpty
+    -- | Remote call failed with the embedded structured error.
+  | RemoteFailed !RemoteError
+  deriving stock (Show, Eq)
+
 -- | Top-level entry point.  Runs the cascade and assembles an
 -- 'Outcome' for the CLI envelope encoder.
 runLookup
   :: HyphaPackageCache
   -> HyphaHoogle
   -> LookupOptions
-  -> Text
-  -> IO (Outcome Value)
-runLookup cache hoogleLocal opts q = do
+  -> HoogleQuery
+  -> IO (Either HyphaError (Outcome Value))
+runLookup cache hoogleLocal opts q@(HoogleQuery qText) = do
   -- Tier 1
-  cacheHits <- lookupByName cache q
+  cacheHits <- lookupByName cache qText
   case cacheHits of
     (_:_) -> pure (buildOutcome q
                     (map (toProvider TierCache) cacheHits)
-                    [TierCache] Nothing)
+                    [TierCache] RemoteNotConsulted)
     [] -> do
       -- Tier 2
-      localHits <- searchLocal hoogleLocal (HoogleQuery q)
+      localHits <- searchLocal hoogleLocal q
       case localHits of
         (_:_) -> pure (buildOutcome q
                         (map (hitProvider TierLocalHoogle) localHits)
-                        [TierCache, TierLocalHoogle] Nothing)
+                        [TierCache, TierLocalHoogle] RemoteNotConsulted)
         [] -> do
           -- Tier 3
-          remote <- searchRemote (loRemote opts) cache (HoogleQuery q)
+          remote <- searchRemote (loRemote opts) cache q
           let tiersWithRemote =
                 [TierCache, TierLocalHoogle, TierRemoteHoogle]
           case remote of
             Right hits | not (null hits) ->
               pure (buildOutcome q
                      (map (hitProvider TierRemoteHoogle) hits)
-                     tiersWithRemote Nothing)
+                     tiersWithRemote RemoteNotConsulted)
             Right _ ->
-              pure (buildOutcome q [] tiersWithRemote
-                     (Just (RemoteHttp "NOT_FOUND")))
-              -- We reuse RemoteHttp here as a marker; buildOutcome
-              -- maps Nothing-providers-+-empty-error to NOT_FOUND.
+              pure (buildOutcome q [] tiersWithRemote RemoteEmpty)
             Left RemoteOffline ->
               pure (buildOutcome q []
                      [TierCache, TierLocalHoogle]
-                     (Just RemoteOffline))
+                     RemoteSkippedOffline)
             Left e ->
-              pure (buildOutcome q [] tiersWithRemote (Just e))
+              pure (buildOutcome q [] tiersWithRemote (RemoteFailed e))
 
--- | Pure outcome assembly: drives every shape (success, NOT_FOUND,
--- HOOGLE_OFFLINE, HOOGLE_REMOTE_ERROR) so property tests can poke at
--- it without IO.
+-- | Pure outcome assembly.  When providers are present we build a
+-- success 'Outcome'; otherwise the failure is surfaced as a typed
+-- 'HyphaError' carrying the original 'HoogleQuery', the @['Tier']@
+-- consulted, and the structured 'RemoteError' (when relevant).  Wire
+-- rendering (comma-joined tier list, etc.) belongs to
+-- "Hypha.Error.errorActions" — not here.
 buildOutcome
-  :: Text                  -- ^ query
+  :: HoogleQuery           -- ^ query (carried as a domain type)
   -> [Provider]            -- ^ providers (may be empty on failure)
   -> [Tier]                -- ^ tiers actually consulted
-  -> Maybe RemoteError     -- ^ remote-tier outcome when relevant
-  -> Outcome Value
-buildOutcome q providers tiers mErr =
-  case (providers, mErr) of
-    (_:_, _) ->
-      OutcomeSuccess
-        (lookupResultToJSON (LookupResult q providers tiers))
-        False [] mempty
-        [ Related (pPkg p <> "/" <> pMod p)
-                  ( "hypha symbol "
-                    <> pPkg p <> "/" <> pMod p <> "/" <> pName p )
-        | p <- take 5 providers
-        ]
+  -> RemoteTierOutcome     -- ^ what happened on the remote tier
+  -> Either HyphaError (Outcome Value)
+buildOutcome q providers tiers remoteOutcome =
+  case (providers, remoteOutcome) of
+    (_:_, _) -> Right $ Outcome
+      { outcomeResult      = lookupResultToJSON
+                               (LookupResult (unHoogleQuery q) providers tiers)
+      , outcomeOutsidePlan = False
+      , outcomeOverrides   = []
+      , outcomeActions     = mempty
+      , outcomeRelated     =
+          [ Related (pPkg p <> "/" <> pMod p)
+                    ( "hypha symbol "
+                      <> pPkg p <> "/" <> pMod p <> "/" <> pName p )
+          | p <- take 5 providers
+          ]
+      }
 
-    ([], Just RemoteOffline) ->
-      OutcomeFailure
-        (OutcomeError "HOOGLE_OFFLINE"
-          "--offline (or HYPHA_OFFLINE) suppresses remote tier" 4)
-        (Map.fromList
-           [ ("retry_online", "hypha lookup " <> q)
-           , ("query", q)
-           , ("tiers_consulted", renderTiers tiers) ])
-
-    ([], Just (RemoteHttp "NOT_FOUND")) ->
-      OutcomeFailure
-        (OutcomeError "NOT_FOUND" "no providers found" 3)
-        (Map.fromList
-           [ ("retry_with_prefix", "hypha lookup " <> q <> "*")
-           , ("query", q)
-           , ("tiers_consulted", renderTiers tiers) ])
-
-    ([], Just e) ->
-      OutcomeFailure
-        (OutcomeError "HOOGLE_REMOTE_ERROR" (Text.pack (show e)) 5)
-        (Map.fromList
-           [ ("retry_offline", "hypha lookup " <> q <> " --offline")
-           , ("raise_timeout",
-                "HYPHA_HOOGLE_TIMEOUT=30 hypha lookup " <> q)
-           , ("query", q)
-           , ("tiers_consulted", renderTiers tiers) ])
-
-    ([], Nothing) ->
-      OutcomeFailure
-        (OutcomeError "NOT_FOUND" "no providers found" 3)
-        (Map.fromList
-           [ ("retry_with_prefix", "hypha lookup " <> q <> "*")
-           , ("query", q)
-           , ("tiers_consulted", renderTiers tiers) ])
-
-renderTiers :: [Tier] -> Text
-renderTiers = Text.intercalate "," . map tierToText
+    ([], RemoteSkippedOffline) -> Left (HoogleOffline      q tiers)
+    ([], RemoteFailed e)       -> Left (HoogleRemoteError  q tiers e)
+    ([], RemoteEmpty)          -> Left (HoogleNotFound     q tiers)
+    -- Unreachable in practice (earlier tiers produced no providers
+    -- so the cascade always consults remote), but kept total.
+    ([], RemoteNotConsulted)   -> Left (HoogleNotFound     q tiers)
 
 -- | Pure tier-prefix model used by property tests.  Mirrors the
 -- short-circuit logic of 'runLookup' without performing IO.
@@ -194,25 +177,18 @@ hitProvider t h = Provider (hhPackage h) (hhModule h) (hhName h) (hhSig h) t
 
 -- JSON ------------------------------------------------------------------
 
-tierToText :: Tier -> Text
-tierToText = \case
-  TierCache         -> "cache"
-  TierLocalHoogle   -> "local-hoogle"
-  TierRemoteHoogle  -> "remote-hoogle"
-
 providerToJSON :: Provider -> Value
 providerToJSON p = object
   [ "pkg"  .= pPkg p
   , "mod"  .= pMod p
   , "name" .= pName p
   , "sig"  .= pSig p
-  , "tier" .= tierToText (pTier p)
+  , "tier" .= tierLabel (pTier p)
   ]
 
 lookupResultToJSON :: LookupResult -> Value
 lookupResultToJSON r = object
   [ "query"           .= lrQuery r
   , "providers"       .= map providerToJSON (lrProviders r)
-  , "tiers_consulted" .= map tierToText (lrTiersConsulted r)
+  , "tiers_consulted" .= map tierLabel (lrTiersConsulted r)
   ]
-

@@ -9,6 +9,7 @@
 -- deterministic stub without touching the network.
 module Hypha.Hoogle.Remote
   ( RemoteError (..)
+  , renderRemoteError
   , RemoteHoogleTransport (..)
   , RemoteOptions (..)
   , defaultRemoteOptions
@@ -45,6 +46,17 @@ data RemoteError
   | RemoteHttp !Text
   | RemoteDecode !Text
   deriving stock (Show, Eq)
+
+-- | Total renderer for 'RemoteError'.  Lives next to the type so error
+-- constructors can carry 'RemoteError' values directly (rather than
+-- @Text.pack . show@ at the call site) and let the wire-format layer
+-- decide how to surface them.
+renderRemoteError :: RemoteError -> Text
+renderRemoteError = \case
+  RemoteOffline    -> "offline (remote Hoogle tier suppressed)"
+  RemoteTimeout    -> "remote Hoogle timed out"
+  RemoteHttp msg   -> "remote Hoogle HTTP error: " <> msg
+  RemoteDecode msg -> "remote Hoogle response decode failure: " <> msg
 
 -- | Injection point for the HTTP transport.
 newtype RemoteHoogleTransport = RemoteHoogleTransport

@@ -44,7 +44,7 @@ runSymbolCommand = do
   result <- runExceptT pipeline
   case result of
     Left err      -> fail ("Symbol golden failed: " <> show (errorMessage err))
-    Right outcome -> pure (Aeson.encode (encodeEnvelope SymbolCmd outcome))
+    Right outcome -> pure (Aeson.encode (encodeEnvelope SymbolCmd (Right outcome)))
   where
     fixtureDir = "test" </> "fixtures" </> "tiny-project"
     asyncDir   = "test" </> "fixtures"

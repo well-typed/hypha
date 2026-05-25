@@ -6,7 +6,9 @@ module Hypha.Output.Json
   , EnvelopeOpts (..)
   , defaultEnvelopeOpts
   , encodeEnvelope
+  , encodeOutcomeEnvelope
   , encodeOutcomeBytes
+  , encodeEnvelopeValue
   , filterSelect
   , restrictBody
   , objectKeys
@@ -23,8 +25,11 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Output.Outcome (Outcome (..), OutcomeError (..), Related (..))
 import Hypha.Cli.Types
+import Hypha.Error
+  ( HyphaError, errorActions, errorCode, errorExitCode, errorMessage )
+import Hypha.Exit (unExitCode)
+import Hypha.Output.Outcome (Outcome (..), Related (..))
 
 -- | Two field-set variants: compact (default) and full (--full).
 -- Each command result type implements this class.
@@ -51,34 +56,35 @@ defaultEnvelopeOpts = EnvelopeOpts
   , eoPrettyJson = False
   }
 
--- | Build the envelope 'Value' from an already-serialised command result.
---
--- This is the low-level builder; most callers should use 'encodeOutcomeBytes',
--- which additionally projects fields and chooses compact vs pretty encoding.
-encodeEnvelope :: ClientCommandTag -> Outcome Value -> Value
+-- | Build the envelope 'Value' from a command result.  Success is
+-- rendered from the 'Outcome'; failure is rendered directly from the
+-- 'HyphaError' (code/message/exit_code via 'errorCode' / 'errorMessage'
+-- / 'errorExitCode', recovery hints via 'errorActions').
+encodeEnvelope
+  :: ClientCommandTag -> Either HyphaError (Outcome Value) -> Value
 encodeEnvelope cmdName = \case
-  OutcomeSuccess result outside overrides actions related ->
+  Right oc ->
     object
       [ "schema"       .= ("hypha/v0" :: Text)
       , "command"      .= clientCommandName cmdName
       , "ok"           .= True
-      , "outside_plan" .= outside
-      , "overrides"    .= overrides
-      , "result"       .= result
-      , "actions"      .= actions
-      , "related"      .= map toRelatedObject related
+      , "outside_plan" .= outcomeOutsidePlan oc
+      , "overrides"    .= outcomeOverrides oc
+      , "result"       .= outcomeResult oc
+      , "actions"      .= outcomeActions oc
+      , "related"      .= map toRelatedObject (outcomeRelated oc)
       ]
-  OutcomeFailure err actions ->
+  Left err ->
     object
       [ "schema"   .= ("hypha/v0" :: Text)
       , "command"  .= clientCommandName cmdName
       , "ok"       .= False
       , "error"    .= object
-          [ "code"      .= oeCode err
-          , "message"   .= oeMessage err
-          , "exit_code" .= oeExitCode err
+          [ "code"      .= errorCode err
+          , "message"   .= errorMessage err
+          , "exit_code" .= unExitCode (errorExitCode err)
           ]
-      , "actions"  .= actions
+      , "actions"  .= errorActions err
       ]
   where
     toRelatedObject :: Related -> Value
@@ -87,37 +93,52 @@ encodeEnvelope cmdName = \case
       , "fetch" .= relatedFetch r
       ]
 
--- | Serialise an outcome to a 'LBS.ByteString', honouring the envelope options.
---
--- The two @Set Text@ arguments are the per-command compact and full key
--- sets.  The compact set must be a (non-strict) subset of the full set; this
--- invariant is enforced by 'Property.OutputJson'.  Pass equal sets if there
--- is no real distinction yet for a particular command.
-encodeOutcomeBytes
+-- | Build the envelope 'Value' /post-projection/.  The result is
+-- structurally identical to what 'encodeOutcomeBytes' would write to
+-- bytes — produce it once and feed it both to the JSON encoder and to
+-- the human renderer, so neither path has to round-trip through a
+-- 'LBS.ByteString' that could "fail" to decode.
+encodeOutcomeEnvelope
   :: EnvelopeOpts
-  -> ClientCommandTag -- ^ command name
+  -> ClientCommandTag
   -> Set Text         -- ^ compact key set for the result body
   -> Set Text         -- ^ full key set for the result body
-  -> Outcome Value
-  -> LBS.ByteString
-encodeOutcomeBytes opts cmdName compact full oc =
-  let projected = projectOutcome opts compact full oc
-      envelope  = encodeEnvelope cmdName projected
-  in if eoPrettyJson opts
-       then AesonPretty.encodePretty envelope
-       else encode envelope
+  -> Either HyphaError (Outcome Value)
+  -> Value
+encodeOutcomeEnvelope opts cmdName compact full result =
+  encodeEnvelope cmdName (fmap (projectOutcome opts compact full) result)
 
--- | Apply the field-set projection and --select projection to the success body.
-projectOutcome :: EnvelopeOpts -> Set Text -> Set Text -> Outcome Value -> Outcome Value
-projectOutcome opts compact full = \case
-  OutcomeSuccess result outside overrides actions related ->
-    let keep1 = if eoFull opts then full else compact
-        step1 = restrictKeys keep1 result
-        step2 = case eoSelect opts of
-                  [] -> step1
-                  ks -> restrictKeys (Set.fromList ks) step1
-    in OutcomeSuccess step2 outside overrides actions related
-  failure -> failure
+-- | Serialise a pre-built envelope 'Value', honouring the
+-- 'eoPrettyJson' flag.
+encodeEnvelopeValue :: EnvelopeOpts -> Value -> LBS.ByteString
+encodeEnvelopeValue opts envelope
+  | eoPrettyJson opts = AesonPretty.encodePretty envelope
+  | otherwise         = encode envelope
+
+-- | Convenience: build the envelope and serialise it in one step.  Use
+-- when you only need the bytes; use 'encodeOutcomeEnvelope' +
+-- 'encodeEnvelopeValue' separately when the same envelope also drives
+-- the human renderer.
+encodeOutcomeBytes
+  :: EnvelopeOpts
+  -> ClientCommandTag
+  -> Set Text
+  -> Set Text
+  -> Either HyphaError (Outcome Value)
+  -> LBS.ByteString
+encodeOutcomeBytes opts cmdName compact full =
+  encodeEnvelopeValue opts . encodeOutcomeEnvelope opts cmdName compact full
+
+-- | Apply the field-set + --select projection to a success outcome.
+projectOutcome
+  :: EnvelopeOpts -> Set Text -> Set Text -> Outcome Value -> Outcome Value
+projectOutcome opts compact full oc =
+  let keep1 = if eoFull opts then full else compact
+      step1 = restrictKeys keep1 (outcomeResult oc)
+      step2 = case eoSelect opts of
+                [] -> step1
+                ks -> restrictKeys (Set.fromList ks) step1
+  in oc { outcomeResult = step2 }
 
 -- | Internal: keep only the listed keys at the top level of an 'Object'.
 -- Pass-through on non-objects so primitive results are not silently dropped.

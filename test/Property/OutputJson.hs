@@ -16,8 +16,9 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import Test.Tasty (TestTree, testGroup)
 
 import Hypha.Cli.Types
+import Hypha.Error (HyphaError (..))
 import Hypha.Output.Json (ToOutcomeJson (..), encodeEnvelope, filterSelect, objectKeys)
-import Hypha.Output.Outcome ( OutcomeError (..), successOutcome, failureOutcome )
+import Hypha.Output.Outcome (successOutcome)
 
 -------------------------------------------------------------------------------
 -- Sample command result: SymbolCard
@@ -116,23 +117,22 @@ tests = testGroup "OutputJson"
 testSuccessEnvelope :: IO ()
 testSuccessEnvelope = do
   let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      val     = encodeEnvelope SymbolCmd outcome
+      val     = encodeEnvelope SymbolCmd (Right outcome)
       keys    = objectKeys val
   keys @?= Set.fromList
     [ "schema", "command", "ok", "outside_plan", "overrides", "result", "actions", "related" ]
 
 testFailureEnvelope :: IO ()
 testFailureEnvelope = do
-  let err     = OutcomeError (Text.pack "NOT_FOUND") (Text.pack "missing") 3
-      outcome = failureOutcome err
-      val     = encodeEnvelope SymbolCmd outcome
-      keys    = objectKeys val
+  let err  = NotFound (Text.pack "missing")
+      val  = encodeEnvelope SymbolCmd (Left err)
+      keys = objectKeys val
   keys @?= Set.fromList [ "schema", "command", "ok", "error", "actions" ]
 
 testFilterSelect :: IO ()
 testFilterSelect = do
   let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeEnvelope SymbolCmd outcome
+      env     = encodeEnvelope SymbolCmd (Right outcome)
       filtered = filterSelect ["schema", "ok", "result"] env
       keys    = objectKeys filtered
   keys @?= Set.fromList [ "schema", "ok", "result" ]
@@ -140,6 +140,6 @@ testFilterSelect = do
 testFilterSelectNoop :: IO ()
 testFilterSelectNoop = do
   let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeEnvelope SymbolCmd outcome
+      env     = encodeEnvelope SymbolCmd (Right outcome)
       filtered = filterSelect [] env
   filtered @?= env

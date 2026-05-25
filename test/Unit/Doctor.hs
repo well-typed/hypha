@@ -24,82 +24,53 @@ tests = testGroup "Doctor"
             setCurrentDirectory tempDir
             outcome <- runDoctor
             setCurrentDirectory oldDir
-            case outcome of
-              OutcomeSuccess body _ _ _ _ ->
-                let allPass = extractAllPass body
-                in assertBool "all_pass should be False without plan.json"
-                  (not allPass)
-              OutcomeFailure {} ->
-                assertBool "Should not be OutcomeFailure" False
-
-      , testCase "doctor returns successful outcome structure" $ do
-          outcome <- runDoctor
-          case outcome of
-            OutcomeSuccess {} ->
-              assertBool "Should be OutcomeSuccess" True
-            OutcomeFailure {} ->
-              assertBool "Should not be OutcomeFailure" False
+            let allPass = extractAllPass (outcomeResult outcome)
+            assertBool "all_pass should be False without plan.json"
+                       (not allPass)
 
       , testCase "result contains checks object" $ do
           outcome <- runDoctor
-          case outcome of
-            OutcomeSuccess body _ _ _ _ ->
-              let checks = extractChecks body
-              in assertBool "checks field should be present and be an object"
-                (case checks of
-                  Just (Aeson.Object _) -> True
-                  _ -> False)
-            OutcomeFailure {} ->
-              assertBool "Should not be OutcomeFailure" False
+          let checks = extractChecks (outcomeResult outcome)
+          assertBool "checks field should be present and be an object"
+            (case checks of
+              Just (Aeson.Object _) -> True
+              _ -> False)
 
       , testCase "result contains all_pass boolean" $ do
           outcome <- runDoctor
-          case outcome of
-            OutcomeSuccess body _ _ _ _ ->
-              let _allPass = extractAllPass body  -- extracted but not asserted, covered by other tests
-              in assertBool "all_pass field should be present" True
-            OutcomeFailure {} ->
-              assertBool "Should not be OutcomeFailure" False
+          let _allPass = extractAllPass (outcomeResult outcome)
+          assertBool "all_pass field should be present" True
 
       , testCase "all_pass=true when all checks pass" $ do
-          -- This test verifies the positive case: when all checks pass, all_pass is true
-          -- We run in the worktree directory where plan.json, ghc, and haddock should exist
+          -- Positive case: when every check passes, all_pass is true.
           outcome <- runDoctor
-          case outcome of
-            OutcomeSuccess body _ _ _ _ ->
-              let allPass = extractAllPass body
-                  checksObj = extractChecks body
-              in assertBool "When all checks pass, all_pass should be true"
-                 (case checksObj of
-                   Just (Aeson.Object checks) ->
-                     -- Check that ghc, haddock, and plan_json all have status "pass"
-                     let ghcStatus = getStatus checks "ghc"
-                         haddockStatus = getStatus checks "haddock"
-                         planStatus = getStatus checks "plan_json"
-                         allPassStatus = ghcStatus == "pass"
-                                      && haddockStatus == "pass"
-                                      && planStatus == "pass"
-                     in if allPassStatus
-                          then allPass  -- all_pass should be true
-                          else True     -- if not all pass, we don't care about all_pass value
-                   _ -> True)  -- If checks not found, skip this assertion
-            OutcomeFailure {} ->
-              assertBool "Should not be OutcomeFailure" False
+          let body     = outcomeResult outcome
+              allPass  = extractAllPass body
+              checksObj = extractChecks body
+          assertBool "When all checks pass, all_pass should be true"
+            (case checksObj of
+              Just (Aeson.Object checks) ->
+                let ghcStatus     = getStatus checks "ghc"
+                    haddockStatus = getStatus checks "haddock"
+                    planStatus    = getStatus checks "plan_json"
+                    allPassStatus = ghcStatus == "pass"
+                                 && haddockStatus == "pass"
+                                 && planStatus == "pass"
+                in if allPassStatus
+                     then allPass
+                     else True
+              _ -> True)
 
       , testCase "checks contain ghc, haddock, and plan_json" $ do
           outcome <- runDoctor
-          case outcome of
-            OutcomeSuccess body _ _ _ _ ->
-              let checksObj = extractChecks body
-              in assertBool "checks should contain all three checks"
-                 (case checksObj of
-                   Just (Aeson.Object checks) ->
-                     hasField "ghc" checks
-                     && hasField "haddock" checks
-                     && hasField "plan_json" checks
-                   _ -> False)
-            OutcomeFailure {} ->
-              assertBool "Should not be OutcomeFailure" False
+          let checksObj = extractChecks (outcomeResult outcome)
+          assertBool "checks should contain all three checks"
+            (case checksObj of
+              Just (Aeson.Object checks) ->
+                   hasField "ghc"       checks
+                && hasField "haddock"   checks
+                && hasField "plan_json" checks
+              _ -> False)
       ]
   ]
 

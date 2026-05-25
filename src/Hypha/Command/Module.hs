@@ -45,7 +45,7 @@ runModuleFromDir srcDir pid modPath = do
 toOutcome :: PackageId -> Text -> [Text] -> Outcome Value
 toOutcome pid modPath exps =
   let pkg = unPackageName (pkgName pid)
-  in OutcomeSuccess
+  in Outcome
     (object
       [ "package" .= pkg
       , "module"  .= modPath

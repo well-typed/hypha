@@ -6,7 +6,6 @@ module Hypha.Command.Versions
   , fullKeys
     -- * Execution
   , runVersions
-  , runVersionsPure
   , runVersionsWithAvail
   ) where
 
@@ -17,11 +16,8 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 
-import Hypha.Error (HyphaError (..), errorToOutcomeError)
-import Hypha.Output.Outcome
-  ( Outcome (..), Related (..)
-  , failureOutcome
-  )
+import Hypha.Error (HyphaError (..))
+import Hypha.Output.Outcome (Outcome (..), Related (..))
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
@@ -41,15 +37,9 @@ runVersions plan pkgName =
       ("Package '" <> unPackageName pkgName <> "' not in build plan")
     Just ver -> Right (mkSuccessOutcome pkgName ver)
 
--- | Total variant: produces a failure 'Outcome' on miss rather than an
--- 'Either'.  Used by the CLI dispatcher.
-runVersionsPure :: BuildPlan -> PackageName -> Outcome Value
-runVersionsPure plan pkgName =
-  either (failureOutcome . errorToOutcomeError) id (runVersions plan pkgName)
-
 mkSuccessOutcome :: PackageName -> Version -> Outcome Value
 mkSuccessOutcome (PackageName name) (Version ver) =
-  OutcomeSuccess body False [] actions related
+  Outcome body False [] actions related
   where
     body = Aeson.object
       [ "package"            .= name
@@ -74,7 +64,7 @@ runVersionsWithAvail plan pkgName available =
             , "pinned_version"     .= ("" :: Text)
             , "available_versions" .= map unVersion available
             ]
-      in OutcomeSuccess body True [] mempty []
+      in Outcome body True [] mempty []
     Just ver ->
       let (PackageName name) = pkgName
           (Version v) = ver
@@ -89,4 +79,4 @@ runVersionsWithAvail plan pkgName available =
             ]
           related =
             [ Related "package" ("hypha package " <> name) ]
-      in OutcomeSuccess body False [] actions related
+      in Outcome body False [] actions related

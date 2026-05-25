@@ -8,7 +8,6 @@ module Hypha.Command.Package
   , fullKeys
     -- * Execution
   , runPackage
-  , runPackagePure
   , mkSuccessOutcome
     -- * JSON helpers
   , packageOriginToJSON
@@ -22,11 +21,8 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Error (HyphaError (..), errorToOutcomeError)
-import Hypha.Output.Outcome
-  ( Outcome (..), Related (..)
-  , failureOutcome
-  )
+import Hypha.Error (HyphaError (..))
+import Hypha.Output.Outcome (Outcome (..), Related (..))
 import Hypha.Types.BuildPlan
   ( BuildPlan, PackageOrigin (..), PlannedUnit (..), lookupUnit )
 import Hypha.Types.PackageId
@@ -70,12 +66,6 @@ runPackage plan rawArg =
        Nothing -> Left $ NotFound
          ("package '" <> nameT <> "' not in build plan")
 
--- | Total variant: never fails at the IO boundary, but encodes "not in plan"
--- as a structured 'OutcomeFailure' so the envelope shape stays consistent.
-runPackagePure :: BuildPlan -> Text -> Outcome Value
-runPackagePure plan rawArg =
-  either (failureOutcome . errorToOutcomeError) id (runPackage plan rawArg)
-
 -- | Build a success outcome from package metadata and a (possibly empty)
 -- list of exposed modules.  When modules are provided, per-module related
 -- actions are included so an agent can drill in immediately.
@@ -109,7 +99,7 @@ mkSuccessOutcome rawName ver isLocal depsCount origin modules =
         [ Related "versions" ("hypha versions " <> rawName)
         , Related "module_index_hint" ("hypha module " <> rawName <> "/<Module>")
         ]
-  in OutcomeSuccess body False [] actions (generalRelated ++ moduleRelated)
+  in Outcome body False [] actions (generalRelated ++ moduleRelated)
 
 packageResultToJSON :: PackageResult -> Value
 packageResultToJSON r = Aeson.object

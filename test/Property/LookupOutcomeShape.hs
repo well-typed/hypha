@@ -6,48 +6,54 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Hypha.Command.Lookup
-  ( Provider (..), Tier (..), buildOutcome )
+  ( Provider (..), buildOutcome, RemoteTierOutcome (..) )
+import Hypha.Error (HyphaError, errorActions, errorCode)
 import Hypha.Hoogle.Remote (RemoteError (..))
-import Hypha.Output.Outcome (Outcome (..), OutcomeError (..))
+import Hypha.Hoogle.Tier (Tier (..))
+import Hypha.Hoogle.Type (HoogleQuery (..))
+import Hypha.Output.Outcome (Outcome (..))
 
 mkProvider :: Provider
 mkProvider = Provider "containers" "Data.Map" "lookup" "sig" TierCache
 
+expectFailure :: Either HyphaError (Outcome a) -> (HyphaError -> IO ()) -> IO ()
+expectFailure r k = case r of
+  Left err -> k err
+  Right _  -> fail "expected failure"
+
+expectSuccess :: Either HyphaError (Outcome a) -> (Outcome a -> IO ()) -> IO ()
+expectSuccess r k = case r of
+  Right oc -> k oc
+  Left _   -> fail "expected success"
+
 tests :: TestTree
 tests = testGroup "Property.LookupOutcomeShape"
-  [ testCase "non-empty providers => Success with related links" $
-      case buildOutcome "lookup" [mkProvider] [TierCache] Nothing of
-        OutcomeSuccess _ _ _ _ rel -> assertBool "has related" (not (null rel))
-        OutcomeFailure _ _         -> fail "expected success"
+  [ testCase "non-empty providers => Right Outcome with related links" $
+      expectSuccess
+        (buildOutcome (HoogleQuery "lookup") [mkProvider]
+                      [TierCache] RemoteNotConsulted) $ \oc ->
+          assertBool "has related" (not (null (outcomeRelated oc)))
 
   , testCase "empty providers + offline => HOOGLE_OFFLINE failure" $
-      case buildOutcome "x" [] [TierCache, TierLocalHoogle]
-              (Just RemoteOffline) of
-        OutcomeFailure (OutcomeError code _ _) actions -> do
-          code @?= "HOOGLE_OFFLINE"
-          assertBool "has actions" (not (Map.null actions))
-        OutcomeSuccess {} -> fail "expected failure"
+      expectFailure
+        (buildOutcome (HoogleQuery "x") []
+                      [TierCache, TierLocalHoogle] RemoteSkippedOffline) $ \err -> do
+          errorCode err @?= "HOOGLE_OFFLINE"
+          assertBool "has actions" (not (Map.null (errorActions err)))
 
   , testCase "empty providers + remote http error => HOOGLE_REMOTE_ERROR" $
-      case buildOutcome "x" []
-              [TierCache, TierLocalHoogle, TierRemoteHoogle]
-              (Just (RemoteHttp "boom")) of
-        OutcomeFailure (OutcomeError code _ _) actions -> do
-          code @?= "HOOGLE_REMOTE_ERROR"
+      expectFailure
+        (buildOutcome (HoogleQuery "x") []
+                      [TierCache, TierLocalHoogle, TierRemoteHoogle]
+                      (RemoteFailed (RemoteHttp "boom"))) $ \err -> do
+          errorCode err @?= "HOOGLE_REMOTE_ERROR"
           assertBool "carries retry_offline"
-            (Map.member "retry_offline" actions)
-        OutcomeSuccess {} -> fail "expected failure"
+            (Map.member "retry_offline" (errorActions err))
 
-  , testCase "empty providers, no remote error => NOT_FOUND" $
-      case buildOutcome "x" []
-              [TierCache, TierLocalHoogle, TierRemoteHoogle] Nothing of
-        OutcomeFailure (OutcomeError code _ _) _ -> code @?= "NOT_FOUND"
-        OutcomeSuccess {} -> fail "expected failure"
-
-  , testCase "remote sentinel NOT_FOUND maps to NOT_FOUND" $
-      case buildOutcome "x" []
-              [TierCache, TierLocalHoogle, TierRemoteHoogle]
-              (Just (RemoteHttp "NOT_FOUND")) of
-        OutcomeFailure (OutcomeError code _ _) _ -> code @?= "NOT_FOUND"
-        OutcomeSuccess {} -> fail "expected failure"
+  , testCase "empty providers, remote consulted but empty => NOT_FOUND" $
+      expectFailure
+        (buildOutcome (HoogleQuery "x") []
+                      [TierCache, TierLocalHoogle, TierRemoteHoogle]
+                      RemoteEmpty) $ \err ->
+          errorCode err @?= "NOT_FOUND"
   ]

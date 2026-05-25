@@ -15,8 +15,11 @@ import Test.Tasty.Golden (goldenVsString)
 
 import Hypha.Cli.Types (ClientCommandTag (..))
 import Hypha.Command.Lookup
-  ( Provider (..), Tier (..), buildOutcome )
+  ( Provider (..), RemoteTierOutcome (..), buildOutcome )
+import Hypha.Error (HyphaError)
 import Hypha.Hoogle.Remote (RemoteError (..))
+import Hypha.Hoogle.Tier (Tier (..))
+import Hypha.Hoogle.Type (HoogleQuery (..))
 import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes)
 import Hypha.Output.Outcome (Outcome)
 
@@ -44,31 +47,32 @@ mkProvider :: Tier -> Provider
 mkProvider t = Provider "containers" "Data.Map" "lookup"
                  "Ord k => k -> Map k a -> Maybe a" t
 
-cacheHitOutcome :: Outcome Value
+cacheHitOutcome :: Either HyphaError (Outcome Value)
 cacheHitOutcome =
-  buildOutcome "lookup" [mkProvider TierCache] [TierCache] Nothing
+  buildOutcome (HoogleQuery "lookup") [mkProvider TierCache]
+               [TierCache] RemoteNotConsulted
 
-localHitOutcome :: Outcome Value
+localHitOutcome :: Either HyphaError (Outcome Value)
 localHitOutcome =
-  buildOutcome "lookup"
+  buildOutcome (HoogleQuery "lookup")
     [mkProvider TierLocalHoogle]
-    [TierCache, TierLocalHoogle] Nothing
+    [TierCache, TierLocalHoogle] RemoteNotConsulted
 
-remoteHitOutcome :: Outcome Value
+remoteHitOutcome :: Either HyphaError (Outcome Value)
 remoteHitOutcome =
-  buildOutcome "lookup"
+  buildOutcome (HoogleQuery "lookup")
     [mkProvider TierRemoteHoogle]
-    [TierCache, TierLocalHoogle, TierRemoteHoogle] Nothing
+    [TierCache, TierLocalHoogle, TierRemoteHoogle] RemoteNotConsulted
 
-missOutcome :: Outcome Value
-missOutcome = buildOutcome "doesNotExist" []
-  [TierCache, TierLocalHoogle, TierRemoteHoogle] Nothing
+missOutcome :: Either HyphaError (Outcome Value)
+missOutcome = buildOutcome (HoogleQuery "doesNotExist") []
+  [TierCache, TierLocalHoogle, TierRemoteHoogle] RemoteEmpty
 
-remoteErrorOutcome :: Outcome Value
-remoteErrorOutcome = buildOutcome "x" []
+remoteErrorOutcome :: Either HyphaError (Outcome Value)
+remoteErrorOutcome = buildOutcome (HoogleQuery "x") []
   [TierCache, TierLocalHoogle, TierRemoteHoogle]
-  (Just (RemoteHttp "timeout after 10s"))
+  (RemoteFailed (RemoteHttp "timeout after 10s"))
 
-offlineOutcome :: Outcome Value
-offlineOutcome = buildOutcome "x" []
-  [TierCache, TierLocalHoogle] (Just RemoteOffline)
+offlineOutcome :: Either HyphaError (Outcome Value)
+offlineOutcome = buildOutcome (HoogleQuery "x") []
+  [TierCache, TierLocalHoogle] RemoteSkippedOffline
