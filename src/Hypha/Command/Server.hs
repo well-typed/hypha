@@ -48,8 +48,10 @@ import Hypha.Server.Bind
 import Hypha.Server.App qualified as App
 import Hypha.Server.Haddock.Rewrite qualified as Rewrite
 import Hypha.Server.Slots qualified as Slots
+import Data.Set qualified as Set
 import Hypha.Source.Extract qualified as Extract
 import Hypha.Source.Locate qualified as Locate
+import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.BuildPlan
 import Hypha.Types.ComponentName
 import Hypha.Types.Doc (DocText (..))
@@ -459,16 +461,35 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
     -- | Resolve a module file against an explicit list of source roots,
-    -- in priority order.
+    -- in priority order, then extract one cache row per top-level
+    -- declaration.  Signatures land in the @sig@ column courtesy of
+    -- "Hypha.Source.Parser", so a tier-1 lookup is self-sufficient
+    -- and the agent no longer needs a follow-up @hypha symbol@ just
+    -- to learn the type.
+    --
+    -- The export-list filter is best-effort: when the module has an
+    -- explicit @module M (a, b, ...) where@ header we restrict to
+    -- those names; otherwise (no header, or 'parseExports' could not
+    -- read one) we emit every top-level decl.  Over-inclusion is
+    -- harmless for the search index — internal names still resolve,
+    -- and the agent sees exactly the providers it would see today.
     collectMod compKey srcDirs modPath = do
       mFile <- firstExistingModule srcDirs modPath
       case mFile of
         Nothing -> pure []
         Just f  -> do
-          exps <- Locate.parseExports <$> TIO.readFile f
-          pure [ (compKey, modPath, e, "")
-               | e <- exps
-               , not (Text.null e)
+          src <- TIO.readFile f
+          let decls   = either (const []) id (Parser.parseDecls f src)
+              exps    = Set.fromList (Locate.parseExports src)
+              keep nm = Set.null exps || nm `Set.member` exps
+              sigFor d = case Parser.declSigText src d of
+                          Just t  -> t
+                          Nothing -> Text.empty
+          pure [ (compKey, modPath, nm, sigFor d)
+               | d <- decls
+               , let nm = Parser.declName d
+               , not (Text.null nm)
+               , keep nm
                ]
 
     firstExistingModule [] _ = pure Nothing

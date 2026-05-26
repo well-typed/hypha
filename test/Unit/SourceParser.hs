@@ -14,7 +14,7 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Hypha.Source.Parser
-  ( Decl (..), parseDecls, findDecl )
+  ( Decl (..), parseDecls, findDecl, declSigText )
 
 tests :: TestTree
 tests = testGroup "Unit.SourceParser"
@@ -53,6 +53,19 @@ tests = testGroup "Unit.SourceParser"
           d <- maybe (fail "foo missing") pure (findDecl "foo" ds)
           declSigLine d @?= Just 3
           declSiblings d @?= []
+        Left e -> fail (show e)
+
+  , testCase "declSigText recovers the comma-grouped signature verbatim" $ do
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "sourceList, sourceListC :: Monad m => [a] -> m ()"
+            , "sourceList = undefined"
+            ]
+      case parseDecls "M.hs" src of
+        Right ds -> do
+          d <- maybe (fail "sourceList missing") pure (findDecl "sourceList" ds)
+          declSigText src d @?= Just "sourceList, sourceListC :: Monad m => [a] -> m ()"
         Left e -> fail (show e)
 
   , testCase "function definition without an explicit signature" $ do

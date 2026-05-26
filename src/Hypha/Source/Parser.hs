@@ -19,6 +19,7 @@ module Hypha.Source.Parser
   , parseDecls
   , parseDeclsIO
   , findDecl
+  , declSigText
   ) where
 
 import           System.IO.Unsafe         (unsafePerformIO)
@@ -142,6 +143,26 @@ findDecl q ds =
   case listToMaybe (filter (\d -> declName d == q) ds) of
     Just d  -> Just d
     Nothing -> listToMaybe (filter (\d -> q `elem` declSiblings d) ds)
+
+-- | Re-slice the original source text to recover the signature
+-- string for a 'Decl' (with continuation lines joined into a single
+-- whitespace-collapsed 'Text').  Returns 'Nothing' when the decl has
+-- no signature.  The signature anchor is reliable across CPP because
+-- the parser is configured with @usePosPrags = True@ and cpphs emits
+-- @\{\-# LINE #\-\}@ pragmas: 'declSigLine' indexes into the /original/
+-- source bytes you pass to this function, not into the post-cpphs
+-- ones.
+declSigText :: Text -> Decl -> Maybe Text
+declSigText source d = do
+  startLn <- declSigLine d
+  let endLn = case declSigEndLine d of
+                Just e  -> max startLn e
+                Nothing -> startLn
+      ls    = zip [1 :: Int ..] (Text.lines source)
+      slice = [ t | (i, t) <- ls, i >= startLn, i <= endLn ]
+  case slice of
+    []    -> Nothing
+    parts -> Just (Text.unwords (filter (not . Text.null) (map Text.strip parts)))
 
 -- Internals --------------------------------------------------------
 
