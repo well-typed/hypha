@@ -185,6 +185,7 @@ test-suite hypha-tests
   hs-source-dirs:   test
   main-is:          Main.hs
   other-modules:
+    Golden.Cli
     Golden.Package
     Golden.Server
     Golden.Lookup
@@ -217,6 +218,7 @@ test-suite hypha-tests
     Unit.HoogleLocalGen
     Unit.HoogleRemote
     Unit.PackageCacheLookup
+    Unit.InternalError
   build-depends:
     , aeson
     , async
@@ -239,3 +241,10 @@ test-suite hypha-tests
     , time
     , transformers
     , vector
+    , process
+
+  -- Make the freshly-built 'hypha' executable available on $PATH for
+  -- the end-to-end Golden.Cli tests.  Without this, an end-to-end
+  -- test would either see a stale system binary or have to dig
+  -- through dist-newstyle by itself.
+  build-tool-depends: hypha:hypha

@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
+import qualified Golden.Cli
 import qualified Golden.Human
 import qualified Golden.Lookup
 import qualified Golden.Package
@@ -33,10 +34,12 @@ import qualified Unit.Project
 import qualified Unit.Server
 import qualified Unit.ServerSlots
 import qualified Unit.Haddock
+import qualified Unit.InternalError
 
 main :: IO ()
 main = defaultMain (testGroup "hypha"
-  [ Golden.Human.tests
+  [ Golden.Cli.tests
+  , Golden.Human.tests
   , Golden.Lookup.tests
   , Golden.Package.tests
   , Golden.Server.tests
@@ -68,4 +71,5 @@ main = defaultMain (testGroup "hypha"
   , Unit.Server.tests
   , Unit.ServerSlots.tests
   , Unit.Haddock.tests
+  , Unit.InternalError.tests
   ])

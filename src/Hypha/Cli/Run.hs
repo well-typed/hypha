@@ -6,13 +6,14 @@
 module Hypha.Cli.Run
   ( -- * Execution
     runCli
+  , topLevelHandler
   , reportInternalError
     -- * Internals exposed for testing
   , dispatch
   , humanFromValue
   ) where
 
-import Control.Exception (displayException)
+import Control.Exception (displayException, fromException, throwIO)
 import Control.Exception.Safe (SomeException, try)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except
@@ -710,20 +711,40 @@ processOutcome flags cmd result = do
 -- response), the exception on stderr, then exit with the dedicated
 -- 'exitInternalError' code so callers can distinguish "hypha itself
 -- crashed" from any other failure class.
+-- | Top-level exception handler installed by @app/hypha/Main.hs@.
+-- Genuine crashes are routed to 'reportInternalError'; an 'ExitCode'
+-- exception — the normal mechanism by which 'System.exitWith' and
+-- @optparse-applicative@ signal a clean exit — is re-thrown so the
+-- runtime performs the intended exit instead of treating it as a
+-- crash.  Without this filter, every successful @hypha@ invocation
+-- ended with a spurious second envelope (@INTERNAL_ERROR: ExitSuccess@)
+-- because @handleAny@ catches /any/ synchronous exception.
+topLevelHandler :: SomeException -> IO ()
+topLevelHandler e
+  | Just (ec :: System.ExitCode) <- fromException e = throwIO ec
+  | otherwise                                       = reportInternalError e
+
+-- | Last-resort renderer for genuine crashes caught by 'topLevelHandler'.
+-- Library code only catches exceptions it knows how to handle
+-- structurally ('HttpException' inside "Hypha.Hoogle.Remote" /
+-- "Hypha.Hackage.*"); everything else propagates here.  We emit a
+-- single @INTERNAL_ERROR@ envelope on stdout (so JSON consumers still
+-- see a well-formed response), a one-line summary on stderr, then exit
+-- with the dedicated 'exitInternalError' code so callers can
+-- distinguish "hypha itself crashed" from any other failure class.
 reportInternalError :: SomeException -> IO ()
 reportInternalError e = do
   let msg      = Text.pack (displayException e)
       code     = exitInternalError
       envelope = Aeson.object
-        [ "schema"   Aeson..= ("hypha/v0" :: Text)
-        , "command"  Aeson..= ("<internal>" :: Text)
-        , "ok"       Aeson..= False
-        , "error"    Aeson..= Aeson.object
+        [ "schema"  Aeson..= ("hypha/v0" :: Text)
+        , "command" Aeson..= ("<internal>" :: Text)
+        , "ok"      Aeson..= False
+        , "error"   Aeson..= Aeson.object
             [ "code"      Aeson..= ("INTERNAL_ERROR" :: Text)
             , "message"   Aeson..= msg
             , "exit_code" Aeson..= unExitCode code
             ]
-        , "actions"  Aeson..= Aeson.object []
         ]
   LBS.hPut stdout (Aeson.encode envelope)
   hFlush stdout
