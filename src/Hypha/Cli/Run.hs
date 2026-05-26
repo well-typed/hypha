@@ -14,7 +14,7 @@ module Hypha.Cli.Run
   ) where
 
 import Control.Exception (displayException, fromException, throwIO)
-import Control.Exception.Safe (SomeException, try)
+import Control.Exception.Safe (SomeException, bracket, try)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except
 import Crypto.Hash.SHA256 qualified as SHA256
@@ -25,7 +25,6 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson (Value)
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
-import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (maybeToList)
 import Data.Set qualified as Set
@@ -40,7 +39,8 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory
 import System.Exit qualified as System
 import System.FilePath ((</>), takeDirectory, takeFileName)
-import System.IO (hFlush, hPutStrLn, stderr, stdout)
+import GHC.IO.Handle (hDuplicate, hDuplicateTo)
+import System.IO (IOMode (..), hClose, hFlush, hPutStrLn, stderr, stdout, withFile)
 import System.Process (readProcessWithExitCode)
 
 import Hypha.BuildEnv.Cabal (CabalStoreError (..), mkCabalBuildEnv)
@@ -446,17 +446,25 @@ runLookupCommand flags q = do
   distRoot  <- defaultDistDocRoot
   hoogleLocal <- HogLocal.openLocalHoogle dotHypha storeRoot distRoot
 
-  -- Bring the local Hoogle DB up to date before the cascade runs.
-  -- Without this, Tier 2 always opens an empty/missing .hoo and
-  -- every type-signature query falls through to remote Hoogle.
-  for_ mRoot $ \root ->
-    ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
+  -- Tier 2 prep is deferred: 'runLookup' invokes 'loPrepareLocal' only
+  -- when the package-cache tier misses.  Cache hits are typically
+  -- sub-millisecond, while ensuring the Hoogle DB freshness can run
+  -- the haddock generator over the whole plan (multi-second, noisy).
+  -- The verbose flag also gates the underlying 'hoogle' library
+  -- chatter; on the silent path we redirect both stdout and stderr
+  -- of the indexing step to @/dev/null@ so the JSON envelope stays
+  -- the only thing on stdout and the agent's stderr stays clean.
+  let prepLocal = case mRoot of
+        Nothing   -> pure ()
+        Just root -> withQuietIfNotVerbose (gfVerbose flags) $
+          ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
 
   let opts = Lookup.LookupOptions
-        { Lookup.loOffline = gfOffline flags
-        , Lookup.loRemote  =
+        { Lookup.loOffline      = gfOffline flags
+        , Lookup.loRemote       =
             HogRemote.defaultRemoteOptions
               { HogRemote.roOffline = gfOffline flags }
+        , Lookup.loPrepareLocal = prepLocal
         }
   Lookup.runLookup cache hoogleLocal opts (HoogleQuery q)
 
@@ -498,6 +506,40 @@ ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
                  "warning: project Hoogle DB skipped — "
                  <> displayException e
     Right _ -> pure ()
+
+-- | Run an action with @stdout@ and @stderr@ redirected to
+-- @\/dev\/null@ — except under @--verbose@, in which case the handles
+-- pass through untouched.
+--
+-- The local-Hoogle indexing path calls 'Hoogle.hoogle' (the upstream
+-- library), which writes its own progress lines (@"Starting generate"@,
+-- @"[1\/22] array... 0.05s"@, ...) straight to the host's @stdout@ /
+-- @stderr@.  Letting those leak through corrupts our @stdout@ contract
+-- (the JSON envelope is the only thing the agent should ever see
+-- there) and bloats the agent's stderr capture for no token-economic
+-- gain.  We flush, duplicate the original fds, splice in @\/dev\/null@,
+-- run the action, and restore on exit so a panic inside the action
+-- can't leave the process writing to the bit-bucket forever.
+withQuietIfNotVerbose :: Bool -> IO a -> IO a
+withQuietIfNotVerbose True  io = io
+withQuietIfNotVerbose False io = do
+  hFlush stdout
+  hFlush stderr
+  withFile "/dev/null" WriteMode $ \devnull ->
+    bracket
+      (do savedOut <- hDuplicate stdout
+          savedErr <- hDuplicate stderr
+          hDuplicateTo devnull stdout
+          hDuplicateTo devnull stderr
+          pure (savedOut, savedErr))
+      (\(savedOut, savedErr) -> do
+          hFlush stdout
+          hFlush stderr
+          hDuplicateTo savedOut stdout
+          hDuplicateTo savedErr stderr
+          hClose savedOut
+          hClose savedErr)
+      (const io)
 
 planToLocalUnits :: BuildPlan -> [HogLocal.LocalUnit]
 planToLocalUnits plan =

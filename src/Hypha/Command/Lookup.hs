@@ -59,8 +59,17 @@ data LookupResult = LookupResult
   deriving stock (Show, Eq)
 
 data LookupOptions = LookupOptions
-  { loOffline :: !Bool
-  , loRemote  :: !RemoteOptions
+  { loOffline      :: !Bool
+  , loRemote       :: !RemoteOptions
+  , loPrepareLocal :: !(IO ())
+    -- ^ Action invoked /just-in-time/ before tier 2 ('searchLocal').
+    -- Used to bring the project's local Hoogle DB up to date.  Hoisted
+    -- into 'LookupOptions' so the cascade can skip the prep work
+    -- entirely when tier 1 hits: the package cache lookup is a single
+    -- SQLite read, but ensuring the Hoogle DB freshness involves
+    -- enumerating units and re-indexing stale ones, which is
+    -- expensive and noisy.  Defaulting to @pure ()@ keeps the cascade
+    -- usable from test harnesses that don't care about tier 2.
   }
 
 -- | What happened on the remote tier, when the earlier tiers were empty
@@ -94,7 +103,9 @@ runLookup cache hoogleLocal opts q@(HoogleQuery qText) = do
                     (map (toProvider TierCache) cacheHits)
                     [TierCache] RemoteNotConsulted)
     [] -> do
-      -- Tier 2
+      -- Tier 2: bring the local Hoogle DB up to date only now that we
+      -- actually need it (tier 1 missed).
+      loPrepareLocal opts
       localHits <- searchLocal hoogleLocal q
       case localHits of
         (_:_) -> pure (buildOutcome q
