@@ -121,14 +121,14 @@ testSuccessEnvelope = do
       val     = encodeEnvelope SymbolCmd (Right outcome)
       keys    = objectKeys val
   keys @?= Set.fromList
-    [ "schema", "command", "ok", "outside_plan", "overrides", "result", "actions", "related" ]
+    [ "schema", "command", "ok", "result" ]
 
 testFailureEnvelope :: IO ()
 testFailureEnvelope = do
   let err  = NotFound (NotFoundPackageInPlan (PackageName "missing"))
       val  = encodeEnvelope SymbolCmd (Left err)
       keys = objectKeys val
-  keys @?= Set.fromList [ "schema", "command", "ok", "error", "actions" ]
+  keys @?= Set.fromList [ "schema", "command", "ok", "error" ]
 
 testFilterSelect :: IO ()
 testFilterSelect = do

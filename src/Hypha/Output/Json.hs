@@ -20,6 +20,7 @@ import qualified Data.Aeson.Encode.Pretty as AesonPretty
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -64,18 +65,20 @@ encodeEnvelope
   :: ClientCommandTag -> Either HyphaError (Outcome Value) -> Value
 encodeEnvelope cmdName = \case
   Right oc ->
-    object
-      [ "schema"       .= ("hypha/v0" :: Text)
-      , "command"      .= clientCommandName cmdName
-      , "ok"           .= True
-      , "outside_plan" .= outcomeOutsidePlan oc
-      , "overrides"    .= outcomeOverrides oc
-      , "result"       .= outcomeResult oc
-      , "actions"      .= outcomeActions oc
-      , "related"      .= map toRelatedObject (outcomeRelated oc)
+    object $
+      [ "schema"  .= ("hypha/v0" :: Text)
+      , "command" .= clientCommandName cmdName
+      , "ok"      .= True
+      , "result"  .= outcomeResult oc
       ]
+      <> [ "outside_plan" .= True | outcomeOutsidePlan oc ]
+      <> [ "overrides" .= outcomeOverrides oc | not (null (outcomeOverrides oc)) ]
+      <> [ "actions"   .= outcomeActions oc   | not (Map.null (outcomeActions oc)) ]
+      <> [ "related"   .= map toRelatedObject (outcomeRelated oc)
+         | not (null (outcomeRelated oc))
+         ]
   Left err ->
-    object
+    object $
       [ "schema"   .= ("hypha/v0" :: Text)
       , "command"  .= clientCommandName cmdName
       , "ok"       .= False
@@ -84,8 +87,8 @@ encodeEnvelope cmdName = \case
           , "message"   .= errorMessage err
           , "exit_code" .= unExitCode (errorExitCode err)
           ]
-      , "actions"  .= errorActions err
       ]
+      <> [ "actions" .= errorActions err | not (Map.null (errorActions err)) ]
   where
     toRelatedObject :: Related -> Value
     toRelatedObject r = object
