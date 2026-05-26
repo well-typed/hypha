@@ -19,8 +19,9 @@ import qualified Data.Text.IO as TIO
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 
-import Hypha.BuildEnv.Type   (BuildEnv (..))
-import Hypha.Types.PackageId (PackageId (..))
+import Hypha.BuildEnv.Type     (BuildEnv (..))
+import qualified Hypha.Source.Parser as Parser
+import Hypha.Types.PackageId   (PackageId (..))
 
 -- | Location of a symbol definition in a source file.
 data SourceLocation = SourceLocation
@@ -354,27 +355,20 @@ enumerateHs dir depth = do
       "benchmarks"    -> True
       _               -> False
 
--- | Find the first line in a file where @sym@ is the leftmost token,
--- followed by either @ ::@ (signature) or whitespace + @=@ / @\\@ (definition).
+-- | Find the line in a file where @sym@ has a top-level signature or
+-- definition, using "Hypha.Source.Parser" so multi-symbol signatures
+-- (@a, b :: T@), operator declarations, and other shapes the previous
+-- line-grep missed all resolve correctly.  Definition line wins over
+-- signature line when both are present (matches the historical
+-- semantics: callers prefer the binding body for source snippets).
 scanFile :: Text -> FilePath -> IO (Maybe SourceLocation)
 scanFile sym f = do
-  ls <- Text.lines <$> TIO.readFile f
-  pure $ case [ i | (i, l) <- zip [1 :: Int ..] ls, isTopBind sym l ] of
-           (i:_) -> Just (SourceLocation f i)
-           []    -> Nothing
-
--- | Heuristic: line is a top-level binding for @sym@ when it starts at
--- column 0 with the bare identifier followed by " ::" or whitespace.
--- Skips comment and import lines.
-isTopBind :: Text -> Text -> Bool
-isTopBind sym l
-  | Text.null l                = False
-  | "--" `Text.isPrefixOf` l   = False
-  | "import" `Text.isPrefixOf` l = False
-  | otherwise                  =
-      case Text.stripPrefix sym l of
-        Nothing   -> False
-        Just rest -> case Text.uncons rest of
-          Just (' ', _) -> True
-          Just ('\t', _) -> True
-          _             -> False
+  src <- TIO.readFile f
+  pure $ case Parser.parseDecls f src of
+    Left _      -> Nothing
+    Right decls -> do
+      d <- Parser.findDecl sym decls
+      ln <- case Parser.declDefLine d of
+              Just l  -> Just l
+              Nothing -> Parser.declSigLine d
+      Just (SourceLocation f ln)

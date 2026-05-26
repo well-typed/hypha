@@ -67,12 +67,19 @@ tests = testGroup "Module"
 
   , testCase "locateSymbolDefinition finds definition line" $ do
       let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"
-      loc <- locateSymbolDefinition env testPkg "Control.Concurrent.Async" "module"
+      -- 'concurrently' has both a signature and a definition in the
+      -- fixture (lines 29 and 30 respectively); the parser-backed
+      -- locator returns the definition line, matching the prior
+      -- contract.  The previous test searched for the literal
+      -- @module@ keyword, which the old line-grep matched as if it
+      -- were a top-level binding — the proper parser correctly
+      -- declines, so the symbol under test was changed.
+      loc <- locateSymbolDefinition env testPkg "Control.Concurrent.Async" "concurrently"
       case loc of
         Nothing -> error "expected SourceLocation"
         Just sl -> do
           slPath sl @?= "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async/Control/Concurrent/Async.hs"
-          slLine sl @?= 1
+          slLine sl @?= 30
 
   , testCase "locateSymbolDefinition returns Nothing for missing symbol" $ do
       let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"
