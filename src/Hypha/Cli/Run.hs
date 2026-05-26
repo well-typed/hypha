@@ -754,7 +754,8 @@ resultExitCode = \case
 -- distinction yet (alpha).
 compactKeysFor, fullKeysFor :: ClientCommandTag -> Set Text
 compactKeysFor = \case
-  LookupCmd   -> Set.fromList ["query", "providers", "tiers_consulted"]
+  -- tiers_consulted dropped from compact: redundant with per-provider 'tier'.
+  LookupCmd   -> Set.fromList ["query", "providers"]
   PackageCmd  -> Package.compactKeys
   VersionsCmd -> Versions.compactKeys
   ModuleCmd   -> Module.compactKeys
@@ -784,7 +785,6 @@ humanFromValue (Aeson.Object obj) =
       line1    = if outside then "  [outside-plan]" else ""
       body     = renderResult (KM.lookup "result"  obj)
       acts     = renderActions (KM.lookup "actions" obj)
-      rel      = renderRelated (KM.lookup "related" obj)
       errBlock = if ok then ""
                  else case KM.lookup "error" obj of
                         Just (Aeson.Object e) ->
@@ -792,7 +792,7 @@ humanFromValue (Aeson.Object obj) =
                                 <> stringAt e "message"
                         _ -> ""
   in Text.intercalate "\n" $ filter (not . Text.null)
-       [ line0 <> line1, errBlock, body, acts, rel ]
+       [ line0 <> line1, errBlock, body, acts ]
 humanFromValue other = renderJsonValue 0 other
 
 -- | Look up a 'String' value in an Aeson 'Object', defaulting to empty.
@@ -816,19 +816,6 @@ renderActions (Just (Aeson.Object km)) | not (KM.null km) =
     | (k, val) <- KM.toList km
     ]
 renderActions _ = ""
-
-renderRelated :: Maybe Value -> Text
-renderRelated (Just (Aeson.Array xs)) | not (V.null xs) =
-  "related:\n" <> Text.intercalate "\n"
-    [ case x of
-        Aeson.Object o ->
-          let lbl = stringAt o "label"
-              fch = stringAt o "fetch"
-          in "  " <> lbl <> "  " <> fch
-        _ -> ""
-    | x <- V.toList xs
-    ]
-renderRelated _ = ""
 
 -- | Tiny indented value printer used as a fallback for the @result@ body.
 renderResult :: Maybe Value -> Text

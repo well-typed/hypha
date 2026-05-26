@@ -30,7 +30,7 @@ import Hypha.Cli.Types
 import Hypha.Error
   ( HyphaError, errorActions, errorCode, errorExitCode, errorMessage )
 import Hypha.Exit (unExitCode)
-import Hypha.Output.Outcome (Outcome (..), Related (..))
+import Hypha.Output.Outcome (Outcome (..))
 
 -- | Two field-set variants: compact (default) and full (--full).
 -- Each command result type implements this class.
@@ -74,9 +74,6 @@ encodeEnvelope cmdName = \case
       <> [ "outside_plan" .= True | outcomeOutsidePlan oc ]
       <> [ "overrides" .= outcomeOverrides oc | not (null (outcomeOverrides oc)) ]
       <> [ "actions"   .= outcomeActions oc   | not (Map.null (outcomeActions oc)) ]
-      <> [ "related"   .= map toRelatedObject (outcomeRelated oc)
-         | not (null (outcomeRelated oc))
-         ]
   Left err ->
     object $
       [ "schema"   .= ("hypha/v0" :: Text)
@@ -89,12 +86,6 @@ encodeEnvelope cmdName = \case
           ]
       ]
       <> [ "actions" .= errorActions err | not (Map.null (errorActions err)) ]
-  where
-    toRelatedObject :: Related -> Value
-    toRelatedObject r = object
-      [ "label" .= relatedLabel r
-      , "fetch" .= relatedFetch r
-      ]
 
 -- | Build the envelope 'Value' /post-projection/.  The result is
 -- structurally identical to what 'encodeOutcomeBytes' would write to

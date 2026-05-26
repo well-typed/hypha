@@ -36,7 +36,8 @@ import Hypha.Hoogle.Remote
 import Hypha.Hoogle.Tier (Tier (..), tierLabel)
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
 import Hypha.Error (HyphaError (..))
-import Hypha.Output.Outcome (Outcome (..), Related (..))
+import qualified Data.Map.Strict as Map
+import Hypha.Output.Outcome (Outcome (..))
 import Hypha.Search.PackageCache (HyphaPackageCache, lookupByName)
 
 -- | A single hit, tagged with its origin tier.
@@ -137,11 +138,10 @@ buildOutcome q providers tiers remoteOutcome =
                                (LookupResult (unHoogleQuery q) providers tiers)
       , outcomeOutsidePlan = False
       , outcomeOverrides   = []
-      , outcomeActions     = mempty
-      , outcomeRelated     =
-          [ Related (pPkg p <> "/" <> pMod p)
-                    ( "hypha symbol "
-                      <> pPkg p <> "/" <> pMod p <> "/" <> pName p )
+      , outcomeActions     = Map.fromList
+          [ ( pPkg p <> "/" <> pMod p
+            , "hypha symbol "
+                <> pPkg p <> "/" <> pMod p <> "/" <> pName p )
           | p <- take 5 providers
           ]
       }

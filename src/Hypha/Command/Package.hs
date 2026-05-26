@@ -22,7 +22,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
-import Hypha.Output.Outcome (Outcome (..), Related (..))
+import Hypha.Output.Outcome (Outcome (..))
 import Hypha.Types.BuildPlan
   ( BuildPlan, PackageOrigin (..), PlannedUnit (..), lookupUnit )
 import Hypha.Types.PackageId
@@ -87,18 +87,16 @@ mkSuccessOutcome rawName ver isLocal depsCount origin modules =
         , prOrigin         = origin
         }
       body = packageResultToJSON result
-      actions = Map.fromList
-        [ ("version_history", "hypha versions " <> rawName)
-        , ("reverse_deps",    "hypha deps " <> rawName <> " --reverse")
+      -- Single hint channel.  "version_history" supersedes the former
+      -- duplicate "versions" related entry; "module_index_hint" is the
+      -- placeholder pointer to module-level lookups.
+      actions = Map.fromList $
+        [ ("version_history",    "hypha versions " <> rawName)
+        , ("reverse_deps",       "hypha deps " <> rawName <> " --reverse")
+        , ("module_index_hint",  "hypha module " <> rawName <> "/<Module>")
         ]
-      moduleRelated = [ Related nm ("hypha module " <> rawName <> "/" <> nm)
-                      | nm <- modules
-                      ]
-      generalRelated =
-        [ Related "versions" ("hypha versions " <> rawName)
-        , Related "module_index_hint" ("hypha module " <> rawName <> "/<Module>")
-        ]
-  in Outcome body False [] actions (generalRelated ++ moduleRelated)
+        <> [ (nm, "hypha module " <> rawName <> "/" <> nm) | nm <- modules ]
+  in Outcome body False [] actions
 
 packageResultToJSON :: PackageResult -> Value
 packageResultToJSON r = Aeson.object

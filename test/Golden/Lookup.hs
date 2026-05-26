@@ -39,7 +39,7 @@ tests = testGroup "Golden.Lookup"
     encode outcome = encodeOutcomeBytes
       (EnvelopeOpts False [] False)
       LookupCmd
-      (Set.fromList ["query", "providers", "tiers_consulted"])
+      (Set.fromList ["query", "providers"])
       (Set.fromList ["query", "providers", "tiers_consulted"])
       outcome
 

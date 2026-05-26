@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text.IO as TIO
 
 import Hypha.BuildEnv.Type   (BuildEnv)
-import Hypha.Output.Outcome  (Outcome (..), Related (..))
+import Hypha.Output.Outcome  (Outcome (..))
 import Hypha.Source.Locate   (findModuleFile, listExportedSymbols, parseExports)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version)
 
@@ -53,10 +53,10 @@ toOutcome pid modPath exps =
       ])
     False
     []
-    (Map.fromList
+    (Map.fromList $
       [ ("module_index", "hypha module " <> pkg <> "/" <> modPath)
       , ("package_info", "hypha package " <> pkg)
-      ])
-    [ Related nm ("hypha symbol " <> pkg <> "/" <> modPath <> "/" <> nm)
-    | nm <- take 5 exps
-    ]
+      ]
+      <> [ (nm, "hypha symbol " <> pkg <> "/" <> modPath <> "/" <> nm)
+         | nm <- take 5 exps
+         ])

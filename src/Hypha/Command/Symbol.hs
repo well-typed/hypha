@@ -24,7 +24,7 @@ import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Error (HyphaError (..), NotFoundReason (..), UserErrorReason (..))
-import Hypha.Output.Outcome (Outcome (..), Related (..), tagOutsidePlan)
+import Hypha.Output.Outcome (Outcome (..), tagOutsidePlan)
 import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..), resolveRef )
 import Hypha.Source.Extract (SymbolInfo (..), extractSymbolInfo)
@@ -164,15 +164,11 @@ mkOutcome pkgName ver modTxt sym f info =
         }
       body   = symbolResultToJSON result
       actions = Map.fromList
-        [ ("view_source", "hypha source " <> pkg <> "/" <> modTxt <> "/" <> sym)
-        , ("module_index", "hypha module " <> pkg <> "/" <> modTxt)
+        [ ("view_source",  "hypha source "  <> pkg <> "/" <> modTxt <> "/" <> sym)
+        , ("module_index", "hypha module "  <> pkg <> "/" <> modTxt)
         , ("package_info", "hypha package " <> pkg)
         ]
-      related =
-        [ Related "module_index" ("hypha module " <> pkg <> "/" <> modTxt)
-        , Related "package" ("hypha package " <> pkg)
-        ]
-  in Outcome body False [] actions related
+  in Outcome body False [] actions
 
 -- | Build a 'SourceLoc' from a file path and a line number.
 mkSourceLoc :: FilePath -> Int -> SourceLoc

@@ -28,11 +28,11 @@ expectSuccess r k = case r of
 
 tests :: TestTree
 tests = testGroup "Property.LookupOutcomeShape"
-  [ testCase "non-empty providers => Right Outcome with related links" $
+  [ testCase "non-empty providers => Right Outcome with action hints" $
       expectSuccess
         (buildOutcome (HoogleQuery "lookup") [mkProvider]
                       [TierCache] RemoteNotConsulted) $ \oc ->
-          assertBool "has related" (not (null (outcomeRelated oc)))
+          assertBool "has actions" (not (Map.null (outcomeActions oc)))
 
   , testCase "empty providers + offline => HOOGLE_OFFLINE failure" $
       expectFailure

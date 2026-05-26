@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
 
-import Hypha.Output.Outcome  (Outcome (..), Related (..))
+import Hypha.Output.Outcome  (Outcome (..))
 import Hypha.Types.BuildPlan (BuildPlan (..), forwardDepsOf, reverseDepsOf)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
@@ -35,10 +35,10 @@ runDeps bp name reverseMode mDepth = pure $ Outcome
       ])
     False  -- not outside plan
     []     -- no overrides
-    Map.empty  -- no actions
-    [ Related (unPackageName n) ("hypha package " <> unPackageName n)
-    | n <- take 5 (map fst listing)
-    ]
+    (Map.fromList
+      [ (unPackageName n, "hypha package " <> unPackageName n)
+      | n <- take 5 (map fst listing)
+      ])
   where
     listing :: [(PackageName, Version)]
     listing = applyDepth mDepth $

@@ -17,7 +17,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
-import Hypha.Output.Outcome (Outcome (..), Related (..))
+import Hypha.Output.Outcome (Outcome (..))
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 
@@ -38,7 +38,7 @@ runVersions plan pkgName =
 
 mkSuccessOutcome :: PackageName -> Version -> Outcome Value
 mkSuccessOutcome (PackageName name) (Version ver) =
-  Outcome body False [] actions related
+  Outcome body False [] actions
   where
     body = Aeson.object
       [ "package"            .= name
@@ -49,8 +49,6 @@ mkSuccessOutcome (PackageName name) (Version ver) =
       [ ("package_info", "hypha package " <> name)
       , ("reverse_deps", "hypha deps " <> name <> " --reverse")
       ]
-    related =
-      [ Related "package" ("hypha package " <> name) ]
 
 -- | Run the @versions@ command with available versions from Hackage.
 runVersionsWithAvail :: BuildPlan -> PackageName -> [Version] -> Outcome Value
@@ -63,7 +61,7 @@ runVersionsWithAvail plan pkgName available =
             , "pinned_version"     .= ("" :: Text)
             , "available_versions" .= map unVersion available
             ]
-      in Outcome body True [] mempty []
+      in Outcome body True [] mempty
     Just ver ->
       let (PackageName name) = pkgName
           (Version v) = ver
@@ -76,6 +74,4 @@ runVersionsWithAvail plan pkgName available =
             [ ("package_info", "hypha package " <> name)
             , ("reverse_deps", "hypha deps " <> name <> " --reverse")
             ]
-          related =
-            [ Related "package" ("hypha package " <> name) ]
-      in Outcome body False [] actions related
+      in Outcome body False [] actions

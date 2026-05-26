@@ -12,7 +12,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Command.Deps (runDeps)
-import Hypha.Output.Outcome (outcomeResult, outcomeRelated, Related (..))
+import Hypha.Output.Outcome (outcomeResult, outcomeActions)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
@@ -94,14 +94,12 @@ tests = testGroup "Deps"
       oc <- runDeps mkTestPlan (PackageName "async") False (Just 1)
       extractDeps (outcomeResult oc) @?= [("stm", "2.5.1")]
 
-  , testCase "related links for forward deps" $ do
+  , testCase "action hints for forward deps" $ do
       oc <- runDeps mkTestPlan (PackageName "async") False Nothing
-      case outcomeRelated oc of
-        [r1, r2] -> do
-          relatedLabel r1 @?= "stm"
-          relatedFetch r1 @?= "hypha package stm"
-          relatedLabel r2 @?= "hashable"
-        rel -> fail ("expected exactly 2 related links; got " <> show (length rel))
+      let acts = outcomeActions oc
+      Map.lookup "stm"      acts @?= Just "hypha package stm"
+      Map.lookup "hashable" acts @?= Just "hypha package hashable"
+      Map.size acts @?= 2
   , testCase "deps of unknown package" $ do
       oc <- runDeps mkTestPlan (PackageName "nonexistent") False Nothing
       extractDeps (outcomeResult oc) @?= []
