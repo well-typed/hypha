@@ -36,6 +36,7 @@ import qualified Unit.ServerSlots
 import qualified Unit.Haddock
 import qualified Unit.InternalError
 import qualified Unit.LookupPrepLocal
+import qualified Unit.RepoCache
 import qualified Unit.SourceParser
 
 main :: IO ()
@@ -75,5 +76,6 @@ main = defaultMain (testGroup "hypha"
   , Unit.Haddock.tests
   , Unit.InternalError.tests
   , Unit.LookupPrepLocal.tests
+  , Unit.RepoCache.tests
   , Unit.SourceParser.tests
   ])

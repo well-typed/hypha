@@ -39,6 +39,7 @@ mkMockBuildEnv mock = BuildEnv
   { discoverInstalledPackages = pure (Map.keysSet (mockPackages mock))
   , locatePackageSource       = \pkgId ->
       pure (fst =<< Map.lookup pkgId (mockPackages mock))
+  , locateRepoTarball         = \_ -> pure Nothing
   , locateHaddockHtml         = \pkgId ->
       pure (snd =<< Map.lookup pkgId (mockPackages mock))
   , ghcVersion                = pure (mockGhcVersion mock)

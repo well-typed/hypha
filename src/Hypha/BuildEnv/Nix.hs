@@ -20,6 +20,7 @@ mkNixBuildEnv :: FilePath -> BuildEnv IO
 mkNixBuildEnv !resultPath = BuildEnv
   { discoverInstalledPackages = discoverNixPackages resultPath
   , locatePackageSource       = \_ -> pure Nothing
+  , locateRepoTarball         = \_ -> pure Nothing
   , locateHaddockHtml         = findNixHaddock resultPath
   , ghcVersion                = discoverNixGhcVersion resultPath
   }

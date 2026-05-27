@@ -26,6 +26,7 @@ mkMockEnv
 mkMockEnv !pkgs !srcMap !haddockMap !ver = BuildEnv
   { discoverInstalledPackages = pure pkgs
   , locatePackageSource       = pure . srcMap
+  , locateRepoTarball         = \_ -> pure Nothing
   , locateHaddockHtml         = pure . haddockMap
   , ghcVersion                = pure ver
   }

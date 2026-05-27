@@ -25,6 +25,7 @@ mockBuildEnv :: FilePath -> BuildEnv IO
 mockBuildEnv srcDir = BuildEnv
   { discoverInstalledPackages = pure Set.empty
   , locatePackageSource       = \_ -> pure (Just srcDir)
+  , locateRepoTarball         = \_ -> pure Nothing
   , locateHaddockHtml         = \_ -> pure Nothing
   , ghcVersion                = pure (Version "9.6.7")
   }

@@ -13,10 +13,16 @@ import Data.Maybe (mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
-import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
-import System.FilePath (takeFileName, (</>))
+import qualified Data.Text.IO as TIO
+import System.Directory
+  ( doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory )
+import System.Environment (lookupEnv)
+import System.FilePath (takeDirectory, takeFileName, (</>))
+import System.IO (stderr)
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import qualified Hypha.Cabal.RepoCache as RepoCache
+import Hypha.Cabal.RepoCache (renderRepoLookupError)
 import Hypha.Types.PackageId
   ( PackageName (..), Version (..), PackageId (..)
   , PackageRef (..), parsePackageRef )
@@ -40,12 +46,15 @@ mkCabalBuildEnv storeRoot = do
       ghcVer <- detectGhcVersion storeRoot
       case ghcVer of
         Nothing -> pure (Left GhcVersionUnknown)
-        Just ver -> pure (Right BuildEnv
-          { discoverInstalledPackages = discoverInStore storeRoot
-          , locatePackageSource       = locateSource storeRoot
-          , locateHaddockHtml         = locateHaddock storeRoot
-          , ghcVersion                = pure ver
-          })
+        Just ver -> do
+          packagesRoot <- resolvePackagesRoot storeRoot
+          pure (Right BuildEnv
+            { discoverInstalledPackages = discoverInStore storeRoot
+            , locatePackageSource       = locateSource storeRoot
+            , locateRepoTarball         = locateRepoTarballAt packagesRoot
+            , locateHaddockHtml         = locateHaddock storeRoot
+            , ghcVersion                = pure ver
+            })
     else pure (Left (StoreNotFound storeRoot))
 
 -- | Detect GHC version from the store directory name.
@@ -137,6 +146,49 @@ locateSource storeRoot pid@(PackageId (PackageName name) (Version ver)) = do
               let srcDir = sr </> e </> "src"
               ok <- doesDirectoryExist srcDir
               pure (if ok then Just srcDir else Nothing)
+
+-- | Locate cabal-install's @packages@ root for the active configuration.
+--
+-- Resolution order (matches cabal-install's own precedence):
+--
+--   1. @$CABAL_DIR/packages@ when @CABAL_DIR@ is set.
+--   2. The @packages@ directory two levels above @storeRoot@ — works
+--      for the default @~/.cabal/store/ghc-X.Y.Z@ layout and any other
+--      configuration where store and packages share a parent.
+--   3. @~/.cabal/packages@ as the final fallback.
+--
+-- Returns whichever candidate exists on disk; if none do, returns the
+-- @$CABAL_DIR@-derived (or HOME-derived) path so the caller can still
+-- record the expected location for diagnostics.
+resolvePackagesRoot :: FilePath -> IO FilePath
+resolvePackagesRoot storeRoot = do
+  mCabalDir <- lookupEnv "CABAL_DIR"
+  home      <- getHomeDirectory
+  let cabalDirCandidate = fmap (</> "packages") mCabalDir
+      siblingCandidate  = takeDirectory (takeDirectory storeRoot) </> "packages"
+      homeCandidate     = home </> ".cabal" </> "packages"
+      candidates        = maybe id (:) cabalDirCandidate
+                            [siblingCandidate, homeCandidate]
+  firstExisting homeCandidate candidates
+  where
+    firstExisting fallback []     = pure fallback
+    firstExisting fallback (p:ps) = do
+      ok <- doesDirectoryExist p
+      if ok then pure p else firstExisting fallback ps
+
+-- | 'BuildEnv'-shaped wrapper around 'RepoCache.locateRepoTarball'.
+-- An I/O failure on the packages root (e.g. EACCES) is announced on
+-- @stderr@ and degraded to 'Nothing' so the resolver can still attempt
+-- the network fallback — silent swallow is banned by CLAUDE.md, but a
+-- hard failure here would needlessly break a recoverable resolve.
+locateRepoTarballAt :: FilePath -> PackageId -> IO (Maybe FilePath)
+locateRepoTarballAt packagesRoot pid = do
+  r <- RepoCache.locateRepoTarball packagesRoot pid
+  case r of
+    Right m  -> pure m
+    Left err -> do
+      TIO.hPutStrLn stderr ("warning: " <> renderRepoLookupError err)
+      pure Nothing
 
 -- | Locate the Haddock HTML for a package.
 --   Look in @share/doc/<pkg>-<ver>/index.html@ within the store entry.

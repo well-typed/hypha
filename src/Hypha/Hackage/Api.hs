@@ -47,6 +47,7 @@ import Network.HTTP.Types.Header
   ( hIfModifiedSince, hIfNoneMatch, hUserAgent, hETag, hLastModified )
 import Network.HTTP.Types.Status (statusCode)
 
+import Hypha.Cabal.RepoCache (TarballError, renderTarballError)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import qualified Hypha.Hackage.Cache as Cache
 import Hypha.Hackage.Types (CacheKind (..), CachedResponse (..))
@@ -82,6 +83,11 @@ data HackageError
   | MissingField !Text
     -- ^ JSON decode succeeded, but a required field was absent (carries
     --   the field name).
+  | TarballFailure !TarballError
+    -- ^ A local @.tar.gz@ (cabal repo cache or freshly downloaded) was
+    -- present but could not be turned into an unpacked source tree.
+    -- Carries the structured cause so the wire layer can distinguish
+    -- @missing@/@read@/@extract@/@layout@ failures.
   deriving stock (Show, Eq)
 
 -- | User-facing renderer for 'HackageError'.  Only call this at the
@@ -100,6 +106,8 @@ renderHackageError (PackageName name) = \case
     "Hackage HTTP " <> Text.pack (show code) <> " for '" <> name <> "'"
   MissingField fld ->
     "Hackage response for '" <> name <> "' lacked '" <> fld <> "' field"
+  TarballFailure tErr ->
+    "local cache failure for '" <> name <> "': " <> renderTarballError tErr
 
 -- | User-Agent header value for hypha.  Includes the project contact email
 -- (@info\@well-typed.com@) so Hackage admins can reach us if we ever

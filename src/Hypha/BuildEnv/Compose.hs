@@ -16,6 +16,11 @@ composeBuildEnv primary secondary = BuildEnv
       case mp of
         Just p  -> pure (Just p)
         Nothing -> locatePackageSource secondary pkg
+  , locateRepoTarball = \pkg -> do
+      mt <- locateRepoTarball primary pkg
+      case mt of
+        Just t  -> pure (Just t)
+        Nothing -> locateRepoTarball secondary pkg
   , locateHaddockHtml = \pkg -> do
       mh <- locateHaddockHtml primary pkg
       case mh of

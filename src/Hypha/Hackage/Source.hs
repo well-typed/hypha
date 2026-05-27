@@ -1,5 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Download and extract package source tarballs from Hackage.
+-- | HTTP download for package source tarballs.
+--
+-- The cache-first fallback chain (cabal-install repo cache → hypha
+-- source cache → HTTP) lives in 'Hypha.Package.Resolver'.  This
+-- module only handles the network step itself: an actual GET against
+-- @hackage.haskell.org@, written to a temp file and extracted via the
+-- pure-Haskell pipeline in 'Hypha.Cabal.RepoCache'.
 module Hypha.Hackage.Source
   ( fetchAndExtractSource
   , enumerateSourceCache
@@ -18,16 +24,20 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Header (hUserAgent)
 import Network.HTTP.Types.Status (statusCode)
 import System.Directory
-  ( createDirectoryIfMissing, doesDirectoryExist, listDirectory, removeFile )
-import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
-import System.Process (system)
+  ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
+  , listDirectory, removeFile )
+import System.FilePath ((</>), takeDirectory)
 
+import Hypha.Cabal.RepoCache (extractTarballGz)
 import Hypha.Cache (sourceCacheRoot)
 import Hypha.Hackage.Api (HackageClient (..), HackageError (..), sourceTarballUrl, userAgent)
 import Hypha.Types.PackageId (PackageId (..))
 
--- | Download and extract the source tarball for a package from Hackage.
+-- | Download a source tarball from Hackage and extract it into
+-- @destDir@.  This is the network-only path; callers that want the
+-- cabal-install repo cache consulted first should go through
+-- 'Hypha.Package.Resolver.resolveSrc' rather than calling here
+-- directly.
 fetchAndExtractSource
   :: HackageClient IO
   -> PackageId
@@ -47,17 +57,22 @@ fetchAndExtractSource _hclient pid destDir = do
     Right resp -> do
       let status = statusCode (responseStatus resp)
       if status >= 200 && status < 300
-        then do
-          let body = responseBody resp
-          createDirectoryIfMissing True destDir
-          let tmpFile = destDir </> "source.tar.gz"
-          LBS.writeFile tmpFile body
-          ec <- system (unwords ["tar", "-xzf", tmpFile, "-C", destDir, "--strip-components=1"])
-          removeFile tmpFile
-          case ec of
-            ExitSuccess   -> pure (Right destDir)
-            ExitFailure c -> pure (Left (NetworkError ("tar extraction failed with code " ++ show c)))
+        then writeAndExtract (responseBody resp)
         else pure (Left (HttpError status))
+  where
+    writeAndExtract body = do
+      createDirectoryIfMissing True (takeDirectory destDir)
+      let tmpFile = destDir <> ".tar.gz"
+      LBS.writeFile tmpFile body
+      r <- extractTarballGz tmpFile destDir
+      removeFileIfExists tmpFile
+      case r of
+        Right ()  -> pure (Right destDir)
+        Left tErr -> pure (Left (TarballFailure tErr))
+
+    removeFileIfExists p = do
+      ok <- doesFileExist p
+      if ok then removeFile p else pure ()
 
 -- | List every cached package-source directory under
 -- @$XDG_CACHE_HOME/hypha/source/@.  Each entry is keyed by the

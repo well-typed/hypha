@@ -30,6 +30,7 @@ import qualified Data.Text as Text
 import Hypha.Exit
   ( ExitCode, exitUserError, exitNotFound, exitNetworkError, exitCacheError
   , exitEnvironmentError )
+import qualified Hypha.Cabal.RepoCache as RepoCache
 import Hypha.Hackage.Api (HackageError, renderHackageError)
 import qualified Hypha.Hackage.Api as Hackage
 import Hypha.Hoogle.Remote (RemoteError, renderRemoteError)
@@ -186,6 +187,7 @@ hackageErrorWireCode = \case
   Hackage.OfflineCacheMiss{} -> "NOT_FOUND"
   Hackage.DecodeError{}      -> "CORRUPTION"
   Hackage.MissingField{}     -> "CORRUPTION"
+  Hackage.TarballFailure{}   -> "CORRUPTION"
 
 hackageErrorExitCode :: HackageError -> ExitCode
 hackageErrorExitCode = \case
@@ -194,6 +196,7 @@ hackageErrorExitCode = \case
   Hackage.OfflineCacheMiss{} -> exitNotFound
   Hackage.DecodeError{}      -> exitCacheError
   Hackage.MissingField{}     -> exitCacheError
+  Hackage.TarballFailure{}   -> exitCacheError
 
 errorMessage :: HyphaError -> Text
 errorMessage = \case
@@ -251,7 +254,25 @@ errorActions = \case
     , ("query",           q)
     , ("tiers_consulted", renderTierList tiers)
     ]
+  HackageFailure _ (Hackage.TarballFailure tErr) -> tarballRecoveryActions tErr
   _ -> Map.empty
+
+-- | Recovery hints for 'Hackage.TarballFailure'.  The on-disk path is
+-- already in the structured 'TarballError'; surface it to the agent
+-- alongside a refresh suggestion so the user does not have to dig the
+-- path out of the rendered message.
+tarballRecoveryActions :: RepoCache.TarballError -> Map Text Text
+tarballRecoveryActions = \case
+  RepoCache.TarballMissing       p -> bundle p
+  RepoCache.TarballReadError     p _ -> bundle p
+  RepoCache.TarballExtractError  p _ -> bundle p
+  RepoCache.TarballLayoutError   p _ -> bundle p
+  where
+    bundle p = Map.fromList
+      [ ("tarball_path", Text.pack p)
+      , ("delete_tarball", Text.pack ("rm " <> p))
+      , ("refresh_index", "cabal update")
+      ]
 
 -- | 'ExceptT'-friendly wrapper around 'discoverProjectRoot'.
 discoverProjectRootE

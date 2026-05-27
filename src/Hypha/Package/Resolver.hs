@@ -24,6 +24,8 @@ module Hypha.Package.Resolver
   , resolveRef
   ) where
 
+import Control.Monad (msum)
+import Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
 import Data.Aeson (Value)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
@@ -35,10 +37,11 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist)
 import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import qualified Hypha.Cabal.RepoCache as RepoCache
 import Hypha.Cache (cacheRoot)
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import qualified Hypha.Hackage.Api as Hackage
-import Hypha.Hackage.Api (HackageClient (..))
+import Hypha.Hackage.Api (HackageClient (..), HackageError (..))
 import Hypha.Hackage.Source (fetchAndExtractSource)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), lookupUnit )
@@ -166,13 +169,22 @@ resolvePackageWith env hclient plan name = do
       | pkgName pid == target = Just pid
       | otherwise             = Nothing
 
--- | Resolve the source directory for a package, trying local sources first,
---   then falling back to downloading from Hackage.
+-- | Resolve the source directory for a package, trying local sources
+-- first and falling back to a network fetch only as a last resort.
 --
 -- Resolution order:
---   1. Local package source path from the build plan (puSrcDir, fast).
---   2. Build environment's store lookup (locatePackageSource).
---   3. Hackage source tarball download.
+--
+--   0. Local package source path from the build plan (@puSrcDir@, fast).
+--   1. Build environment's source lookup ('locatePackageSource' — store,
+--      dist-newstyle, project sources).
+--   2. Hypha's own extracted-source cache at
+--      @$XDG_CACHE_HOME/hypha/source/pkg-ver/@ (populated by a previous
+--      step 3 or 4 invocation).
+--   3. Build environment's repo-tarball lookup ('locateRepoTarball' —
+--      cabal-install's @~/.cabal/packages/<repo>/.../<pkg>-<ver>.tar.gz@).
+--      The tarball is extracted into the step-2 cache so subsequent
+--      calls short-circuit there.
+--   4. HTTP GET against Hackage.
 resolvePackageSourceWith
   :: BuildEnv IO
   -> HackageClient IO
@@ -180,39 +192,53 @@ resolvePackageSourceWith
   -> BuildPlan    -- ^ build plan (for local package src dirs)
   -> PackageId
   -> IO (Either HyphaError FilePath)
-resolvePackageSourceWith env hclient sourceCache plan pid = do
-  -- Step 0: Local package source from plan (fast, no I/O beyond stat).
-  case planSrcDir plan (pkgName pid) of
-    Just dir -> do
-      exists <- doesDirectoryExist dir
-      if exists then pure (Right dir) else fallbackToEnv
-    Nothing -> fallbackToEnv
+resolvePackageSourceWith env hclient sourceCache plan pid =
+  -- Steps 0-2 are no-cost cache probes that return 'Just' on a hit.
+  -- The 'Alternative' instance for 'MaybeT' linearises the chain so
+  -- the first hit wins without nested case-of (CLAUDE.md "mtl over
+  -- zig-zags").  Steps 3-4 can fail with a structured 'HyphaError',
+  -- so they run outside 'MaybeT' over plain 'Either'.
+  runMaybeT cacheHit >>= maybe materialise (pure . Right)
   where
-    fallbackToEnv = do
-      -- Step 1: Try local source lookup (store, dist-newstyle, project sources).
-      mSrc <- locatePackageSource env pid
-      case mSrc of
-        Just dir -> pure (Right dir)
-        Nothing  -> do
-          -- Step 2: Download and extract from Hackage.
-          let nameStr = Text.unpack (unPackageName (pkgName pid))
-              verStr  = Text.unpack (unVersion (pkgVersion pid))
-              destDir = sourceCache </> (nameStr <> "-" <> verStr)
-          exists <- doesDirectoryExist destDir
-          if exists
-            then pure (Right destDir)
-            else do
-              result <- fetchAndExtractSource hclient pid destDir
-              case result of
-                -- Preserve the structured cause (NetworkError /
-                -- OfflineCacheMiss / DecodeError / HttpError) so the
-                -- failure envelope reflects /why/ the fetch failed,
-                -- rather than collapsing every variant into the same
-                -- generic message.  See CLAUDE.md, "Errors are
-                -- first-class".
-                Left hErr ->
-                  pure (Left (hackageErrorToHypha (pkgName pid) hErr))
-                Right path -> pure (Right path)
+    nameStr = Text.unpack (unPackageName (pkgName pid))
+    verStr  = Text.unpack (unVersion (pkgVersion pid))
+    destDir = sourceCache </> (nameStr <> "-" <> verStr)
+
+    cacheHit :: MaybeT IO FilePath
+    cacheHit = msum
+      [ MaybeT (existingDir (planSrcDir plan (pkgName pid)))
+      , MaybeT (locatePackageSource env pid)
+      , MaybeT (existingDir (Just destDir))
+      ]
+
+    -- | Pass through a 'Just dir' iff @dir@ exists on disk; otherwise
+    -- 'Nothing'.  Used to lift 'planSrcDir' / cached-extract paths
+    -- into the 'MaybeT' chain without a separate case-of per step.
+    existingDir :: Maybe FilePath -> IO (Maybe FilePath)
+    existingDir Nothing    = pure Nothing
+    existingDir (Just dir) = do
+      ok <- doesDirectoryExist dir
+      pure (if ok then Just dir else Nothing)
+
+    -- | None of the cache layers had it; produce a directory by
+    -- extracting from the cabal repo tarball or, failing that, by
+    -- downloading.  Preserves the structured 'HackageError' /
+    -- 'TarballFailure' cause through 'hackageErrorToHypha' rather
+    -- than collapsing variants.
+    materialise :: IO (Either HyphaError FilePath)
+    materialise = do
+      mTar <- locateRepoTarball env pid
+      case mTar of
+        Just tarball -> do
+          r <- RepoCache.extractTarballGz tarball destDir
+          pure $ case r of
+            Right ()  -> Right destDir
+            Left tErr -> Left (hackageErrorToHypha (pkgName pid) (TarballFailure tErr))
+        Nothing -> do
+          r <- fetchAndExtractSource hclient pid destDir
+          pure $ case r of
+            Right path -> Right path
+            Left hErr  -> Left (hackageErrorToHypha (pkgName pid) hErr)
 
 -- | Look up the package source directory from the build plan's 'puSrcDir'.
 -- Returns 'Just dir' only for local (inplace) packages that have a

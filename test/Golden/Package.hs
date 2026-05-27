@@ -99,6 +99,7 @@ nullBuildEnv :: BuildEnv IO
 nullBuildEnv = BuildEnv
   { discoverInstalledPackages = pure Set.empty
   , locatePackageSource       = \_ -> pure Nothing
+  , locateRepoTarball         = \_ -> pure Nothing
   , locateHaddockHtml         = \_ -> pure Nothing
   , ghcVersion                = pure (Version "unknown")
   }
