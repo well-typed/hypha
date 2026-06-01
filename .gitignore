@@ -15,3 +15,9 @@ cabal.project.local~
 .HTF/
 .cache/
 tags
+# Track team personas + goal templates; ignore the machine-written runtime sentinel.
+.pi/*
+!.pi/agents/
+!.pi/goals/
+!.pi/settings.json
+.pi/team-context.md
