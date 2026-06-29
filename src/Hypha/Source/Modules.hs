@@ -89,12 +89,12 @@ isExposedModulesHeader t =
 --   sub-lists.
 collectModuleNames :: [Text] -> [Text]
 collectModuleNames [] = []
-collectModuleNames lines' =
+collectModuleNames lines'@(_:xs) =
   let -- Strip the field header prefix from the first line
       firstText = stripHeader lines'
       -- For all lines, strip leading whitespace and commas, then split
       -- each line on commas
-      allSegments = concatMap extractSegments (firstText : map cleanContinuation (tail lines'))
+      allSegments = concatMap extractSegments (firstText : map cleanContinuation xs)
       -- Clean each segment (strip paren sub-lists) and keep module names
   in mapMaybe cleanAndCheckModuleName (map Text.strip allSegments)
   where
