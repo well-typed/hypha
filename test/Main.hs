@@ -23,7 +23,6 @@ import qualified Unit.Deps
 import qualified Unit.Doctor
 import qualified Unit.Hackage
 import qualified Unit.Mcp
-import qualified Unit.Modules
 import qualified Unit.PackageCache
 import qualified Unit.PackageCacheFingerprint
 import qualified Unit.HoogleLocalGen
@@ -64,7 +63,6 @@ main = defaultMain (testGroup "hypha"
   , Unit.Project.tests
   , Unit.Hackage.tests
   , Unit.Mcp.tests
-  , Unit.Modules.tests
   , Unit.PackageCache.tests
   , Unit.PackageCacheFingerprint.tests
   , Unit.HoogleLocalGen.tests

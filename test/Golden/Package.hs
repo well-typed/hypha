@@ -16,7 +16,7 @@ import Hypha.Output.Json (encodeEnvelope)
 import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..), mkPackageResolver)
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Plan (loadBuildPlan)
-import qualified Hypha.Source.Modules as SourceModules
+import qualified Hypha.Project.Components as SourceModules
 import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
 import qualified Data.Set as Set
 import qualified Data.Text as Text

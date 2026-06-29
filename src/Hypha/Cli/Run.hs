@@ -71,7 +71,6 @@ import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (loadBuildPlan, planHash)
 import Hypha.Search.PackageCache qualified as PC
-import Hypha.Source.Modules qualified as SourceModules
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId
 
@@ -700,7 +699,7 @@ resolveExposedModules resolver env pid = do
   mLocal <- locatePackageSource env pid
   case mLocal of
     Just dir -> do
-      modules <- SourceModules.getExposedModules dir
+      modules <- Comp.getExposedModules dir
       if null modules then trySrcResolver else pure modules
     Nothing -> trySrcResolver
   where
@@ -715,7 +714,7 @@ resolveExposedModules resolver env pid = do
             <> " — source resolve failed: "
             <> Text.unpack (errorMessage err)
           pure []
-        Right dir -> SourceModules.getExposedModules dir
+        Right dir -> Comp.getExposedModules dir
 
 -- | Emit the outcome to stdout, honouring all output-shaping flags.
 --
