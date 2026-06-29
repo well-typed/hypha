@@ -13,18 +13,22 @@ module Hypha.Project.Components
   , ComponentKind (..)
   , parseLibComponents
   , findCabalFile
+  , getExposedModules
   ) where
 
 import Control.Exception.Safe (IOException, try)
-import qualified Data.ByteString as BS
+import Data.ByteString qualified as BS
+import Data.Text qualified as T
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified Distribution.PackageDescription as PD
-import qualified Distribution.PackageDescription.Parsec as PDP
-import qualified Distribution.Types.UnqualComponentName as UC
-import qualified Distribution.Utils.Path as UP
+import Distribution.PackageDescription.Parsec qualified as PDP
+import Distribution.PackageDescription qualified as PD
+import Distribution.Pretty (pretty)
+import Distribution.Types.UnqualComponentName qualified as UC
+import Distribution.Utils.Path qualified as UP
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>), takeExtension)
+import Text.PrettyPrint (render)
 
 -- | The kind of library or executable component we discovered in a
 -- cabal file.  'MainLib' represents the unnamed @library@ stanza;
@@ -42,6 +46,8 @@ data ComponentInfo = ComponentInfo
   , ciHsSourceDirs :: ![FilePath]
     -- ^ Absolute paths.  Falls back to the package root when the
     -- stanza omits @hs-source-dirs@ (cabal default).
+  , ciExposedModules :: ![Text]
+    -- ^ The textual rendition of modules exposed by this library
   }
   deriving stock (Show, Eq)
 
@@ -73,25 +79,40 @@ parseLibComponents cabalPath pkgRoot = do
       Nothing  -> pure []
       Just gpd ->
         let mainComp =
-              [ toComponent MainLib
-                  (PD.libBuildInfo (PD.condTreeData ct))
+              [ toComponent MainLib (PD.condTreeData ct)
               | ct <- maybe [] (:[]) (PD.condLibrary gpd)
               ]
             subComps =
-              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n)))
-                  (PD.libBuildInfo (PD.condTreeData ct))
+              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n))) (PD.condTreeData ct)
               | (n, ct) <- PD.condSubLibraries gpd
               ]
             exeComps =
               [ toComponent (Exe (Text.pack (UC.unUnqualComponentName n)))
-                  (PD.buildInfo (PD.condTreeData ct))
+                  (PD.emptyLibrary { PD.libBuildInfo = (PD.buildInfo (PD.condTreeData ct)) })
               | (n, ct) <- PD.condExecutables gpd
               ]
         in pure (mainComp ++ subComps ++ exeComps)
   where
-    toComponent kind bi =
-      let raw  = map UP.getSymbolicPath (PD.hsSourceDirs bi)
+    toComponent kind lib =
+      let bi   = PD.libBuildInfo lib
+          raw  = map UP.getSymbolicPath (PD.hsSourceDirs bi)
           dirs = if null raw
                    then [pkgRoot]
                    else map (pkgRoot </>) raw
-      in ComponentInfo kind dirs
+      in ComponentInfo {
+           ciKind         = kind
+         , ciHsSourceDirs = dirs
+         , ciExposedModules = map (T.pack . render . pretty) $ PD.exposedModules lib
+         }
+
+-- | Get /ALL/ the exposed modules from a package source directory. This returns
+-- the list of all the modules for all the stanzas.
+getExposedModules :: FilePath -> IO [Text]
+getExposedModules root = do
+  mCabal <- findCabalFile root
+  case mCabal of
+    Nothing  -> pure []
+    Just fp  -> do
+      comps <- parseLibComponents fp root
+      pure $ concatMap ciExposedModules comps
+

@@ -26,17 +26,13 @@ import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe
 import Data.Ord (Down (..))
+import Data.Set qualified as Set
 import Data.String qualified as String
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TIO
 import Data.Text qualified as Text
 import Data.Text (Text)
 import GHC.Natural (Natural)
-import Network.Wai.Handler.Warp ( defaultSettings, runSettings, setHost, setPort )
-import System.Directory qualified as Dir
-import System.FilePath qualified as FP
-import System.IO (hPutStrLn, stderr)
-
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Haddock.Generate (ensureHaddockFor, haddockDirFor)
 import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
@@ -44,11 +40,10 @@ import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.PackageCache (CacheOrigin (..))
 import Hypha.Search.PackageCache qualified as Cache
-import Hypha.Server.Bind
 import Hypha.Server.App qualified as App
+import Hypha.Server.Bind
 import Hypha.Server.Haddock.Rewrite qualified as Rewrite
 import Hypha.Server.Slots qualified as Slots
-import Data.Set qualified as Set
 import Hypha.Source.Extract qualified as Extract
 import Hypha.Source.Locate qualified as Locate
 import Hypha.Source.Parser qualified as Parser
@@ -56,6 +51,10 @@ import Hypha.Types.BuildPlan
 import Hypha.Types.ComponentName
 import Hypha.Types.Doc (DocText (..))
 import Hypha.Types.PackageId
+import Network.Wai.Handler.Warp ( defaultSettings, runSettings, setHost, setPort )
+import System.Directory qualified as Dir
+import System.FilePath qualified as FP
+import System.IO (hPutStrLn, stderr)
 
 -- | All @hypha server@ options.
 data ServerOpts = ServerOpts

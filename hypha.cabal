@@ -117,7 +117,6 @@ library
     Hypha.Source.Extract
     Hypha.Source.Locate
     Hypha.Source.Parser
-    Hypha.Source.Modules
     Hypha.Hackage.Source
     Hypha.Cabal.RepoCache
   build-depends:
@@ -149,6 +148,7 @@ library
     , file-embed            >= 0.0.16
     , lucid2                >= 0.0.20210901
     , prettyprinter         >= 1.7
+    , pretty                >= 1.0
     , servant               >= 0.20
     , servant-server        >= 0.20
     , process               >= 1.6
@@ -211,7 +211,6 @@ test-suite hypha-tests
     Unit.Doctor
     Unit.Hackage
     Unit.Module
-    Unit.Modules
     Unit.Deps
     Unit.Project
     Unit.Haddock

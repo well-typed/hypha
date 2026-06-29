@@ -22,26 +22,22 @@ module Hypha.Source.Parser
   , declSigText
   ) where
 
-import           System.IO.Unsafe         (unsafePerformIO)
-import qualified Language.Preprocessor.Cpphs as Cpphs
-
 import Data.Maybe (listToMaybe)
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
-
-import qualified GHC.Data.EnumSet         as EnumSet
-import qualified GHC.Data.StringBuffer    as SB
-import qualified GHC.LanguageExtensions   as LangExt
-import qualified GHC.Parser               as P
-import qualified GHC.Parser.Lexer         as L
-import           GHC.Hs
-import           GHC.Types.SrcLoc
-  ( GenLocated (..), mkRealSrcLoc, srcSpanStartLine, srcSpanEndLine, getLoc, unLoc )
-import           GHC.Types.SrcLoc         (SrcSpan (..))
-import           GHC.Utils.Error          (emptyDiagOpts)
-import qualified GHC.Types.Name.Occurrence as Occ
-import           GHC.Types.Name.Reader     (RdrName, rdrNameOcc)
-import           GHC.Data.FastString       (mkFastString)
+import GHC.Data.EnumSet qualified as EnumSet
+import GHC.Data.FastString (mkFastString)
+import GHC.Data.StringBuffer qualified as SB
+import GHC.Hs
+import GHC.LanguageExtensions qualified as LangExt
+import GHC.Parser.Lexer qualified as L
+import GHC.Parser qualified as P
+import GHC.Types.Name.Occurrence qualified as Occ
+import GHC.Types.Name.Reader (RdrName, rdrNameOcc)
+import GHC.Types.SrcLoc
+import GHC.Utils.Error (emptyDiagOpts)
+import Language.Preprocessor.Cpphs qualified as Cpphs
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | A single top-level declaration extracted from a module.  When a
 -- signature binds several names (@a, b :: T@) each name is its own
