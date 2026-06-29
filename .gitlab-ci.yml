@@ -1,0 +1,53 @@
+# GitLab CI for hypha — mirrors the existing GitHub Actions workflow
+# (3 GHC versions, build + test, with cabal store + dist-newstyle caching)
+#
+# GHC versions: 9.6.7 (LTS baseline), 9.10.3, 9.12.x (latest)
+#
+# Uses the official haskell:* Docker images which ship GHC + cabal-install.
+# Note: the bare `-slim` alias only exists for 9.6.x; 9.10 needs -slim-bullseye
+# and 9.12 needs -slim-bookworm (different Debian base per GHC series).
+
+stages:
+  - test
+
+variables:
+  # Keep cabal's data dir inside the project so GitLab cache can reach it
+  CABAL_DIR: "$CI_PROJECT_DIR/.cabal"
+
+# Shared template — each concrete job picks an image + GHC version
+.build:
+  stage: test
+  before_script:
+    - cabal user-config init
+    - cabal update
+  script:
+    - cabal build all --enable-tests
+    - cabal test all
+  cache:
+    key: "$CI_COMMIT_REF_SLUG-ghc${GHC_VERSION}"
+    paths:
+      - .cabal/store
+      - dist-newstyle
+  rules:
+    # Run on pushes to any branch (catches MR source branches)
+    - if: $CI_PIPELINE_SOURCE == "push"
+    # Run on merge request pipelines
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+build-9.6:
+  extends: .build
+  image: haskell:9.6.7-slim
+  variables:
+    GHC_VERSION: "9.6.7"
+
+build-9.10:
+  extends: .build
+  image: haskell:9.10.3-slim-bullseye
+  variables:
+    GHC_VERSION: "9.10.3"
+
+build-9.12:
+  extends: .build
+  image: haskell:9.12-slim-bookworm
+  variables:
+    GHC_VERSION: "9.12"
