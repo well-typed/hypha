@@ -1,11 +1,16 @@
-# GitLab CI for hypha — mirrors the existing GitHub Actions workflow
-# (3 GHC versions, build + test, with cabal store + dist-newstyle caching)
+# GitLab CI for hypha — 3 GHC versions, build + test
 #
-# GHC versions: 9.6.7 (LTS baseline), 9.10.3, 9.12.x (latest)
+# Each GHC version gets its own cabal project file + freeze file:
+#   cabal.ghc-<ver>.project       (with-compiler + packages + tests)
+#   cabal.ghc-<ver>.project.freeze (pinned dependency versions)
 #
-# Uses the official haskell:* Docker images which ship GHC + cabal-install.
-# Note: the bare `-slim` alias only exists for 9.6.x; 9.10 needs -slim-bullseye
-# and 9.12 needs -slim-bookworm (different Debian base per GHC series).
+# The default cabal.project → cabal.ghc-9.10.3.project (symlink) for
+# local development. CI picks the right project file per job.
+#
+# Docker images: official haskell:* from Docker Hub.
+#   9.6.7  → slim (alias for slim-bullseye)
+#   9.10.3 → slim-bullseye (no bare -slim alias for 9.10.x)
+#   9.12.4 → slim-bookworm  (no bare -slim alias for 9.12.x)
 
 stages:
   - test
@@ -14,15 +19,16 @@ variables:
   # Keep cabal's data dir inside the project so GitLab cache can reach it
   CABAL_DIR: "$CI_PROJECT_DIR/.cabal"
 
-# Shared template — each concrete job picks an image + GHC version
+# Shared template — each concrete job picks an image + project file
 .build:
   stage: test
   before_script:
+    - apt-get update && apt-get install -y pkg-config zlib1g-dev
     - cabal user-config init
     - cabal update
   script:
-    - cabal build all --enable-tests
-    - cabal test all
+    - cabal build all --enable-tests --project-file=${PROJECT_FILE}
+    - cabal test all --project-file=${PROJECT_FILE}
   cache:
     key: "$CI_COMMIT_REF_SLUG-ghc${GHC_VERSION}"
     paths:
@@ -39,15 +45,18 @@ build-9.6:
   image: haskell:9.6.7-slim
   variables:
     GHC_VERSION: "9.6.7"
+    PROJECT_FILE: "cabal.ghc-9.6.7.project"
 
 build-9.10:
   extends: .build
   image: haskell:9.10.3-slim-bullseye
   variables:
     GHC_VERSION: "9.10.3"
+    PROJECT_FILE: "cabal.ghc-9.10.3.project"
 
 build-9.12:
   extends: .build
   image: haskell:9.12-slim-bookworm
   variables:
-    GHC_VERSION: "9.12"
+    GHC_VERSION: "9.12.4"
+    PROJECT_FILE: "cabal.ghc-9.12.4.project"

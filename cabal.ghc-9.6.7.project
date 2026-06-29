@@ -1,0 +1,9 @@
+packages: .
+
+allow-newer:
+  haddock-library:base
+
+with-compiler: ghc-9.6.7
+
+tests: True
+test-show-details: streaming

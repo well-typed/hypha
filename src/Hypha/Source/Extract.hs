@@ -14,10 +14,9 @@ module Hypha.Source.Extract
   , extractSymbolInfo
   ) where
 
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
-
-import qualified Hypha.Source.Parser as Parser
+import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.Doc (DocText (..))
 
 -- | Information extracted from a source file for a single symbol.

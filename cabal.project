@@ -1,7 +1,1 @@
-packages: .
-
-allow-newer:
-  haddock-library:base
-
-tests: True
-test-show-details: streaming
+cabal.ghc-9.10.3.project
