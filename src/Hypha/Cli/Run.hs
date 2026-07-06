@@ -37,6 +37,7 @@ import Data.Vector qualified as V
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Hypha.BuildEnv.Cabal (CabalStoreError (..), mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import Hypha.Cache (hackageCacheDir)
 import Hypha.Cli.Parser
 import Hypha.Command.Deps qualified as Deps
 import Hypha.Command.Doctor qualified as Doctor
@@ -110,8 +111,9 @@ runServerMain opts (ServerCommand port mBind prebuild jobs) = do
 loadPlan :: Hypha (ProjectRoot, BuildPlan)
 loadPlan = do
   opts      <- askOpts
+  cacheRoot <- asks heCacheDir
   root      <- mapEitherIO DiscoveryFailure (discoverProjectRoot (hoProjectDir opts))
-  rawPlan   <- mapEitherIO (PlanFailure root) (loadBuildPlan root)
+  rawPlan   <- mapEitherIO (PlanFailure root) (loadBuildPlan cacheRoot root)
   overrides <- collectOverrides (hoPackageOverrides opts)
   pure (root, applyOverrides overrides rawPlan)
 
@@ -126,12 +128,14 @@ collectOverrides raws = case traverse parsePackageOverride raws of
 -- | Create a Hackage client respecting the offline flag.
 mkHackageClientForOpts :: Hypha (HackageClient IO)
 mkHackageClientForOpts = do
-  opts <- askOpts
+  opts  <- askOpts
+  cacheRoot <- asks heCacheDir
+  let hackCache = hackageCacheDir cacheRoot
   liftIO $ if hoOffline opts
-    then mkOfflineHackageClient
+    then mkOfflineHackageClient hackCache
     else do
       mgr <- newManager tlsManagerSettings
-      mkHackageClient mgr
+      mkHackageClient mgr hackCache
 
 -- | Run an 'IO' action returning 'Either'; on 'Left', emit a single
 -- warning line to @stderr@ and substitute the supplied fallback.  Use
@@ -156,17 +160,18 @@ warnOnLeft renderErr fallback action = action >>= \case
 -- discovery failed, and 'emptyBuildPlan' when plan loading failed.
 loadProjectAndPlan :: Hypha (Maybe ProjectRoot, BuildPlan)
 loadProjectAndPlan = do
-  opts <- askOpts
+  opts      <- askOpts
+  cacheRoot <- asks heCacheDir
   mRoot <- liftIO $ warnOnLeft
              (errorMessage . DiscoveryFailure)
              Nothing
              (fmap Just <$> discoverProjectRoot (hoProjectDir opts))
-  plan <- liftIO $ maybe (pure emptyBuildPlan) loadPlanOrWarn mRoot
+  plan <- liftIO $ maybe (pure emptyBuildPlan) (loadPlanOrWarn cacheRoot) mRoot
   pure (mRoot, plan)
   where
-    loadPlanOrWarn root =
+    loadPlanOrWarn cacheRoot root =
       warnOnLeft (errorMessage . PlanFailure root) emptyBuildPlan
-                 (loadBuildPlan root)
+                 (loadBuildPlan cacheRoot root)
 
 -- | Pick the right build-env constructor for the loaded project.
 -- Project-less calls degrade to a store-only env (still announces the
@@ -217,13 +222,14 @@ enrichPlanFromStore env plan
 loadResolver :: Hypha (PackageResolver IO, BuildEnv IO)
 loadResolver = do
   opts      <- askOpts
+  cacheRoot <- asks heCacheDir
   hclient   <- mkHackageClientForOpts
   (mRoot, raw) <- loadProjectAndPlan
   overrides <- collectOverrides (hoPackageOverrides opts)
   let plan = applyOverrides overrides raw
   liftIO $ do
     env      <- mkBuildEnvFor mRoot plan
-    resolver <- mkPackageResolver env hclient plan
+    resolver <- mkPackageResolver env hclient cacheRoot plan
     pure (resolver, env)
 
 -- | Create a basic BuildEnv (store only, no project source dirs).
@@ -381,13 +387,14 @@ parsePkgModOptSym arg = case Text.splitOn "/" arg of
 -- the guarded region.
 runServerInteractive :: Int -> Maybe Text -> Bool -> Int -> Hypha ()
 runServerInteractive port mBind prebuild jobs = do
+  cacheRoot       <- asks heCacheDir
   ba              <- bindAddrFromFlags port mBind
   (mRoot, plan0)  <- loadProjectAndPlan
   hclient         <- mkHackageClientForOpts
   env             <- liftIO (mkBuildEnvFor mRoot plan0)
   plan            <- liftIO (enrichPlanFromStore env plan0)
-  resolver        <- liftIO (mkPackageResolver env hclient plan)
-  let serverOpts = Server.ServerOpts ba prebuild (fromIntegral (max 1 jobs))
+  resolver        <- liftIO (mkPackageResolver env hclient cacheRoot plan)
+  let serverOpts = Server.ServerOpts ba prebuild (fromIntegral (max 1 jobs)) cacheRoot
   mapEitherIO (UserError . UserBindError)
     (Server.runServer mRoot plan env resolver serverOpts)
 
@@ -429,6 +436,7 @@ runLookupCommand q = do
   -- 'catchAny' in @app/hypha/Main.hs@ where they become a single
   -- structured @INTERNAL_ERROR@ envelope.
   opts <- askOpts
+  cacheRoot <- asks heCacheDir
   mRoot <- liftIO $ warnOnLeft
              (errorMessage . DiscoveryFailure)
              Nothing
@@ -460,7 +468,7 @@ runLookupCommand q = do
       prepLocal = case mRoot of
         Nothing   -> pure ()
         Just root -> withQuietIfNotVerbose (hoVerbose opts) $
-          ensureProjectHoogle storeRoot distRoot dotHypha hoogleLocal root
+          ensureProjectHoogle cacheRoot storeRoot distRoot dotHypha hoogleLocal root
 
   let lookupOpts = Lookup.LookupOptions
         { Lookup.loOffline      = hoOffline opts
@@ -477,13 +485,14 @@ runLookupCommand q = do
 -- best-effort: failures do not abort the lookup, but every one is
 -- announced on @stderr@ (see the body).
 ensureProjectHoogle
-  :: FilePath          -- ^ store root
+  :: FilePath          -- ^ cache root
+  -> FilePath          -- ^ store root
   -> FilePath          -- ^ dist doc root
   -> FilePath          -- ^ project @.hypha@ directory
   -> HogLocal.HyphaHoogle
   -> ProjectRoot
   -> IO ()
-ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
+ensureProjectHoogle cacheRoot storeRoot distRoot dotHypha _ root = do
   -- Best-effort: ANY failure here (missing toolchain in a sandbox,
   -- IO errors regenerating the DB, Hoogle library panics) must not
   -- abort the lookup. The cascade in 'Lookup.runLookup' is designed
@@ -491,7 +500,7 @@ ensureProjectHoogle storeRoot distRoot dotHypha _ root = do
   -- we keep going on failure — but every failure is announced on
   -- stderr so the user is never left wondering why Tier 2 went silent.
   r <- try @IO @SomeException $ do
-    ePlan <- loadBuildPlan root
+    ePlan <- loadBuildPlan cacheRoot root
     case ePlan of
       Left planErr ->
         hPutStrLn stderr $

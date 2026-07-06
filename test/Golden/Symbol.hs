@@ -8,6 +8,7 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as LBS
 import Data.Set qualified as Set
 import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty (TestTree, testGroup)
 
@@ -44,20 +45,21 @@ tests = testGroup "Golden.Symbol"
     goldenFile = "test" </> "Golden" </> "golden" </> "symbol-concurrently.compact.json"
 
 runSymbolCommand :: IO LBS.ByteString
-runSymbolCommand = do
-  result <- runExceptT pipeline
-  case result of
-    Left err      -> fail ("Symbol golden failed: " <> show (errorMessage err))
-    Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope SymbolCmd outcome))
+runSymbolCommand =
+  withSystemTempDirectory "hypha-golden-sym" $ \cacheDir -> do
+    result <- runExceptT (pipeline cacheDir)
+    case result of
+      Left err      -> fail ("Symbol golden failed: " <> show (errorMessage err))
+      Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope SymbolCmd outcome))
   where
     fixtureDir = "test" </> "fixtures" </> "tiny-project"
     asyncDir   = "test" </> "fixtures"
               </> "fake-cabal-store" </> "ghc-9.6.7"
               </> "async-2.2.5-abc123456789" </> "share" </> "async"
 
-    pipeline :: ExceptT HyphaError IO (Outcome Value)
-    pipeline = do
+    pipeline :: FilePath -> ExceptT HyphaError IO (Outcome Value)
+    pipeline cacheDir = do
       root <- mapEitherIO DiscoveryFailure (discoverProjectRoot (Just fixtureDir))
-      plan <- mapEitherIO (PlanFailure root) (loadBuildPlan root)
+      plan <- mapEitherIO (PlanFailure root) (loadBuildPlan cacheDir root)
       let env = mockBuildEnv asyncDir
       ExceptT (liftIO (runSymbol env plan "async/Control.Concurrent.Async/concurrently"))

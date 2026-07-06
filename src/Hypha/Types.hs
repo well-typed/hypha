@@ -18,11 +18,13 @@ import Control.Monad.Except
 import Hypha.Cli.Types
 import Hypha.Error
 import Hypha.Logging (Tracer, LogEvent, silentTracer, verboseTracer)
+import Hypha.Cache (cacheRoot)
 
 -- | Environment carried by 'HyphaM'.
 data HyphaEnv m = HyphaEnv
   { heOptions :: !HyphaOptions
   , heTracer  :: Tracer m
+  , heCacheDir :: !FilePath
   }
 
 -- | The hypha CLI monad: 'HyphaEnv' in a reader, typed failure via
@@ -42,10 +44,10 @@ type Hypha = HyphaM IO
 -- completion.  The tracer is chosen once, here, based on the
 -- @--verbose@ flag — no per-call allocation.
 runHypha :: MonadIO m => HyphaOptions -> HyphaM m a -> m (Either HyphaError a)
-runHypha opts (HyphaM m) =
+runHypha opts (HyphaM m) = do
+  resolvedCacheDir <- liftIO $ maybe cacheRoot pure (hoCacheDir opts)
+  let env = HyphaEnv opts (if hoVerbose opts then verboseTracer else silentTracer) resolvedCacheDir
   runExceptT (runReaderT m env)
-  where
-    env = HyphaEnv opts (if hoVerbose opts then verboseTracer else silentTracer)
 
 -- | Get the 'HyphaOptions' from the environment.
 askOpts :: MonadReader (HyphaEnv m) m' => m' HyphaOptions

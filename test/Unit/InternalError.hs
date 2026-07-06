@@ -46,6 +46,7 @@ plainOptions = HyphaOptions
   , hoSelect           = Nothing
   , hoQuiet            = False
   , hoVerbose          = False
+  , hoCacheDir         = Nothing
   }
 
 tests :: TestTree

@@ -64,6 +64,8 @@ data ServerOpts = ServerOpts
     -- ^ Walk plan and pre-render Haddocks.
   , soPrebuildJobs :: !Natural
     -- ^ Max concurrent prebuild workers.
+  , soCacheRoot   :: !FilePath
+    -- ^ Cache root directory (for Haddock cache).
   }
   deriving stock (Show, Eq)
 
@@ -77,11 +79,11 @@ runServer
   -> ServerOpts
   -> IO (Either BindError ())
 runServer mRoot plan env resolver opts = do
-  cfg <- buildServerConfig mRoot plan resolver
+  cfg <- buildServerConfig (soCacheRoot opts) mRoot plan resolver
   let bind = soBind opts
   hPutStrLn stderr ("hypha server listening on " <> renderBindUrl bind)
   when (soPrebuild opts) $
-    prebuildAll plan env (soPrebuildJobs opts) (planPackageIds plan)
+    prebuildAll (soCacheRoot opts) plan env (soPrebuildJobs opts) (planPackageIds plan)
   let settings = setHost (String.fromString (show (baIP bind)))
                $ setPort (fromIntegral (baPort bind))
                  defaultSettings
@@ -93,14 +95,14 @@ runServer mRoot plan env resolver opts = do
 -- per-package outcome is collected and reported on @stderr@ after the
 -- pool drains — neither exceptions nor empty haddock results are
 -- silently swallowed.
-prebuildAll :: BuildPlan -> BuildEnv IO -> Natural -> [PackageId] -> IO ()
-prebuildAll plan env jobs pids = do
+prebuildAll :: FilePath -> BuildPlan -> BuildEnv IO -> Natural -> [PackageId] -> IO ()
+prebuildAll cacheRoot plan env jobs pids = do
   outcomes <- mapConcurrentlyBounded (max 1 (fromEnum jobs)) ensureOne pids
   reportPrebuildOutcomes outcomes
   where
     ensureOne :: PackageId -> IO (PackageId, Either SomeException (Maybe FilePath))
     ensureOne pid = do
-      r <- try (ensureHaddockFor plan env pid)
+      r <- try (ensureHaddockFor cacheRoot plan env pid)
       pure (pid, r)
 
 -- | Walk every '(pid, outcome)' returned by 'prebuildAll' and surface
@@ -129,11 +131,12 @@ planPackageIds = map puId . Map.elems . bpUnits
 -- | Assemble the 'ServerConfig' callbacks that connect the WAI app to the
 -- resolver, build env, and Hoogle.
 buildServerConfig
-  :: Maybe ProjectRoot
+  :: FilePath
+  -> Maybe ProjectRoot
   -> BuildPlan
   -> PackageResolver IO
   -> IO App.ServerConfig
-buildServerConfig mRoot plan resolver = do
+buildServerConfig cacheRoot mRoot plan resolver = do
   let pids     = planPackageIds plan
       packages = concatMap (componentNames plan) pids
   slots <- Slots.initialiseSlots pids
@@ -227,8 +230,8 @@ buildServerConfig mRoot plan resolver = do
         case pidM of
           Nothing  -> pure Nothing
           Just pid -> do
-            dir <- haddockDirFor pid
-            let path = foldl (FP.</>) dir segments
+            let dir = haddockDirFor cacheRoot pid
+                path = foldl (FP.</>) dir segments
             exists <- Dir.doesFileExist path
             if not exists
               then pure Nothing

@@ -23,6 +23,7 @@ import qualified Data.Text.Encoding as Text
 
 import qualified Cabal.Plan as CP
 
+import Hypha.Cache (sourceCacheRoot)
 import qualified Hypha.Hackage.Source as Src
 import qualified Hypha.Project.Components as Comp
 import Hypha.Types.BuildPlan
@@ -47,14 +48,14 @@ data PlanError
 --   through the source cache) we read its @.cabal@ file and stash the
 --   list of library components on the 'PlannedUnit'.  This drives
 --   sub-library indexing in @hypha server@.
-loadBuildPlan :: ProjectRoot -> IO (Either PlanError BuildPlan)
-loadBuildPlan (ProjectRoot root) = do
+loadBuildPlan :: FilePath -> ProjectRoot -> IO (Either PlanError BuildPlan)
+loadBuildPlan cacheRoot (ProjectRoot root) = do
   result <- try @IO @IOException
               (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
   case result of
     Left e   -> pure (Left (PlanNotFound (show e)))
     Right pj -> do
-      cache <- Src.enumerateSourceCache
+      cache <- Src.enumerateSourceCache (sourceCacheRoot cacheRoot)
       units <- unitsFromPlan pj cache
       pure (Right (BuildPlan
         { bpCompiler  = compilerFromPlan pj

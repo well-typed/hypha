@@ -72,6 +72,11 @@ hyphaOptionsParser = HyphaOptions
        <> short 'v'
        <> help "Show debug output"
         )
+  <*> optional (strOption
+        ( long "cache-dir"
+       <> metavar "DIR"
+       <> help "Override cache root (default: XDG)"
+        ))
 
 commandParser :: Parser Command
 commandParser = hsubparser
