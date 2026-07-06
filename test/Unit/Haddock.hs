@@ -16,5 +16,5 @@ tests = testGroup "Haddock"
 testDirNaming :: IO ()
 testDirNaming = do
   let pid = PackageId (PackageName "async") (Version "2.2.5")
-  dir <- haddockDirFor pid
+  let dir = haddockDirFor "/nonexistent/cache/root" pid
   takeFileName dir @?= "async-2.2.5"

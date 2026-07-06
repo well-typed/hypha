@@ -29,7 +29,6 @@ import System.Directory
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Cabal.RepoCache (extractTarballGz)
-import Hypha.Cache (sourceCacheRoot)
 import Hypha.Hackage.Api (HackageClient (..), HackageError (..), sourceTarballUrl, userAgent)
 import Hypha.Types.PackageId (PackageId (..))
 
@@ -78,12 +77,11 @@ fetchAndExtractSource _hclient pid destDir = do
 -- @$XDG_CACHE_HOME/hypha/source/@.  Each entry is keyed by the
 -- @\"pkg-ver\"@ directory name and maps to the absolute path on disk.
 -- Returns 'Map.empty' when the cache directory doesn't exist yet.
-enumerateSourceCache :: IO (Map FilePath FilePath)
-enumerateSourceCache = do
-  dir <- sourceCacheRoot
-  ok  <- doesDirectoryExist dir
+enumerateSourceCache :: FilePath -> IO (Map FilePath FilePath)
+enumerateSourceCache sourceCache = do
+  ok  <- doesDirectoryExist sourceCache
   if not ok
     then pure Map.empty
     else do
-      entries <- listDirectory dir
-      pure (Map.fromList [ (e, dir </> e) | e <- entries ])
+      entries <- listDirectory sourceCache
+      pure (Map.fromList [ (e, sourceCache </> e) | e <- entries ])

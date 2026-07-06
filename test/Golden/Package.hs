@@ -3,6 +3,7 @@ module Golden.Package (tests) where
 
 import qualified Data.ByteString.Lazy as LBS
 import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 import qualified Data.Aeson as Aeson
@@ -37,51 +38,53 @@ tests = testGroup "Golden.Package"
     goldenFile = "test" </> "Golden" </> "golden" </> "package-async.compact.json"
 
 runPackageCommand :: IO LBS.ByteString
-runPackageCommand = do
-  let fixtureDir = "test" </> "fixtures" </> "tiny-project"
-  rootResult <- discoverProjectRoot (Just fixtureDir)
-  case rootResult of
-    Left err -> error $ "Could not discover project root: " ++ show err
-    Right root -> do
-      planResult <- loadBuildPlan root
-      case planResult of
-        Left err -> error $ "Could not load plan: " ++ show err
-        Right plan -> do
-          case runPackage plan "async" of
-            Left err  -> error $ "Package command failed: " ++ show err
-            Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope PackageCmd outcome))
+runPackageCommand =
+  withSystemTempDirectory "hypha-golden-pkg" $ \cacheDir -> do
+    let fixtureDir = "test" </> "fixtures" </> "tiny-project"
+    rootResult <- discoverProjectRoot (Just fixtureDir)
+    case rootResult of
+      Left err -> error $ "Could not discover project root: " ++ show err
+      Right root -> do
+        planResult <- loadBuildPlan cacheDir root
+        case planResult of
+          Left err -> error $ "Could not load plan: " ++ show err
+          Right plan -> do
+            case runPackage plan "async" of
+              Left err  -> error $ "Package command failed: " ++ show err
+              Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope PackageCmd outcome))
 
 runPackageLocalCommand :: IO LBS.ByteString
-runPackageLocalCommand = do
-  let fixtureDir = "test" </> "fixtures" </> "tiny-project"
-  rootResult <- discoverProjectRoot (Just fixtureDir)
-  case rootResult of
-    Left err -> error $ "Could not discover project root: " ++ show err
-    Right root -> do
-      planResult <- loadBuildPlan root
-      case planResult of
-        Left err -> error $ "Could not load plan: " ++ show err
-        Right plan -> do
-          storeDir <- canonicalizePath ("test" </> "fixtures" </> "fake-cabal-store" </> "ghc-9.6.7")
-          eEnv <- Cabal.mkCabalBuildEnv storeDir
-          env <- case eEnv of
-            Right be -> pure be
-            Left _   -> pure nullBuildEnv
-          hclient <- mkOfflineHackageClient
-          resolver <- mkPackageResolver env hclient plan
-          result <- resolvePkg resolver (PackageName "mylib")
-          case result of
-            Left err -> error $ "resolve mylib: " ++ show err
-            Right rp -> do
-              modules <- resolveLocalModules resolver env (rpPkgId rp)
-              let oc = mkSuccessOutcome
+runPackageLocalCommand =
+  withSystemTempDirectory "hypha-golden-pkg-local" $ \cacheDir -> do
+    let fixtureDir = "test" </> "fixtures" </> "tiny-project"
+    rootResult <- discoverProjectRoot (Just fixtureDir)
+    case rootResult of
+      Left err -> error $ "Could not discover project root: " ++ show err
+      Right root -> do
+        planResult <- loadBuildPlan cacheDir root
+        case planResult of
+          Left err -> error $ "Could not load plan: " ++ show err
+          Right plan -> do
+            storeDir <- canonicalizePath ("test" </> "fixtures" </> "fake-cabal-store" </> "ghc-9.6.7")
+            eEnv <- Cabal.mkCabalBuildEnv storeDir
+            env <- case eEnv of
+              Right be -> pure be
+              Left _   -> pure nullBuildEnv
+            hclient <- mkOfflineHackageClient cacheDir
+            resolver <- mkPackageResolver env hclient cacheDir plan
+            result <- resolvePkg resolver (PackageName "mylib")
+            case result of
+              Left err -> error $ "resolve mylib: " ++ show err
+              Right rp -> do
+                modules <- resolveLocalModules resolver env (rpPkgId rp)
+                let oc = mkSuccessOutcome
                         "mylib"
                         (pkgVersion (rpPkgId rp))
                         (rpIsLocal rp)
                         (rpDepsCount rp)
                         (rpOrigin rp)
                         modules
-              pure (Aeson.encode (encodeSuccessEnvelope PackageCmd oc))
+                pure (Aeson.encode (encodeSuccessEnvelope PackageCmd oc))
 
 -- | Resolve modules for a local package by finding its source dir
 -- and parsing the .cabal file.  Uses the plan's puSrcDir for speed.

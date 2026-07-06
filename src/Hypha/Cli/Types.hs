@@ -41,6 +41,8 @@ data HyphaOptions = HyphaOptions
     -- ^ Suppress informational output.
   , hoVerbose           :: !Bool
     -- ^ Show debug output.
+  , hoCacheDir          :: !(Maybe FilePath)
+    -- ^ Override cache root.  'Nothing' → XDG default.
   }
   deriving stock (Show, Eq)
 

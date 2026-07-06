@@ -56,19 +56,20 @@ testDiscoveryIgnoresDotCabalDir =
         Left NoProjectFound{} -> pure ()
 
 testLoadBuildPlan :: TestTree
-testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $ do
-  let fixtureDir = "test" </> "fixtures" </> "tiny-project"
-  result <- loadBuildPlan (ProjectRoot fixtureDir)
-  case result of
-    Left err -> error ("Expected to parse plan, got: " ++ show err)
-    Right bp -> do
-      -- Check compiler
-      bpCompiler bp @?= CompilerId "ghc-9.6.7"
-      -- Check packages
-      lookupPackage (PackageName "async") bp @?= Just (Version "2.2.5")
-      lookupPackage (PackageName "base") bp @?= Just (Version "4.18.3.0")
-      lookupPackage (PackageName "text") bp @?= Just (Version "2.0.2")
-      lookupPackage (PackageName "nonexistent") bp @?= Nothing
+testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $
+  withSystemTempDirectory "hypha-plan" $ \cacheDir -> do
+    let fixtureDir = "test" </> "fixtures" </> "tiny-project"
+    result <- loadBuildPlan cacheDir (ProjectRoot fixtureDir)
+    case result of
+      Left err -> error ("Expected to parse plan, got: " ++ show err)
+      Right bp -> do
+        -- Check compiler
+        bpCompiler bp @?= CompilerId "ghc-9.6.7"
+        -- Check packages
+        lookupPackage (PackageName "async") bp @?= Just (Version "2.2.5")
+        lookupPackage (PackageName "base") bp @?= Just (Version "4.18.3.0")
+        lookupPackage (PackageName "text") bp @?= Just (Version "2.0.2")
+        lookupPackage (PackageName "nonexistent") bp @?= Nothing
 
 testParseOverride :: TestTree
 testParseOverride = testCase "parsePackageOverride parses async=2.2.6" $ do
@@ -80,18 +81,19 @@ testParseOverride = testCase "parsePackageOverride parses async=2.2.6" $ do
       ver @?= Version "2.2.6"
 
 testApplyOverrides :: TestTree
-testApplyOverrides = testCase "applyOverrides changes pinned version in plan" $ do
-  let fixtureDir = "test" </> "fixtures" </> "tiny-project"
-  result <- loadBuildPlan (ProjectRoot fixtureDir)
-  case result of
-    Left err -> error ("Expected to parse plan, got: " ++ show err)
-    Right bp -> do
-      -- Override async from 2.2.5 to 2.2.6
-      let override = PackageOverride (PackageName "async") (Version "2.2.6")
-          bp' = applyOverrides [override] bp
-      -- Check that the override took effect
-      lookupPackage (PackageName "async") bp' @?= Just (Version "2.2.6")
-      -- Check that other packages are unchanged
-      lookupPackage (PackageName "base") bp' @?= Just (Version "4.18.3.0")
-      -- Check that overrides are recorded
-      bpOverrides bp' @?= [override]
+testApplyOverrides = testCase "applyOverrides changes pinned version in plan" $
+  withSystemTempDirectory "hypha-plan" $ \cacheDir -> do
+    let fixtureDir = "test" </> "fixtures" </> "tiny-project"
+    result <- loadBuildPlan cacheDir (ProjectRoot fixtureDir)
+    case result of
+      Left err -> error ("Expected to parse plan, got: " ++ show err)
+      Right bp -> do
+        -- Override async from 2.2.5 to 2.2.6
+        let override = PackageOverride (PackageName "async") (Version "2.2.6")
+            bp' = applyOverrides [override] bp
+        -- Check that the override took effect
+        lookupPackage (PackageName "async") bp' @?= Just (Version "2.2.6")
+        -- Check that other packages are unchanged
+        lookupPackage (PackageName "base") bp' @?= Just (Version "4.18.3.0")
+        -- Check that overrides are recorded
+        bpOverrides bp' @?= [override]

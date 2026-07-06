@@ -38,7 +38,7 @@ import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import qualified Hypha.Cabal.RepoCache as RepoCache
-import Hypha.Cache (cacheRoot)
+import Hypha.Cache (sourceCacheRoot)
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import qualified Hypha.Hackage.Api as Hackage
 import Hypha.Hackage.Api (HackageClient (..), HackageError (..))
@@ -105,10 +105,11 @@ resolveRef _  (PackageRef name (Just v)) = pure $ Right ResolvedPackage
 mkPackageResolver
   :: BuildEnv IO
   -> HackageClient IO
+  -> FilePath     -- ^ cache root (for source cache)
   -> BuildPlan
   -> IO (PackageResolver IO)
-mkPackageResolver env hclient plan = do
-  sourceCache <- (</> "source") <$> cacheRoot
+mkPackageResolver env hclient cacheRoot plan = do
+  let sourceCache = sourceCacheRoot cacheRoot
   createDirectoryIfMissing True sourceCache
   pure PackageResolver
     { resolvePkg = resolvePackageWith env hclient plan

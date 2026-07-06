@@ -146,33 +146,33 @@ throttle limiter = do
           else pure (Just now)
 
 -- | Create an online HackageClient.
-mkHackageClient :: Manager -> IO (HackageClient IO)
-mkHackageClient manager = do
+mkHackageClient :: Manager -> FilePath -> IO (HackageClient IO)
+mkHackageClient manager cacheDir = do
   limiter <- newRateLimiter (secondsToNominalDiffTime 1)
   pure HackageClient
     { fetchPackageJson = \pkgName -> do
         throttle limiter
-        fetchPackageJsonOnline manager pkgName
+        fetchPackageJsonOnline manager cacheDir pkgName
     , fetchVersions = \pkgName -> do
         throttle limiter
-        fetchVersionsOnline manager pkgName
+        fetchVersionsOnline manager cacheDir pkgName
     }
 
 -- | Create an offline HackageClient that serves only from the on-disk cache.
 -- A cache miss yields a typed 'OfflineCacheMiss' error.
-mkOfflineHackageClient :: IO (HackageClient IO)
-mkOfflineHackageClient = pure HackageClient
+mkOfflineHackageClient :: FilePath -> IO (HackageClient IO)
+mkOfflineHackageClient cacheDir = pure HackageClient
   { fetchPackageJson = \pkgName -> do
       let url = packageJsonUrl pkgName
       cacheKey <- Cache.mkCacheKey url
-      mCached  <- Cache.lookupCache cacheKey
+      mCached  <- Cache.lookupCache cacheDir cacheKey
       case mCached of
         Nothing  -> pure (Left (OfflineCacheMiss pkgName))
         Just cr  -> pure (decodeJsonBody cr)
   , fetchVersions = \pkgName -> do
       let url = preferredVersionsUrl pkgName
       cacheKey <- Cache.mkCacheKey url
-      mCached  <- Cache.lookupCache cacheKey
+      mCached  <- Cache.lookupCache cacheDir cacheKey
       case mCached of
         Nothing -> pure (Left (OfflineCacheMiss pkgName))
         Just cr -> pure (Right (parseVersions (crBody cr)))
@@ -199,13 +199,13 @@ decodeJsonBody cr = case decode (LBS.fromStrict (crBody cr)) of
   Nothing -> Left (DecodeError "failed to decode cached package JSON")
 
 -- | Fetch package JSON from Hackage with cache revalidation.
-fetchPackageJsonOnline :: Manager -> PackageName -> IO (Either HackageError Value)
-fetchPackageJsonOnline manager pkgName = do
+fetchPackageJsonOnline :: Manager -> FilePath -> PackageName -> IO (Either HackageError Value)
+fetchPackageJsonOnline manager cacheDir pkgName = do
   let url = packageJsonUrl pkgName
   cacheKey <- Cache.mkCacheKey url
-  cached <- Cache.lookupCache cacheKey
+  cached <- Cache.lookupCache cacheDir cacheKey
   case cached of
-    Nothing -> fetchAndCache manager url cacheKey (TtlMutable (secondsToNominalDiffTime 900)) Nothing Nothing decodeJsonBytes
+    Nothing -> fetchAndCache manager cacheDir url cacheKey (TtlMutable (secondsToNominalDiffTime 900)) Nothing Nothing decodeJsonBytes
     Just cr -> do
       fresh <- Cache.isFresh cr
       if fresh
@@ -215,12 +215,12 @@ fetchPackageJsonOnline manager pkgName = do
           case mRefreshed of
             Left e             -> pure (Left e)
             Right StillValid   -> do
-              touchCache cacheKey cr
+              touchCache cacheDir cacheKey cr
               pure (decodeJsonBody cr)
             Right (Refreshed bs et lm) -> do
               now <- getCurrentTime
               let cr' = CachedResponse et lm now bs (TtlMutable (secondsToNominalDiffTime 900))
-              Cache.insertCache cacheKey cr'
+              Cache.insertCache cacheDir cacheKey cr'
               pure (decodeJsonBody cr')
   where
     decodeJsonBytes bs = case decode (LBS.fromStrict bs) of
@@ -231,9 +231,9 @@ fetchPackageJsonOnline manager pkgName = do
 -- package's JSON metadata (the @{name}.json@ endpoint exposes a
 -- @normal@/@deprecated@ map keyed by version).  This is more reliable than
 -- the legacy @/preferred@ text file, which a maintainer may not have set.
-fetchVersionsOnline :: Manager -> PackageName -> IO (Either HackageError [Version])
-fetchVersionsOnline manager pkgName = do
-  result <- fetchPackageJsonOnline manager pkgName
+fetchVersionsOnline :: Manager -> FilePath -> PackageName -> IO (Either HackageError [Version])
+fetchVersionsOnline manager cacheDir pkgName = do
+  result <- fetchPackageJsonOnline manager cacheDir pkgName
   pure (fmap extractVersionList result)
 
 -- | Pull every version key out of a package.json response.  Hackage's
@@ -317,6 +317,7 @@ backoffAndRetry manager url mEtag mLastMod = do
 -- | Fetch a URL fresh and store it in the cache; then decode.
 fetchAndCache
   :: Manager
+  -> FilePath
   -> String
   -> Cache.CacheKey
   -> CacheKind
@@ -324,7 +325,7 @@ fetchAndCache
   -> Maybe UTCTime
   -> (BS.ByteString -> Either HackageError a)
   -> IO (Either HackageError a)
-fetchAndCache manager url cacheKey kind _ _ decode_ = do
+fetchAndCache manager cacheDir url cacheKey kind _ _ decode_ = do
   r <- revalidate manager url Nothing Nothing
   case r of
     Left e              -> pure (Left e)
@@ -332,15 +333,15 @@ fetchAndCache manager url cacheKey kind _ _ decode_ = do
     Right (Refreshed bs et lm) -> do
       now <- getCurrentTime
       let cr = CachedResponse et lm now bs kind
-      Cache.insertCache cacheKey cr
+      Cache.insertCache cacheDir cacheKey cr
       pure (decode_ bs)
 
 -- | Persist a freshness-only touch (re-stamp 'storedAt' to defer the next
 -- conditional GET).
-touchCache :: Cache.CacheKey -> CachedResponse -> IO ()
-touchCache key cr = do
+touchCache :: FilePath -> Cache.CacheKey -> CachedResponse -> IO ()
+touchCache cacheDir key cr = do
   now <- getCurrentTime
-  Cache.insertCache key (cr { crStoredAt = now })
+  Cache.insertCache cacheDir key (cr { crStoredAt = now })
 
 -- | Parse versions from the preferred-versions file.  The file is a
 -- @cabal@-syntax constraint expression.  Lines look like
