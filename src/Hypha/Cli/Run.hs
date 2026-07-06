@@ -53,7 +53,7 @@ import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient
 import Hypha.Hoogle.Local qualified as HogLocal
 import Hypha.Hoogle.Remote qualified as HogRemote
 import Hypha.Hoogle.Type (HoogleQuery (..))
-import Hypha.Logging (Tracer, LogEvent (..), silentTracer, verboseTracer)
+import Hypha.Logging (LogEvent (..))
 import Hypha.Output.Json
 import Hypha.Output.Outcome
 import Hypha.Package.Resolver
@@ -74,15 +74,8 @@ import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO (IOMode (..), hClose, hFlush, hPutStrLn, stderr, stdout, withFile)
 import System.Process (readProcessWithExitCode)
 
-newTracer :: MonadIO m => HyphaM m (Tracer (HyphaM m))
-newTracer = do
-  opts <- askOpts
-  pure $ if hoVerbose opts then verboseTracer else silentTracer
-
-traceStart :: MonadIO m => HyphaM m ()
-traceStart = do
-  tracer <- newTracer
-  tracer (LogInfo "starting hypha")
+traceStart :: Monad m => HyphaM m ()
+traceStart = trace (LogInfo "starting hypha")
 
 -- | Client-command lifecycle: run the command, emit exactly one JSON
 -- envelope on stdout (or, with @--human@, a terminal rendering of the

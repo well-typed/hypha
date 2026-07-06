@@ -4,7 +4,9 @@ module Hypha.Types (
     HyphaM(..)
   , Hypha
   , runHypha
+  , HyphaEnv(..)
   , askOpts
+  , trace
   , mapEitherIO
   , liftEitherIO
   , module Control.Monad.Reader
@@ -15,23 +17,47 @@ import Control.Monad.Reader
 import Control.Monad.Except
 import Hypha.Cli.Types
 import Hypha.Error
+import Hypha.Logging (Tracer, LogEvent, silentTracer, verboseTracer)
 
--- | The hypha CLI monad: the parsed 'HyphaOptions' in a reader, typed
--- failure via 'HyphaError'.
-newtype HyphaM m a = HyphaM { _HyphaM :: ReaderT HyphaOptions (ExceptT HyphaError m) a }
+-- | Environment carried by 'HyphaM'.
+data HyphaEnv m = HyphaEnv
+  { heOptions :: !HyphaOptions
+  , heTracer  :: Tracer m
+  }
+
+-- | The hypha CLI monad: 'HyphaEnv' in a reader, typed failure via
+-- 'HyphaError'.
+newtype HyphaM m a = HyphaM { _HyphaM :: ReaderT (HyphaEnv m) (ExceptT HyphaError m) a }
   deriving newtype
     ( Functor, Applicative, Monad
-    , MonadReader HyphaOptions, MonadError HyphaError, MonadIO
+    , MonadReader (HyphaEnv m), MonadError HyphaError, MonadIO
     )
+
+instance MonadTrans HyphaM where
+  lift = HyphaM . lift . lift
 
 type Hypha = HyphaM IO
 
-runHypha :: HyphaOptions -> HyphaM m a -> m (Either HyphaError a)
-runHypha opts (HyphaM m) = runExceptT (runReaderT m opts)
+-- | Construct the environment and run a 'HyphaM' computation to
+-- completion.  The tracer is chosen once, here, based on the
+-- @--verbose@ flag — no per-call allocation.
+runHypha :: MonadIO m => HyphaOptions -> HyphaM m a -> m (Either HyphaError a)
+runHypha opts (HyphaM m) =
+  runExceptT (runReaderT m env)
+  where
+    env = HyphaEnv opts (if hoVerbose opts then verboseTracer else silentTracer)
 
 -- | Get the 'HyphaOptions' from the environment.
-askOpts :: MonadReader HyphaOptions m => m HyphaOptions
-askOpts = ask
+askOpts :: MonadReader (HyphaEnv m) m' => m' HyphaOptions
+askOpts = asks heOptions
+
+-- | Trace a 'LogEvent' using the 'Tracer' stored in the environment.
+-- The tracer runs in the base monad @m@; 'lift' (via 'MonadTrans')
+-- hoists it into 'HyphaM'.
+trace :: Monad m => LogEvent -> HyphaM m ()
+trace event = do
+  env <- ask
+  lift (heTracer env event)
 
 -- | Distant cousin in spirit of 'withExcept' and 'mapExcept'.
 -- Run an 'IO' action that reports failure as 'Either', injecting the
