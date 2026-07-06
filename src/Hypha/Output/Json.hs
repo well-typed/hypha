@@ -7,6 +7,7 @@ module Hypha.Output.Json
   , defaultEnvelopeOpts
   , encodeSuccessEnvelope
   , encodeErrorEnvelope
+  , encodeInternalErrorEnvelope
   , encodeOutcomeEnvelope
   , encodeOutcomeBytes
   , encodeEnvelopeValue
@@ -30,7 +31,7 @@ import qualified Data.Text as Text
 import Hypha.Cli.Types
 import Hypha.Error
   ( HyphaError, errorActions, errorCode, errorExitCode, errorMessage )
-import Hypha.Exit (unExitCode)
+import Hypha.Exit (exitInternalError, unExitCode)
 import Hypha.Output.Outcome (Outcome (..))
 
 -- | Two field-set variants: compact (default) and full (--full).
@@ -94,6 +95,28 @@ encodeErrorEnvelope cmdName err =
            ]
        ]
     <> [ "actions" .= errorActions err | not (Map.null (errorActions err)) ]
+
+-- | Build the envelope 'Value' for a crash — an exception that escaped
+-- the library rather than a reified 'HyphaError'.  The command field
+-- is 'Data.Text.Text' rather than a tag because one caller
+-- (@hypha-mcp@'s last-resort handler) has no parsed command and uses
+-- the @\"<internal>\"@ sentinel; CLI callers pass
+-- 'Hypha.Cli.Types.commandName' of the real tag.  The exit code is
+-- pinned to 'exitInternalError' — by definition there is no typed
+-- error to derive one from.
+encodeInternalErrorEnvelope
+  :: Text  -- ^ command field
+  -> Text  -- ^ rendered exception
+  -> Value
+encodeInternalErrorEnvelope cmdName msg =
+  object $
+    envelopeHeader cmdName False
+    <> [ "error" .= object
+           [ "code"      .= ("INTERNAL_ERROR" :: Text)
+           , "message"   .= msg
+           , "exit_code" .= unExitCode exitInternalError
+           ]
+       ]
 
 -- | Build the envelope 'Value' /post-projection/.  The result is
 -- structurally identical to what 'encodeOutcomeBytes' would write to

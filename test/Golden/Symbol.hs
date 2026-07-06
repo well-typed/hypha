@@ -20,7 +20,7 @@ import Hypha.Output.Json (encodeSuccessEnvelope)
 import Hypha.Output.Outcome (Outcome)
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Plan (loadBuildPlan)
-import Hypha.Types (liftEitherIO)
+import Hypha.Types (mapEitherIO)
 import Hypha.Types.PackageId (Version (..))
 
 -- | Mock BuildEnv that points to the fixture source directory.
@@ -57,7 +57,7 @@ runSymbolCommand = do
 
     pipeline :: ExceptT HyphaError IO (Outcome Value)
     pipeline = do
-      root <- liftEitherIO DiscoveryFailure (discoverProjectRoot (Just fixtureDir))
-      plan <- liftEitherIO (PlanFailure root) (loadBuildPlan root)
+      root <- mapEitherIO DiscoveryFailure (discoverProjectRoot (Just fixtureDir))
+      plan <- mapEitherIO (PlanFailure root) (loadBuildPlan root)
       let env = mockBuildEnv asyncDir
       ExceptT (liftIO (runSymbol env plan "async/Control.Concurrent.Async/concurrently"))

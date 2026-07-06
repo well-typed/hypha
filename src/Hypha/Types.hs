@@ -5,6 +5,7 @@ module Hypha.Types (
   , Hypha
   , runHypha
   , askOpts
+  , mapEitherIO
   , liftEitherIO
   , module Control.Monad.Reader
   , module Control.Monad.Except
@@ -16,10 +17,7 @@ import Hypha.Cli.Types
 import Hypha.Error
 
 -- | The hypha CLI monad: the parsed 'HyphaOptions' in a reader, typed
--- failure via 'HyphaError'.  The error carries no command tag — the tag
--- is a pure function of the parsed 'Command', so @Main@ attaches it at
--- the rendering boundary ('Hypha.Cli.Run.processError') instead of the
--- monad threading it through every computation.
+-- failure via 'HyphaError'.
 newtype HyphaM m a = HyphaM { _HyphaM :: ReaderT HyphaOptions (ExceptT HyphaError m) a }
   deriving newtype
     ( Functor, Applicative, Monad
@@ -35,15 +33,17 @@ runHypha opts (HyphaM m) = runExceptT (runReaderT m opts)
 askOpts :: MonadReader HyphaOptions m => m HyphaOptions
 askOpts = ask
 
--- | Run an 'IO' action that reports failure as 'Either', injecting the
+-- | Distant cousin in spirit of 'withExcept' and 'mapExcept'.
+-- Run an 'IO' action that reports failure as 'Either', injecting the
 -- error into the caller's 'MonadError' channel.  The injection function
 -- names how the boundary error maps into the umbrella error type, e.g.
 --
--- > root <- liftEitherIO DiscoveryFailure (discoverProjectRoot mDir)
+-- > root <- mapEitherIO DiscoveryFailure (discoverProjectRoot mDir)
 --
--- Use @liftEitherIO id@ when the action already fails with the target
+-- Use @mapEitherIO id@ when the action already fails with the target
 -- error type.
-liftEitherIO
-  :: (MonadIO m, MonadError err m)
-  => (e -> err) -> IO (Either e a) -> m a
-liftEitherIO inj action = liftIO action >>= either (throwError . inj) pure
+mapEitherIO :: (MonadIO m, MonadError err m) => (e -> err) -> IO (Either e a) -> m a
+mapEitherIO inj action = liftIO action >>= either (throwError . inj) pure
+
+liftEitherIO :: (MonadIO m, MonadError e m) => IO (Either e a) -> m a
+liftEitherIO = mapEitherIO id

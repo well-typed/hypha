@@ -1,67 +1,93 @@
-{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
--- | Regression coverage for the top-level @catchAny@ in the @hypha@
--- binary.  @System.exitWith@ — and @optparse-applicative@ on
--- @--help@/@--version@ — signal a clean exit by /raising/ an
--- 'ExitCode' exception.  Because 'Control.Exception.Safe.handleAny'
--- catches every synchronous exception, that signal previously landed
--- in 'reportInternalError', producing a spurious second envelope on
--- stdout and an @INTERNAL_ERROR: ExitSuccess@ line on stderr at the
--- end of every successful command.
+-- | Regression coverage for the internal-error path.
 --
--- 'topLevelHandler' filters 'ExitCode' out of the handler so it
--- propagates to the runtime untouched; only genuine crashes are
--- rendered via 'reportInternalError'.  These tests pin that contract
--- so the regression cannot re-emerge unnoticed.
+-- Historical context: the @hypha@ binary used to wrap its /entire/
+-- 'main' in @catchAny@, which also caught the 'System.ExitCode'
+-- exceptions raised by @System.exitWith@ and by @optparse-applicative@
+-- on @--help@ — producing a spurious second @INTERNAL_ERROR@ envelope
+-- after every successful command.  The handler grew a @fromException@
+-- re-throw dance to compensate.
+--
+-- The current design makes that dance unnecessary by construction:
+-- 'Hypha.Cli.Run.runClientMain' / 'runServerMain' guard only the
+-- 'runHypha' computation with 'Control.Exception.Safe.tryAny', and
+-- nothing inside that region calls @System.exit*@ — rendering and
+-- process exit happen outside it.  What remains to pin here:
+--
+-- 1. the shape of the @INTERNAL_ERROR@ envelope, and
+-- 2. that both internal-error renderers terminate with the dedicated
+--    'exitInternalError' code (exit 9), never return.
 module Unit.InternalError (tests) where
 
 import Control.Exception      (ErrorCall (..), toException, try)
+import qualified Data.Aeson   as Aeson
+import qualified Data.Aeson.KeyMap as KM
 import qualified System.Exit  as System
 
 import Test.Tasty       (TestTree, testGroup)
-import Test.Tasty.HUnit (assertFailure, testCase)
+import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 
-import Hypha.Cli.Run (topLevelHandler)
+import Hypha.Cli.Run     (processInternalError, reportInternalError)
+import Hypha.Cli.Types
+  ( ClientCommandTag (..), CommandTag (..), HyphaOptions (..) )
+import Hypha.Exit        (exitInternalError, unExitCode)
+import Hypha.Output.Json (encodeInternalErrorEnvelope)
+
+-- | Options as parsed with no flags given.
+plainOptions :: HyphaOptions
+plainOptions = HyphaOptions
+  { hoProjectDir       = Nothing
+  , hoPackageOverrides = []
+  , hoOffline          = False
+  , hoHuman            = False
+  , hoPrettyJson       = False
+  , hoFull             = False
+  , hoSelect           = Nothing
+  , hoQuiet            = False
+  , hoVerbose          = False
+  }
 
 tests :: TestTree
 tests = testGroup "Unit.InternalError"
-  [ testCase "topLevelHandler re-throws ExitSuccess verbatim" $ do
-      r <- try (topLevelHandler (toException System.ExitSuccess))
-      case r of
-        Left System.ExitSuccess -> pure ()
-        Left other ->
-          assertFailure ("expected ExitSuccess, got " <> show other)
-        Right () ->
-          assertFailure
-            "ExitSuccess was swallowed instead of being re-thrown — \
-            \this is the regression that caused the spurious \
-            \INTERNAL_ERROR envelope on every successful command."
+  [ testCase "INTERNAL_ERROR envelope carries command, code and exit 9" $ do
+      let envelope = encodeInternalErrorEnvelope "lookup" "boom"
+      case envelope of
+        Aeson.Object obj -> do
+          KM.lookup "schema"  obj @?= Just (Aeson.String "hypha/v0")
+          KM.lookup "command" obj @?= Just (Aeson.String "lookup")
+          KM.lookup "ok"      obj @?= Just (Aeson.Bool False)
+          case KM.lookup "error" obj of
+            Just (Aeson.Object err) -> do
+              KM.lookup "code"    err @?= Just (Aeson.String "INTERNAL_ERROR")
+              KM.lookup "message" err @?= Just (Aeson.String "boom")
+              KM.lookup "exit_code" err
+                @?= Just (Aeson.Number
+                            (fromIntegral (unExitCode exitInternalError)))
+            other -> assertFailure ("no error object: " <> show other)
+        other -> assertFailure ("envelope is not an object: " <> show other)
 
-  , testCase "topLevelHandler re-throws ExitFailure verbatim" $ do
-      let ec = System.ExitFailure 7
-      r <- try (topLevelHandler (toException ec))
-      case r of
-        Left e | e == ec -> pure ()
-        Left other ->
-          assertFailure ("expected " <> show ec <> ", got " <> show other)
-        Right () ->
-          assertFailure "ExitFailure was swallowed instead of being re-thrown"
+  , testCase "processInternalError terminates with exitInternalError" $ do
+      let crash = toException (ErrorCall "synthetic crash\n")
+      r <- try (processInternalError plainOptions (ClientTag LookupCmd) crash)
+      assertInternalExit r
 
-  , testCase "non-ExitCode crash routed to INTERNAL_ERROR path" $ do
-      -- reportInternalError prints its envelope and then calls
-      -- System.exitWith exitInternalError, so from the test's
-      -- perspective topLevelHandler raises an 'ExitCode' (an
-      -- ExitFailure carrying 'exitInternalError') rather than
-      -- returning.  We pin only the rethrown ExitCode shape here;
-      -- the verbatim-rethrow tests above distinguish the
-      -- "intended exit" path from this "we crashed" path because the
-      -- input exception there is 'System.ExitSuccess' while here it
-      -- is an 'ErrorCall'.
-      r <- try (topLevelHandler (toException (ErrorCall "synthetic crash")))
-      case r of
-        Left (_ :: System.ExitCode) -> pure ()
-        Right () ->
-          assertFailure
-            "non-ExitCode crash returned normally — \
-            \topLevelHandler must always terminate with an ExitCode."
+  , testCase "reportInternalError terminates with exitInternalError" $ do
+      let crash = toException (ErrorCall "synthetic crash\n")
+      r <- try (reportInternalError crash)
+      assertInternalExit r
   ]
+
+-- | Both internal-error renderers must end in
+-- @exitWith (toSystemExitCode exitInternalError)@ — i.e. from the
+-- caller's perspective they raise @ExitFailure 9@ and never return.
+assertInternalExit :: Either System.ExitCode () -> IO ()
+assertInternalExit r = case r of
+  Left (System.ExitFailure n)
+    | n == unExitCode exitInternalError -> pure ()
+    | otherwise ->
+        assertFailure ("wrong exit code: " <> show n)
+  Left System.ExitSuccess ->
+    assertFailure "internal error exited with success"
+  Right () ->
+    assertFailure "internal-error renderer returned instead of exiting"

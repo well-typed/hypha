@@ -4,19 +4,19 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications    #-}
 module Hypha.Cli.Run
-  ( -- * Execution
-    runCli
-  , topLevelHandler
+  ( -- * Command lifecycles
+    runClientMain
+  , runServerMain
+    -- * Last-resort crash rendering (shared with the hypha-mcp binary)
   , reportInternalError
-  , processError
-  , processOutcome
     -- * Internals exposed for testing
+  , processInternalError
   , runClientCommand
   , humanFromValue
   ) where
 
-import Control.Exception (displayException, fromException, throwIO)
-import Control.Exception.Safe (SomeException, bracket, try)
+import Control.Exception (IOException, displayException)
+import Control.Exception.Safe (SomeException (..), bracket, try, tryAny)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KM
@@ -48,7 +48,7 @@ import Hypha.Command.Source qualified as Source
 import Hypha.Command.Symbol qualified as Symbol
 import Hypha.Command.Versions qualified as Versions
 import Hypha.Error
-import Hypha.Exit (exitInternalError, toSystemExitCode, unExitCode)
+import Hypha.Exit (exitInternalError, toSystemExitCode)
 import Hypha.Hackage.Api (HackageClient, mkHackageClient, mkOfflineHackageClient)
 import Hypha.Hoogle.Local qualified as HogLocal
 import Hypha.Hoogle.Remote qualified as HogRemote
@@ -79,18 +79,37 @@ newTracer = do
   opts <- askOpts
   pure $ if hoVerbose opts then verboseTracer else silentTracer
 
--- | Top-level entry point.  Wires options and the chosen subcommand to
--- their handlers and emits exactly one JSON envelope (or, with @--human@, a
--- terminal-friendly rendering of the same content).
-runCli :: Command -> Hypha (Outcome Value)
-runCli cmd = do
+traceStart :: MonadIO m => HyphaM m ()
+traceStart = do
   tracer <- newTracer
   tracer (LogInfo "starting hypha")
-  case cmd of
-    ServerCommands (ServerCommand port mBind prebuild jobs) ->
-      runServerInteractive port mBind prebuild jobs
-    ClientCommands ccmd ->
-      runClientCommand ccmd
+
+-- | Client-command lifecycle: run the command, emit exactly one JSON
+-- envelope on stdout (or, with @--human@, a terminal rendering of the
+-- same 'Value'), exit with the typed code.
+runClientMain :: HyphaOptions -> ClientCommand -> IO ()
+runClientMain opts ccmd = do
+  result <- tryAny (runHypha opts (traceStart *> runClientCommand ccmd))
+  case result of
+    Left exc          -> processInternalError opts tag exc
+    Right (Left err)  -> processError opts tag err
+    Right (Right oc)  -> processOutcome opts oc
+  where
+    tag = ClientTag (clientCommandTag ccmd)
+
+-- | Server lifecycle: no 'Outcome', no success envelope — the server
+-- blocks inside Warp and a clean return is a clean shutdown.  Errors
+-- still get the structured treatment: reified failures ('HyphaError',
+-- e.g. a malformed @--bind@) render an error envelope tagged
+-- @\"server\"@, and escaped exceptions render @INTERNAL_ERROR@.
+runServerMain :: HyphaOptions -> ServerCommand -> IO ()
+runServerMain opts (ServerCommand port mBind prebuild jobs) = do
+  result <- tryAny . runHypha opts $
+    traceStart *> runServerInteractive port mBind prebuild jobs
+  case result of
+    Left exc         -> processInternalError opts ServerTag exc
+    Right (Left err) -> processError opts ServerTag err
+    Right (Right ()) -> pure ()
 
 -- | Load the project root + build plan (with overrides applied).
 -- Used by command arms that need a typed plan but do not need full
@@ -98,8 +117,8 @@ runCli cmd = do
 loadPlan :: Hypha (ProjectRoot, BuildPlan)
 loadPlan = do
   opts      <- askOpts
-  root      <- liftEitherIO DiscoveryFailure (discoverProjectRoot (hoProjectDir opts))
-  rawPlan   <- liftEitherIO (PlanFailure root) (loadBuildPlan root)
+  root      <- mapEitherIO DiscoveryFailure (discoverProjectRoot (hoProjectDir opts))
+  rawPlan   <- mapEitherIO (PlanFailure root) (loadBuildPlan root)
   overrides <- collectOverrides (hoPackageOverrides opts)
   pure (root, applyOverrides overrides rawPlan)
 
@@ -266,10 +285,12 @@ enumerateStoreGhcDirs storeBase = do
 
 -- | Sniff the active GHC's version by running @ghc --numeric-version@
 -- on @PATH@.  Returns 'Nothing' if @ghc@ is not on @PATH@ or returns
--- an unexpected exit code.
+-- an unexpected exit code.  Only 'IOException' is caught — that is
+-- what a missing binary raises; anything else is a genuine crash and
+-- must reach the internal-error path.
 detectGhcVersionFromPath :: IO (Maybe Text)
 detectGhcVersionFromPath = do
-  r <- try @IO @SomeException
+  r <- try @IO @IOException
          (readProcessWithExitCode "ghc" ["--numeric-version"] "")
   case r of
     Right (System.ExitSuccess, out, _) ->
@@ -294,7 +315,7 @@ runClientCommand = \case
   PackageCommand rawArg -> do
     let ref = parsePackageRef rawArg
     (resolver, env) <- loadResolver
-    rp       <- liftEitherIO id (resolveRef resolver ref)
+    rp       <- liftEitherIO (resolveRef resolver ref)
     modules0 <- liftIO (resolveExposedModules resolver env (rpPkgId rp))
     pure $ Package.mkSuccessOutcome
       (unPackageName (refName ref))
@@ -324,15 +345,15 @@ runClientCommand = \case
   ModuleCommand arg -> do
     (pkgT, modPath)  <- parsePkgMod arg
     (resolver, _env) <- loadResolver
-    rp <- liftEitherIO id (resolveRef resolver (parsePackageRef pkgT))
+    rp <- liftEitherIO (resolveRef resolver (parsePackageRef pkgT))
     let pid = rpPkgId rp
-    d  <- liftEitherIO id (resolveSrc resolver pid)
+    d  <- liftEitherIO (resolveSrc resolver pid)
     oc <- liftIO (Module.runModuleFromDir d pid modPath)
     pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
   SymbolCommand arg -> do
     (resolver, env) <- loadResolver
-    liftEitherIO id (Symbol.runSymbolWith env resolver arg)
+    liftEitherIO (Symbol.runSymbolWith env resolver arg)
 
   SourceCommand arg -> do
     (pkgT, modPath, mSym) <- parsePkgModOptSym arg
@@ -361,8 +382,11 @@ parsePkgModOptSym arg = case Text.splitOn "/" arg of
   _                   -> throwError (UserError (UserExpectedPkgModOptSym arg))
 
 -- | Server interactive arm.  Refuses non-loopback binds with exit 2; on
--- successful bind it blocks inside Warp until interrupted.
-runServerInteractive :: Int -> Maybe Text -> Bool -> Int -> Hypha a
+-- successful bind it blocks inside Warp until interrupted.  Returning
+-- @()@ means Warp shut down cleanly — 'runServerMain' turns that into
+-- a normal process exit, so no @System.exit*@ is ever raised inside
+-- the guarded region.
+runServerInteractive :: Int -> Maybe Text -> Bool -> Int -> Hypha ()
 runServerInteractive port mBind prebuild jobs = do
   ba              <- bindAddrFromFlags port mBind
   (mRoot, plan0)  <- loadProjectAndPlan
@@ -371,9 +395,8 @@ runServerInteractive port mBind prebuild jobs = do
   plan            <- liftIO (enrichPlanFromStore env plan0)
   resolver        <- liftIO (mkPackageResolver env hclient plan)
   let serverOpts = Server.ServerOpts ba prebuild (fromIntegral (max 1 jobs))
-  liftEitherIO (UserError . UserBindError)
+  mapEitherIO (UserError . UserBindError)
     (Server.runServer mRoot plan env resolver serverOpts)
-  liftIO System.exitSuccess
 
 -- | Resolve the @--bind@ / @--port@ flags.  Malformed binds map to
 -- 'UserError' so the exit code (2) matches user-input failures.
@@ -394,10 +417,10 @@ runSourceArm
   :: PackageRef -> Text -> Maybe Text -> Hypha (Outcome Value)
 runSourceArm ref modPath mSym = do
   (resolver, env) <- loadResolver
-  rp  <- liftEitherIO id (resolveRef resolver ref)
+  rp  <- liftEitherIO (resolveRef resolver ref)
   let pid = rpPkgId rp
-  dir <- liftEitherIO id (resolveSrc resolver pid)
-  oc  <- liftEitherIO id (Source.runSourceFromDir env pid dir modPath mSym)
+  dir <- liftEitherIO (resolveSrc resolver pid)
+  oc  <- liftEitherIO (Source.runSourceFromDir env pid dir modPath mSym)
   pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
 -- | Drive the tiered @lookup@ command.  Builds the package cache
@@ -453,13 +476,13 @@ runLookupCommand q = do
               { HogRemote.roOffline = hoOffline opts }
         , Lookup.loPrepareLocal = prepLocal
         }
-  liftEitherIO id (Lookup.runLookup cache hoogleLocal lookupOpts (HoogleQuery q))
+  liftEitherIO (Lookup.runLookup cache hoogleLocal lookupOpts (HoogleQuery q))
 
 -- | Materialise the project Hoogle DB: load the plan, derive a
 -- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),
--- enumerate the units, and call 'ensureFresh'.  Failures along the
--- way are swallowed silently — Tier 2 is best-effort, the cascade
--- still works without it.
+-- enumerate the units, and call 'ensureFresh'.  Tier 2 is
+-- best-effort: failures do not abort the lookup, but every one is
+-- announced on @stderr@ (see the body).
 ensureProjectHoogle
   :: FilePath          -- ^ store root
   -> FilePath          -- ^ dist doc root
@@ -586,7 +609,7 @@ defaultStoreRoot = do
 -- not on PATH; scavenging treats that as \"disabled\".
 defaultDistDocRoot :: IO FilePath
 defaultDistDocRoot = do
-  r <- try @IO @SomeException (readProcessWithExitCode "ghc"
+  r <- try @IO @IOException (readProcessWithExitCode "ghc"
          ["--print-libdir"] "")
   case r of
     Right (System.ExitSuccess, out, _) -> do
@@ -704,86 +727,90 @@ resolveExposedModules resolver env pid = do
           pure []
         Right dir -> Comp.getExposedModules dir
 
--- | Emit a successful outcome to stdout, honouring all output-shaping
--- options, then exit with success.  Error handling is /not/ this
--- function's job — errors propagate through 'Hypha' via 'throwHypha'
--- and are handled in @Main@ where 'runHypha' returns 'Left'.
-processOutcome :: HyphaOptions -> Outcome Value -> IO ()
-processOutcome opts outcome = do
-  let cmd = outcomeTag outcome
-      compact = compactKeysFor cmd
-      full    = fullKeysFor cmd
-      envOpts = EnvelopeOpts
-                  { eoFull       = hoFull opts
-                  , eoSelect     = maybe [] parseSelectList (hoSelect opts)
-                  , eoPrettyJson = hoPrettyJson opts
-                  }
-      envelope = encodeOutcomeEnvelope envOpts cmd compact full outcome
+-- | Envelope-shaping options derived from the global flags.
+envelopeOptsFor :: HyphaOptions -> EnvelopeOpts
+envelopeOptsFor opts = EnvelopeOpts
+  { eoFull       = hoFull opts
+  , eoSelect     = maybe [] parseSelectList (hoSelect opts)
+  , eoPrettyJson = hoPrettyJson opts
+  }
+
+-- | Write a pre-built envelope 'Value' to stdout — JSON by default,
+-- the human rendering of the /same/ 'Value' under @--human@ — and
+-- flush.  Every terminal envelope (success, error, internal error)
+-- funnels through here so the two output modes cannot drift apart.
+emitEnvelope :: HyphaOptions -> Aeson.Value -> IO ()
+emitEnvelope opts envelope = do
   if hoHuman opts
     then TIO.putStrLn (humanFromValue envelope)
-    else LBS.hPut stdout (encodeEnvelopeValue envOpts envelope)
+    else LBS.hPut stdout (encodeEnvelopeValue (envelopeOptsFor opts) envelope)
   hFlush stdout
+
+-- | Emit a successful outcome to stdout, honouring all output-shaping
+-- options, then exit with success.  Error handling is /not/ this
+-- function's job — errors propagate through 'Hypha' via 'throwError'
+-- and are handled in 'runClientMain' where 'runHypha' returns 'Left'.
+processOutcome :: HyphaOptions -> Outcome Value -> IO ()
+processOutcome opts outcome = do
+  let cmd     = outcomeTag outcome
+      envOpts = envelopeOptsFor opts
+      envelope = encodeOutcomeEnvelope envOpts cmd
+                   (compactKeysFor cmd) (fullKeysFor cmd) outcome
+  emitEnvelope opts envelope
   System.exitWith System.ExitSuccess
 
 -- | Emit a 'HyphaError' as a JSON error envelope on stdout, a one-line
--- @CODE: message@ on stderr, then exit with the typed code.  Called
--- from @Main@ when 'runHypha' returns 'Left'; the 'CommandTag' is
--- derived there from the parsed command.
+-- @CODE: message@ on stderr, then exit with the typed code.
 processError :: HyphaOptions -> CommandTag -> HyphaError -> IO ()
 processError opts tag err = do
-  let envOpts = EnvelopeOpts
-                  { eoFull       = hoFull opts
-                  , eoSelect     = maybe [] parseSelectList (hoSelect opts)
-                  , eoPrettyJson = hoPrettyJson opts
-                  }
-      envelope = encodeErrorEnvelope tag err
-  if hoHuman opts
-    then TIO.putStrLn (humanFromValue envelope)
-    else LBS.hPut stdout (encodeEnvelopeValue envOpts envelope)
-  hFlush stdout
+  emitEnvelope opts (encodeErrorEnvelope tag err)
   reportError err
   System.exitWith (toSystemExitCode (errorExitCode err))
 
--- | Last-resort handler for the top-level 'catchAny' in
--- @app/hypha/Main.hs@.  Library code only catches exceptions it
--- knows how to handle structurally ('HttpException' inside
--- "Hypha.Hoogle.Remote" / "Hypha.Hackage.*"); everything else
--- propagates and lands here.  We emit a single @INTERNAL_ERROR@
--- envelope on stdout (so JSON consumers still see a well-formed
--- response), the exception on stderr, then exit with the dedicated
--- 'exitInternalError' code so callers can distinguish "hypha itself
--- crashed" from any other failure class.
-topLevelHandler :: SomeException -> IO ()
-topLevelHandler e
-  | Just (ec :: System.ExitCode) <- fromException e = throwIO ec
-  | otherwise                                       = reportInternalError e
+-- | Render a genuine crash (i.e. an exception that escaped the library)
+-- for the command identified by 'CommandTag'. Library code only
+-- catches exceptions it knows how to handle structurally
+-- ('HttpException' inside "Hypha.Hoogle.Remote" / "Hypha.Hackage.*");
+-- everything else lands here via the 'tryAny' in the lifecycle
+-- wrappers.  We emit a single @INTERNAL_ERROR@ envelope on stdout (so
+-- JSON consumers still see a well-formed response), a one-line summary
+-- on stderr, then exit with the dedicated 'exitInternalError' code so
+-- callers can distinguish "hypha itself crashed" from any other
+-- failure class.
+processInternalError :: HyphaOptions -> CommandTag -> SomeException -> IO ()
+processInternalError opts tag e = do
+  emitEnvelope opts
+    (encodeInternalErrorEnvelope (commandName tag) (envelopeMessage e))
+  internalErrorExit e
 
--- | Last-resort renderer for genuine crashes caught by 'topLevelHandler'.
--- Library code only catches exceptions it knows how to handle
--- structurally ('HttpException' inside "Hypha.Hoogle.Remote" /
--- "Hypha.Hackage.*"); everything else propagates here.  We emit a
--- single @INTERNAL_ERROR@ envelope on stdout (so JSON consumers still
--- see a well-formed response), a one-line summary on stderr, then exit
--- with the dedicated 'exitInternalError' code so callers can
--- distinguish "hypha itself crashed" from any other failure class.
+-- | Variant of 'processInternalError' for contexts with no parsed
+-- command and no output-shaping flags — the @hypha-mcp@ binary's
+-- top-level @catchAny@.  Always emits compact JSON, with the
+-- @\"<internal>\"@ sentinel in the command field.
 reportInternalError :: SomeException -> IO ()
 reportInternalError e = do
-  let msg      = Text.pack (displayException e)
-      code     = exitInternalError
-      envelope = Aeson.object
-        [ "schema"  Aeson..= ("hypha/v0" :: Text)
-        , "command" Aeson..= ("<internal>" :: Text)
-        , "ok"      Aeson..= False
-        , "error"   Aeson..= Aeson.object
-            [ "code"      Aeson..= ("INTERNAL_ERROR" :: Text)
-            , "message"   Aeson..= msg
-            , "exit_code" Aeson..= unExitCode code
-            ]
-        ]
-  LBS.hPut stdout (Aeson.encode envelope)
+  LBS.hPut stdout
+    (encodeEnvelopeValue defaultEnvelopeOpts
+      (encodeInternalErrorEnvelope "<internal>" (envelopeMessage e)))
   hFlush stdout
-  hPutStrLn stderr ("INTERNAL_ERROR: " <> Text.unpack msg)
-  System.exitWith (toSystemExitCode code)
+  internalErrorExit e
+
+-- | Render an escaped exception for the envelope's @message@ field.
+-- 'displayException' on the 'SomeException' wrapper appends GHC's
+-- @HasCallStack@ backtrace (GHC ≥ 9.10), which is debugging detail —
+-- unwrapping to the inner exception keeps the machine channel to the
+-- actual failure.  The full rendering (backtrace included) still goes
+-- to @stderr@ via 'internalErrorExit'.
+envelopeMessage :: SomeException -> Text
+envelopeMessage (SomeException inner) = Text.pack (displayException inner)
+
+-- | Shared tail of the internal-error paths: the full exception
+-- rendering (including any backtrace) on @stderr@ and the dedicated
+-- exit code.
+internalErrorExit :: SomeException -> IO a
+internalErrorExit e = do
+  hPutStrLn stderr ("INTERNAL_ERROR: " <> displayException e)
+  System.exitWith (toSystemExitCode exitInternalError)
 
 -- | Surface the structured error to @stderr@ (so the user sees the
 -- @CODE: message@ line that complements the JSON envelope on stdout).
