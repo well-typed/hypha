@@ -13,14 +13,16 @@ import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 
-import Hypha.Cli.Types (ClientCommandTag (..))
+import Hypha.Cli.Types (ClientCommandTag (..), CommandTag (..))
 import Hypha.Command.Lookup
   ( Provider (..), RemoteTierOutcome (..), buildOutcome )
 import Hypha.Error (HyphaError)
 import Hypha.Hoogle.Remote (RemoteError (..))
 import Hypha.Hoogle.Tier (Tier (..))
 import Hypha.Hoogle.Type (HoogleQuery (..))
-import Hypha.Output.Json (EnvelopeOpts (..), encodeOutcomeBytes)
+import Hypha.Output.Json
+  ( EnvelopeOpts (..), encodeEnvelopeValue, encodeErrorEnvelope
+  , encodeOutcomeBytes )
 import Hypha.Output.Outcome (Outcome)
 
 tests :: TestTree
@@ -36,12 +38,12 @@ tests = testGroup "Golden.Lookup"
     goldenCase name outcome = goldenVsString name (goldPath name)
                                                   (pure (encode outcome))
     goldPath n = "test" </> "Golden" </> "golden" </> (n <> ".compact.json")
-    encode outcome = encodeOutcomeBytes
-      (EnvelopeOpts False [] False)
-      LookupCmd
-      (Set.fromList ["query", "providers"])
-      (Set.fromList ["query", "providers", "tiers_consulted"])
-      outcome
+    encode = either
+      (encodeEnvelopeValue envOpts . encodeErrorEnvelope (ClientTag LookupCmd))
+      (encodeOutcomeBytes envOpts LookupCmd
+        (Set.fromList ["query", "providers"])
+        (Set.fromList ["query", "providers", "tiers_consulted"]))
+    envOpts = EnvelopeOpts False [] False
 
 mkProvider :: Tier -> Provider
 mkProvider t = Provider "containers" "Data.Map" "lookup"

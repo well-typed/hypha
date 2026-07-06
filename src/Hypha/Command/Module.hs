@@ -8,13 +8,13 @@ module Hypha.Command.Module
   ) where
 
 import Data.Aeson (Value, object, (.=))
-import qualified Data.Map.Strict as Map
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Set (Set)
-import qualified Data.Set as Set
+import Data.Text.IO qualified as TIO
 import Data.Text (Text)
-import qualified Data.Text.IO as TIO
-
 import Hypha.BuildEnv.Type   (BuildEnv)
+import Hypha.Cli.Types
 import Hypha.Output.Outcome  (Outcome (..))
 import Hypha.Source.Locate   (findModuleFile, listExportedSymbols, parseExports)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version)
@@ -51,6 +51,7 @@ toOutcome pid modPath exps =
       , "module"  .= modPath
       , "exports" .= map (\nm -> object ["name" .= nm]) exps
       ])
+    ModuleCmd
     False
     []
     (Map.fromList $

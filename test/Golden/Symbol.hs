@@ -15,9 +15,12 @@ import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cli.Types
 import Hypha.Command.Symbol (runSymbol)
 import Hypha.Error
-  ( HyphaError, discoverProjectRootE, loadBuildPlanE, errorMessage )
-import Hypha.Output.Json (encodeEnvelope)
+  ( HyphaError (DiscoveryFailure, PlanFailure), errorMessage )
+import Hypha.Output.Json (encodeSuccessEnvelope)
 import Hypha.Output.Outcome (Outcome)
+import Hypha.Project.Discovery (discoverProjectRoot)
+import Hypha.Project.Plan (loadBuildPlan)
+import Hypha.Types (liftEitherIO)
 import Hypha.Types.PackageId (Version (..))
 
 -- | Mock BuildEnv that points to the fixture source directory.
@@ -45,7 +48,7 @@ runSymbolCommand = do
   result <- runExceptT pipeline
   case result of
     Left err      -> fail ("Symbol golden failed: " <> show (errorMessage err))
-    Right outcome -> pure (Aeson.encode (encodeEnvelope SymbolCmd (Right outcome)))
+    Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope SymbolCmd outcome))
   where
     fixtureDir = "test" </> "fixtures" </> "tiny-project"
     asyncDir   = "test" </> "fixtures"
@@ -54,7 +57,7 @@ runSymbolCommand = do
 
     pipeline :: ExceptT HyphaError IO (Outcome Value)
     pipeline = do
-      root <- discoverProjectRootE (Just fixtureDir)
-      plan <- loadBuildPlanE root
+      root <- liftEitherIO DiscoveryFailure (discoverProjectRoot (Just fixtureDir))
+      plan <- liftEitherIO (PlanFailure root) (loadBuildPlan root)
       let env = mockBuildEnv asyncDir
       ExceptT (liftIO (runSymbol env plan "async/Control.Concurrent.Async/concurrently"))

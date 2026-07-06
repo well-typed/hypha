@@ -28,15 +28,14 @@ module Hypha.Command.Lookup
   ) where
 
 import Data.Aeson (Value, (.=), object)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-
+import Hypha.Cli.Types
+import Hypha.Error (HyphaError (..))
 import Hypha.Hoogle.Local (HyphaHoogle, searchLocal)
-import Hypha.Hoogle.Remote
-  ( RemoteError (..), RemoteOptions, searchRemote )
+import Hypha.Hoogle.Remote ( RemoteError (..), RemoteOptions, searchRemote )
 import Hypha.Hoogle.Tier (Tier (..), tierLabel)
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
-import Hypha.Error (HyphaError (..))
-import qualified Data.Map.Strict as Map
 import Hypha.Output.Outcome (Outcome (..))
 import Hypha.Search.PackageCache (HyphaPackageCache, lookupByName)
 
@@ -147,6 +146,7 @@ buildOutcome q providers tiers remoteOutcome =
     (_:_, _) -> Right $ Outcome
       { outcomeResult      = lookupResultToJSON
                                (LookupResult (unHoogleQuery q) providers tiers)
+      , outcomeTag         = LookupCmd
       , outcomeOutsidePlan = False
       , outcomeOverrides   = []
       , outcomeActions     = Map.fromList

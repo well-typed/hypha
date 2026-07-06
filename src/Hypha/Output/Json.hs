@@ -5,7 +5,8 @@ module Hypha.Output.Json
   ( ToOutcomeJson (..)
   , EnvelopeOpts (..)
   , defaultEnvelopeOpts
-  , encodeEnvelope
+  , encodeSuccessEnvelope
+  , encodeErrorEnvelope
   , encodeOutcomeEnvelope
   , encodeOutcomeBytes
   , encodeEnvelopeValue
@@ -57,35 +58,42 @@ defaultEnvelopeOpts = EnvelopeOpts
   , eoPrettyJson = False
   }
 
--- | Build the envelope 'Value' from a command result.  Success is
--- rendered from the 'Outcome'; failure is rendered directly from the
--- 'HyphaError' (code/message/exit_code via 'errorCode' / 'errorMessage'
--- / 'errorExitCode', recovery hints via 'errorActions').
-encodeEnvelope
-  :: ClientCommandTag -> Either HyphaError (Outcome Value) -> Value
-encodeEnvelope cmdName = \case
-  Right oc ->
-    object $
-      [ "schema"  .= ("hypha/v0" :: Text)
-      , "command" .= clientCommandName cmdName
-      , "ok"      .= True
-      , "result"  .= outcomeResult oc
-      ]
-      <> [ "outside_plan" .= True | outcomeOutsidePlan oc ]
-      <> [ "overrides" .= outcomeOverrides oc | not (null (outcomeOverrides oc)) ]
-      <> [ "actions"   .= outcomeActions oc   | not (Map.null (outcomeActions oc)) ]
-  Left err ->
-    object $
-      [ "schema"   .= ("hypha/v0" :: Text)
-      , "command"  .= clientCommandName cmdName
-      , "ok"       .= False
-      , "error"    .= object
-          [ "code"      .= errorCode err
-          , "message"   .= errorMessage err
-          , "exit_code" .= unExitCode (errorExitCode err)
-          ]
-      ]
-      <> [ "actions" .= errorActions err | not (Map.null (errorActions err)) ]
+-- | The @schema@ / @command@ / @ok@ header shared by every envelope.
+envelopeHeader :: Text -> Bool -> [(Key.Key, Value)]
+envelopeHeader cmdName ok =
+  [ "schema"  .= ("hypha/v0" :: Text)
+  , "command" .= cmdName
+  , "ok"      .= ok
+  ]
+
+-- | Build a success envelope 'Value' from an 'Outcome'.  Takes a
+-- 'ClientCommandTag' (not the wider 'CommandTag') because only client
+-- commands produce outcomes — the server blocks or exits.
+encodeSuccessEnvelope :: ClientCommandTag -> Outcome Value -> Value
+encodeSuccessEnvelope cmdName oc =
+  object $
+    envelopeHeader (clientCommandName cmdName) True
+    <> [ "result" .= outcomeResult oc ]
+    <> [ "outside_plan" .= True | outcomeOutsidePlan oc ]
+    <> [ "overrides" .= outcomeOverrides oc | not (null (outcomeOverrides oc)) ]
+    <> [ "actions"   .= outcomeActions oc   | not (Map.null (outcomeActions oc)) ]
+
+-- | Build an error envelope 'Value' from a 'HyphaError'
+-- (code/message/exit_code via 'errorCode' / 'errorMessage'
+-- / 'errorExitCode', recovery hints via 'errorActions').  Takes the
+-- wider 'CommandTag': errors can arise from client and server commands
+-- alike (e.g. a malformed @--bind@).
+encodeErrorEnvelope :: CommandTag -> HyphaError -> Value
+encodeErrorEnvelope cmdName err =
+  object $
+    envelopeHeader (commandName cmdName) False
+    <> [ "error" .= object
+           [ "code"      .= errorCode err
+           , "message"   .= errorMessage err
+           , "exit_code" .= unExitCode (errorExitCode err)
+           ]
+       ]
+    <> [ "actions" .= errorActions err | not (Map.null (errorActions err)) ]
 
 -- | Build the envelope 'Value' /post-projection/.  The result is
 -- structurally identical to what 'encodeOutcomeBytes' would write to
@@ -97,10 +105,10 @@ encodeOutcomeEnvelope
   -> ClientCommandTag
   -> Set Text         -- ^ compact key set for the result body
   -> Set Text         -- ^ full key set for the result body
-  -> Either HyphaError (Outcome Value)
+  -> Outcome Value
   -> Value
-encodeOutcomeEnvelope opts cmdName compact full result =
-  encodeEnvelope cmdName (fmap (projectOutcome opts compact full) result)
+encodeOutcomeEnvelope opts cmdName compact full =
+  encodeSuccessEnvelope cmdName . projectOutcome opts compact full
 
 -- | Serialise a pre-built envelope 'Value', honouring the
 -- 'eoPrettyJson' flag.
@@ -118,7 +126,7 @@ encodeOutcomeBytes
   -> ClientCommandTag
   -> Set Text
   -> Set Text
-  -> Either HyphaError (Outcome Value)
+  -> Outcome Value
   -> LBS.ByteString
 encodeOutcomeBytes opts cmdName compact full =
   encodeEnvelopeValue opts . encodeOutcomeEnvelope opts cmdName compact full

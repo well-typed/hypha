@@ -10,7 +10,7 @@ import Test.Tasty (TestTree, testGroup)
 
 import Hypha.Cli.Types
 import Hypha.Command.Versions (runVersions)
-import Hypha.Output.Json (encodeEnvelope)
+import Hypha.Output.Json (encodeSuccessEnvelope)
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
@@ -53,4 +53,4 @@ runVersionsCommand = do
       result = runVersions plan pkgName
   case result of
     Left _ -> error "Versions command failed unexpectedly"
-    Right outcome -> pure (Aeson.encode (encodeEnvelope VersionsCmd (Right outcome)))
+    Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope VersionsCmd outcome))

@@ -14,14 +14,8 @@ module Hypha.Error
   , errorMessage
   , errorExitCode
   , errorActions
-    -- * ExceptT helpers
-  , discoverProjectRootE
-  , loadBuildPlanE
   ) where
 
-import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Trans.Except (ExceptT (ExceptT))
-import Data.Bifunctor (first)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -36,11 +30,11 @@ import qualified Hypha.Hackage.Api as Hackage
 import Hypha.Hoogle.Remote (RemoteError, renderRemoteError)
 import Hypha.Hoogle.Tier (Tier, renderTierList)
 import Hypha.Hoogle.Type (HoogleQuery (..))
-import Hypha.Project.Discovery (DiscoveryError (..), discoverProjectRoot)
+import Hypha.Project.Discovery (DiscoveryError (..))
 import Hypha.Project.Overrides (OverrideError, renderOverrideError)
-import Hypha.Project.Plan (PlanError (..), loadBuildPlan)
+import Hypha.Project.Plan (PlanError (..))
 import Hypha.Server.Bind (BindError, renderBindError)
-import Hypha.Types.BuildPlan (BuildPlan, ProjectRoot (..))
+import Hypha.Types.BuildPlan (ProjectRoot (..))
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), Version (..) )
 
@@ -273,18 +267,3 @@ tarballRecoveryActions = \case
       , ("delete_tarball", Text.pack ("rm " <> p))
       , ("refresh_index", "cabal update")
       ]
-
--- | 'ExceptT'-friendly wrapper around 'discoverProjectRoot'.
-discoverProjectRootE
-  :: MonadIO m
-  => Maybe FilePath -> ExceptT HyphaError m ProjectRoot
-discoverProjectRootE mDir =
-  ExceptT (liftIO (first DiscoveryFailure <$> discoverProjectRoot mDir))
-
--- | 'ExceptT'-friendly wrapper around 'loadBuildPlan'.  Threads the
--- 'ProjectRoot' into 'PlanFailure' so messages can name the directory.
-loadBuildPlanE
-  :: MonadIO m
-  => ProjectRoot -> ExceptT HyphaError m BuildPlan
-loadBuildPlanE root =
-  ExceptT (liftIO (first (PlanFailure root) <$> loadBuildPlan root))
