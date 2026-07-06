@@ -75,8 +75,8 @@ schemaWith required optional = object
         ]
 
 -- | Global flag properties shared by every per-command tool.
-globalFlagProps :: [Prop]
-globalFlagProps =
+hyphaOptionProps :: [Prop]
+hyphaOptionProps =
   [ ("projectDir",      "string",  "Override project root.")
   , ("packageOverride", "array",   "List of `PKG=VER` plan overrides.")
   , ("offline",         "boolean", "Skip network calls.")
@@ -88,9 +88,9 @@ globalFlagProps =
   , ("verbose",         "boolean", "Show debug output.")
   ]
 
-commonGlobalFlagsDoc :: Text
-commonGlobalFlagsDoc = Text.unlines
-  [ "Global flags can be passed via the corresponding fields:"
+commonOptionsDoc :: Text
+commonOptionsDoc = Text.unlines
+  [ "Hypha options can be passed via the corresponding fields:"
   , "  projectDir, packageOverride[], offline, human, prettyJson,"
   , "  full, select, quiet, verbose."
   ]
@@ -107,11 +107,11 @@ lookupTool = toolDescriptor "hypha.lookup"
     , "`query` may be a name (`filterM`, `Data.Map.lookup`) or a type"
     , "signature (`a -> Maybe a`)."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
   (schemaWith
     [ ("query", "string", "Symbol name or type signature to look up.") ]
-    globalFlagProps)
+    hyphaOptionProps)
 
 packageTool :: Value
 packageTool = toolDescriptor "hypha.package"
@@ -119,11 +119,11 @@ packageTool = toolDescriptor "hypha.package"
     [ "Package metadata (latest, deprecation, license, exposed modules)."
     , "`pkg` may include a `-version` suffix, e.g. `aeson-2.2.2.0`."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
   (schemaWith
     [ ("pkg", "string", "Package id, optionally `pkg-version`.") ]
-    globalFlagProps)
+    hyphaOptionProps)
 
 moduleTool :: Value
 moduleTool = toolDescriptor "hypha.module"
@@ -131,11 +131,11 @@ moduleTool = toolDescriptor "hypha.module"
     [ "List a module's exported symbols with their signatures."
     , "`path` is `<pkg>/<Module.Path>`, e.g. `async/Control.Concurrent.Async`."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
   (schemaWith
     [ ("path", "string", "Module path `<pkg>/<Module>`.") ]
-    globalFlagProps)
+    hyphaOptionProps)
 
 symbolTool :: Value
 symbolTool = toolDescriptor "hypha.symbol"
@@ -143,11 +143,11 @@ symbolTool = toolDescriptor "hypha.symbol"
     [ "Signature + Haddock + source coordinates for a single symbol."
     , "`path` is `<pkg>/<Module>/<symbol>`."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
   (schemaWith
     [ ("path", "string", "Symbol path `<pkg>/<Module>/<symbol>`.") ]
-    globalFlagProps)
+    hyphaOptionProps)
 
 sourceTool :: Value
 sourceTool = toolDescriptor "hypha.source"
@@ -156,11 +156,11 @@ sourceTool = toolDescriptor "hypha.source"
     , "a symbol (`<pkg>/<Module>/<symbol>`) or a whole module"
     , "(`<pkg>/<Module>`)."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
   (schemaWith
     [ ("path", "string", "Symbol or module path.") ]
-    globalFlagProps)
+    hyphaOptionProps)
 
 versionsTool :: Value
 versionsTool = toolDescriptor "hypha.versions"
@@ -168,25 +168,25 @@ versionsTool = toolDescriptor "hypha.versions"
     [ "Version history of a package on Hackage, with the plan-pinned"
     , "version marked."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
   (schemaWith
     [ ("pkg", "string", "Package name (no version).") ]
-    globalFlagProps)
+    hyphaOptionProps)
 
 depsTool :: Value
 depsTool = toolDescriptor "hypha.deps"
   (Text.unlines
     [ "Forward or reverse dependencies of a package within the plan."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
   (schemaWith
     [ ("pkg", "string", "Package name.") ]
     ( [ ("reverse", "boolean", "If true, list reverse deps.")
       , ("depth",   "integer", "Maximum traversal depth.")
       ]
-      <> globalFlagProps
+      <> hyphaOptionProps
     ))
 
 doctorTool :: Value
@@ -195,9 +195,9 @@ doctorTool = toolDescriptor "hypha.doctor"
     [ "Environment health check (plan.json, cabal store, Hoogle DB,"
     , "external tools)."
     , ""
-    , commonGlobalFlagsDoc
+    , commonOptionsDoc
     ])
-  (schemaWith [] globalFlagProps)
+  (schemaWith [] hyphaOptionProps)
 
 execTool :: Value
 execTool = toolDescriptor "hypha.exec"

@@ -4,7 +4,7 @@
 
 module Hypha.Cli.Types
   (
-    GlobalFlags (..)
+    HyphaOptions (..)
   , Command (..)
   , ClientCommand (..)
   , ServerCommand (..)
@@ -17,26 +17,26 @@ import Data.Text (Text)
 import Data.Text qualified as T
 
 
--- | Global flags that apply to all commands.
-data GlobalFlags = GlobalFlags
-  { gfProjectDir      :: !(Maybe FilePath)
+-- | Options that apply to all commands.
+data HyphaOptions = HyphaOptions
+  { hoProjectDir      :: !(Maybe FilePath)
     -- ^ Override project root.
-  , gfPackageOverrides :: ![Text]
+  , hoPackageOverrides :: ![Text]
     -- ^ @PKG=VER@ overrides (repeatable).
-  , gfOffline           :: !Bool
+  , hoOffline           :: !Bool
     -- ^ No network, fail closed.  Honored by 'LookupCommand' (skips
     -- the remote Hoogle tier).
-  , gfHuman             :: !Bool
+  , hoHuman             :: !Bool
     -- ^ Pretty ANSI text instead of JSON.
-  , gfPrettyJson        :: !Bool
+  , hoPrettyJson        :: !Bool
     -- ^ Indent JSON output.
-  , gfFull              :: !Bool
+  , hoFull              :: !Bool
     -- ^ Include all fields (default is compact).
-  , gfSelect            :: !(Maybe Text)
+  , hoSelect            :: !(Maybe Text)
     -- ^ Post-filter JSON output to listed fields.
-  , gfQuiet             :: !Bool
+  , hoQuiet             :: !Bool
     -- ^ Suppress informational output.
-  , gfVerbose           :: !Bool
+  , hoVerbose           :: !Bool
     -- ^ Show debug output.
   }
   deriving stock (Show, Eq)
