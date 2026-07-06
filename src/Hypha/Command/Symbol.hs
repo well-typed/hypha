@@ -35,6 +35,7 @@ import Hypha.Types.PackageId
 import Hypha.Types.SymbolPath
   ( SymbolPath (..), ModulePath (..), SymbolName (..), parseSymbolPath )
 import Hypha.Types.Doc (DocText (..))
+import Hypha.Cli.Types
 
 -- | Result of the @symbol@ command.
 data SymbolResult = SymbolResult
@@ -168,7 +169,7 @@ mkOutcome pkgName ver modTxt sym f info =
         , ("module_index", "hypha module "  <> pkg <> "/" <> modTxt)
         , ("package_info", "hypha package " <> pkg)
         ]
-  in Outcome body False [] actions
+  in Outcome body SymbolCmd False [] actions
 
 -- | Build a 'SourceLoc' from a file path and a line number.
 mkSourceLoc :: FilePath -> Int -> SourceLoc

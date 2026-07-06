@@ -3,14 +3,18 @@
 module Hypha.Logging
   ( -- * Types
     LogEvent (..)
+  , Tracer
     -- * Tracer construction
   , silentTracer
   , verboseTracer
   ) where
 
+import Control.Monad.IO.Class
+import Data.Text.IO qualified as TIO
 import Data.Text (Text)
-import qualified Data.Text.IO as TIO
 import System.IO (hFlush, stderr)
+
+type Tracer m = LogEvent -> m ()
 
 -- | Events that can be logged.
 data LogEvent
@@ -23,12 +27,12 @@ data LogEvent
   deriving stock (Show, Eq)
 
 -- | A tracer that discards all events.
-silentTracer :: (LogEvent -> IO ())
+silentTracer :: Monad m => Tracer m
 silentTracer _ = pure ()
 
 -- | A tracer that prints all events to stderr.
-verboseTracer :: (LogEvent -> IO ())
-verboseTracer event = do
+verboseTracer :: MonadIO m => Tracer m
+verboseTracer event = liftIO $ do
   TIO.hPutStrLn stderr (formatEvent event)
   hFlush stderr
 

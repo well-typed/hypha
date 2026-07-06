@@ -9,13 +9,13 @@ module Hypha.Command.Versions
   , runVersionsWithAvail
   ) where
 
+import Data.Aeson qualified as Aeson
 import Data.Aeson (Value, (.=))
-import qualified Data.Aeson as Aeson
-import qualified Data.Map.Strict as Map
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Set (Set)
-import qualified Data.Set as Set
 import Data.Text (Text)
-
+import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome (..))
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
@@ -38,7 +38,7 @@ runVersions plan pkgName =
 
 mkSuccessOutcome :: PackageName -> Version -> Outcome Value
 mkSuccessOutcome (PackageName name) (Version ver) =
-  Outcome body False [] actions
+  Outcome body VersionsCmd False [] actions
   where
     body = Aeson.object
       [ "package"            .= name
@@ -61,7 +61,7 @@ runVersionsWithAvail plan pkgName available =
             , "pinned_version"     .= ("" :: Text)
             , "available_versions" .= map unVersion available
             ]
-      in Outcome body True [] mempty
+      in Outcome body VersionsCmd True [] mempty
     Just ver ->
       let (PackageName name) = pkgName
           (Version v) = ver
@@ -74,4 +74,4 @@ runVersionsWithAvail plan pkgName available =
             [ ("package_info", "hypha package " <> name)
             , ("reverse_deps", "hypha deps " <> name <> " --reverse")
             ]
-      in Outcome body False [] actions
+      in Outcome body VersionsCmd False [] actions

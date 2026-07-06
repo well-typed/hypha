@@ -67,7 +67,7 @@ runSourceCommand = do
             , eoSelect = []
             , eoPrettyJson = False
             }
-      pure (encodeOutcomeBytes opts SourceCmd compactKeys fullKeys (Right outcome))
+      pure (encodeOutcomeBytes opts SourceCmd compactKeys fullKeys outcome)
 
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList ["package", "module", "symbol", "path", "line", "snippet"]

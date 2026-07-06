@@ -17,7 +17,7 @@ import Options.Applicative
 import Hypha.Cli.Types as Types
 
 -- | Parse the CLI arguments.
-parseCli :: IO (GlobalFlags, Command)
+parseCli :: IO (HyphaOptions, Command)
 parseCli = execParser opts
   where
     opts = info (cliParser <**> helper)
@@ -26,11 +26,11 @@ parseCli = execParser opts
       <> header "hypha — probe your Haskell build plan"
       )
 
-cliParser :: Parser (GlobalFlags, Command)
-cliParser = (,) <$> globalFlagsParser <*> commandParser
+cliParser :: Parser (HyphaOptions, Command)
+cliParser = (,) <$> hyphaOptionsParser <*> commandParser
 
-globalFlagsParser :: Parser GlobalFlags
-globalFlagsParser = GlobalFlags
+hyphaOptionsParser :: Parser HyphaOptions
+hyphaOptionsParser = HyphaOptions
   <$> optional (strOption
         ( long "project-dir"
        <> metavar "DIR"
@@ -43,7 +43,7 @@ globalFlagsParser = GlobalFlags
         ))
   <*> switch
         ( long "offline"
-       <> help "No network, fail closed"
+       <> help "Completely disable network access, try to work only with local data"
         )
   <*> switch
         ( long "human"

@@ -1,19 +1,13 @@
 module Main (main) where
 
-import Control.Exception.Safe
-
 import Hypha.Cli.Parser (parseCli)
-import Hypha.Cli.Run (runCli, topLevelHandler)
+import Hypha.Cli.Run (runClientMain, runServerMain)
+import Hypha.Cli.Types (Command (..))
 
--- | The single, top-level @catchAny@ for the @hypha@ binary.  Library
--- code (see "Hypha.Hoogle.Remote", "Hypha.Hackage.*") only catches the
--- specific exception families it knows how to handle structurally
--- ('HttpException', the targeted 'IOException' patterns).  Everything
--- else — programmer errors, async cancellations, exotic IO failures —
--- propagates here, where 'topLevelHandler' routes genuine crashes to
--- the @INTERNAL_ERROR@ envelope and lets the normal 'ExitCode' control
--- signal through to the runtime.
+-- | The main hypha CLI entrypoint.
 main :: IO ()
-main = handleAny topLevelHandler $ do
-  (flags, cmd) <- parseCli
-  runCli flags cmd
+main = do
+  (opts, cmd) <- parseCli
+  case cmd of
+    ClientCommands ccmd -> runClientMain opts ccmd
+    ServerCommands scmd -> runServerMain opts scmd

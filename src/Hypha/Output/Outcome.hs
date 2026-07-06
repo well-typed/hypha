@@ -8,6 +8,7 @@ module Hypha.Output.Outcome
 
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import Hypha.Cli.Types (ClientCommandTag)
 
 -- | Named action string that can be fed back into hypha.
 data Action = Action
@@ -31,6 +32,7 @@ data Action = Action
 -- different labels, wasting tokens on each response.
 data Outcome a = Outcome
   { outcomeResult       :: !a
+  , outcomeTag          :: !ClientCommandTag
   , outcomeOutsidePlan  :: !Bool
   , outcomeOverrides    :: ![Text]
   , outcomeActions      :: !(Map Text Text)
@@ -38,8 +40,8 @@ data Outcome a = Outcome
   deriving stock (Show, Eq, Functor, Foldable, Traversable)
 
 -- | Bare success outcome with no overrides or actions.
-successOutcome :: a -> Outcome a
-successOutcome a = Outcome a False [] mempty
+successOutcome :: ClientCommandTag -> a -> Outcome a
+successOutcome t a = Outcome a t False [] mempty
 
 -- | Update the @outside_plan@ flag on a success outcome.
 tagOutsidePlan :: Outcome a -> Bool -> Outcome a

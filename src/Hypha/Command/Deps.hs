@@ -5,12 +5,12 @@ module Hypha.Command.Deps
   , fullKeys
   ) where
 
-import qualified Data.Aeson as Aeson
+import Data.Aeson qualified as Aeson
 import Data.Aeson (Value, object, (.=))
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
-
+import Hypha.Cli.Types
 import Hypha.Output.Outcome  (Outcome (..))
 import Hypha.Types.BuildPlan (BuildPlan (..), forwardDepsOf, reverseDepsOf)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
@@ -33,6 +33,7 @@ runDeps bp name reverseMode mDepth = pure $ Outcome
       , "depth"     .= maybe Aeson.Null Aeson.toJSON mDepth
       , "deps"      .= map encodeDep listing
       ])
+    DepsCmd
     False  -- not outside plan
     []     -- no overrides
     (Map.fromList

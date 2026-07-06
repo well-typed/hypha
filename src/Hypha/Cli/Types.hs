@@ -4,39 +4,42 @@
 
 module Hypha.Cli.Types
   (
-    GlobalFlags (..)
+    HyphaOptions (..)
   , Command (..)
   , ClientCommand (..)
   , ServerCommand (..)
   , ClientCommandTag (..)
   , clientCommandTag
   , clientCommandName
+  , CommandTag (..)
+  , commandTag
+  , commandName
   ) where
 
 import Data.Text (Text)
 import Data.Text qualified as T
 
 
--- | Global flags that apply to all commands.
-data GlobalFlags = GlobalFlags
-  { gfProjectDir      :: !(Maybe FilePath)
+-- | Options that apply to all commands.
+data HyphaOptions = HyphaOptions
+  { hoProjectDir      :: !(Maybe FilePath)
     -- ^ Override project root.
-  , gfPackageOverrides :: ![Text]
+  , hoPackageOverrides :: ![Text]
     -- ^ @PKG=VER@ overrides (repeatable).
-  , gfOffline           :: !Bool
+  , hoOffline           :: !Bool
     -- ^ No network, fail closed.  Honored by 'LookupCommand' (skips
     -- the remote Hoogle tier).
-  , gfHuman             :: !Bool
+  , hoHuman             :: !Bool
     -- ^ Pretty ANSI text instead of JSON.
-  , gfPrettyJson        :: !Bool
+  , hoPrettyJson        :: !Bool
     -- ^ Indent JSON output.
-  , gfFull              :: !Bool
+  , hoFull              :: !Bool
     -- ^ Include all fields (default is compact).
-  , gfSelect            :: !(Maybe Text)
+  , hoSelect            :: !(Maybe Text)
     -- ^ Post-filter JSON output to listed fields.
-  , gfQuiet             :: !Bool
+  , hoQuiet             :: !Bool
     -- ^ Suppress informational output.
-  , gfVerbose           :: !Bool
+  , hoVerbose           :: !Bool
     -- ^ Show debug output.
   }
   deriving stock (Show, Eq)
@@ -78,6 +81,27 @@ data Command
   = ServerCommands ServerCommand
   | ClientCommands ClientCommand
   deriving stock (Show, Eq, Ord)
+
+-- | Tag identifying /any/ command for the error envelope's @\"command\"@
+-- field.  Success envelopes keep using 'ClientCommandTag' (via
+-- 'Hypha.Output.Outcome.outcomeTag') because only client commands
+-- produce an 'Hypha.Output.Outcome.Outcome' — the server either blocks
+-- inside Warp or exits.  Errors, however, can arise from either side
+-- (e.g. a malformed @--bind@), so the error path needs the wider tag.
+data CommandTag
+  = ClientTag !ClientCommandTag
+  | ServerTag
+  deriving stock (Show, Eq, Ord)
+
+commandTag :: Command -> CommandTag
+commandTag = \case
+  ServerCommands _ -> ServerTag
+  ClientCommands c -> ClientTag (clientCommandTag c)
+
+commandName :: CommandTag -> T.Text
+commandName = \case
+  ClientTag t -> clientCommandName t
+  ServerTag   -> "server"
 
 data ServerCommand
   = ServerCommand !Int !(Maybe Text) !Bool !Int

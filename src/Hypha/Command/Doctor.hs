@@ -19,15 +19,15 @@ module Hypha.Command.Doctor
   ) where
 
 import Control.Exception.Safe (try, SomeException)
+import Data.Aeson qualified as Aeson
 import Data.Aeson (Value, (.=))
-import qualified Data.Aeson as Aeson
+import Data.Set qualified as Set
 import Data.Set (Set)
-import qualified Data.Set as Set
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
-import System.Directory (doesFileExist, findExecutable)
-
+import Hypha.Cli.Types
 import Hypha.Output.Outcome (Outcome (..))
+import System.Directory (doesFileExist, findExecutable)
 
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList ["checks", "all_pass"]
@@ -51,9 +51,7 @@ runDoctor = do
   haddockResult <- checkHaddock
   planResult <- checkPlanJson
 
-  let allPass = case [ghcResult, haddockResult, planResult] of
-        [] -> True
-        rs -> and [case r of CheckPass _ -> True; _ -> False | r <- rs]
+  let allPass = and [case r of CheckPass _ -> True; _ -> False | r <- [ghcResult, haddockResult, planResult]]
       checks = Aeson.object
         [ "ghc"       .= checkToJson ghcResult
         , "haddock"   .= checkToJson haddockResult
@@ -63,7 +61,7 @@ runDoctor = do
         [ "checks"   .= checks
         , "all_pass" .= allPass
         ]
-  pure $ Outcome body allPass [] mempty
+  pure $ Outcome body DoctorCmd allPass [] mempty
 
 checkGhc :: IO CheckResult
 checkGhc = do

@@ -18,7 +18,9 @@ import Test.Tasty (TestTree, testGroup)
 import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Types.PackageId (PackageName (..))
-import Hypha.Output.Json (ToOutcomeJson (..), encodeEnvelope, filterSelect, objectKeys)
+import Hypha.Output.Json
+  ( ToOutcomeJson (..), encodeSuccessEnvelope, encodeErrorEnvelope
+  , filterSelect, objectKeys )
 import Hypha.Output.Outcome (successOutcome)
 
 -------------------------------------------------------------------------------
@@ -109,16 +111,16 @@ tests = testGroup "OutputJson"
       let compact = objectKeys (toCompactJSON card)
           full    = objectKeys (toFullJSON card)
       assert $ P.eq P..$ ("compact ⊆ full", True) P..$ ("got", compact `Set.isSubsetOf` full)
-  , testCase "encodeEnvelope produces valid success envelope"           testSuccessEnvelope
-  , testCase "encodeEnvelope produces valid failure envelope"           testFailureEnvelope
+  , testCase "encodeSuccessEnvelope produces valid success envelope"    testSuccessEnvelope
+  , testCase "encodeErrorEnvelope produces valid failure envelope"      testFailureEnvelope
   , testCase "filterSelect keeps only listed top-level keys"            testFilterSelect
   , testCase "filterSelect empty list is identity"                      testFilterSelectNoop
   ]
 
 testSuccessEnvelope :: IO ()
 testSuccessEnvelope = do
-  let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      val     = encodeEnvelope SymbolCmd (Right outcome)
+  let outcome = successOutcome SymbolCmd (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
+      val     = encodeSuccessEnvelope SymbolCmd outcome
       keys    = objectKeys val
   keys @?= Set.fromList
     [ "schema", "command", "ok", "result" ]
@@ -126,21 +128,21 @@ testSuccessEnvelope = do
 testFailureEnvelope :: IO ()
 testFailureEnvelope = do
   let err  = NotFound (NotFoundPackageInPlan (PackageName "missing"))
-      val  = encodeEnvelope SymbolCmd (Left err)
+      val  = encodeErrorEnvelope (ClientTag SymbolCmd) err
       keys = objectKeys val
   keys @?= Set.fromList [ "schema", "command", "ok", "error" ]
 
 testFilterSelect :: IO ()
 testFilterSelect = do
-  let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeEnvelope SymbolCmd (Right outcome)
+  let outcome = successOutcome SymbolCmd (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
+      env     = encodeSuccessEnvelope SymbolCmd outcome
       filtered = filterSelect ["schema", "ok", "result"] env
       keys    = objectKeys filtered
   keys @?= Set.fromList [ "schema", "ok", "result" ]
 
 testFilterSelectNoop :: IO ()
 testFilterSelectNoop = do
-  let outcome = successOutcome (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeEnvelope SymbolCmd (Right outcome)
+  let outcome = successOutcome SymbolCmd (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
+      env     = encodeSuccessEnvelope SymbolCmd outcome
       filtered = filterSelect [] env
   filtered @?= env

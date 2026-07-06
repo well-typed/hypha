@@ -13,19 +13,18 @@ module Hypha.Command.Source
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
+import Data.Aeson qualified as Aeson
 import Data.Aeson (Value (..), (.=))
-import qualified Data.Aeson as Aeson
+import Data.Set qualified as Set
 import Data.Set (Set)
-import qualified Data.Set as Set
+import Data.Text.IO qualified as TIO
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified Data.Text.IO as TIO
-
 import Hypha.BuildEnv.Type (BuildEnv (..))
+import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
-import Hypha.Source.Locate
-  ( SourceLocation (..), findModuleFile, locateSymbolDefinitionInDir )
+import Hypha.Source.Locate ( SourceLocation (..), findModuleFile, locateSymbolDefinitionInDir )
 import Hypha.Types.BuildPlan (BuildPlan (..))
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
@@ -107,7 +106,7 @@ sourceFromDirE pid srcDir modPath mSym = do
         , srcLine    = slLine loc
         , srcSnippet = snippet
         }
-  pure (successOutcome (sourceResultToJSON result))
+  pure (successOutcome SourceCmd (sourceResultToJSON result))
 
 -- | When a symbol is provided, locate its definition inside the module;
 -- otherwise pin to line 1 of the resolved module file.

@@ -13,21 +13,18 @@ module Hypha.Command.Package
   , packageOriginToJSON
   ) where
 
+import Data.Aeson qualified as Aeson
 import Data.Aeson (Value, (.=))
-import qualified Data.Aeson as Aeson
-import qualified Data.Map.Strict as Map
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Set (Set)
-import qualified Data.Set as Set
+import Data.Text qualified as Text
 import Data.Text (Text)
-import qualified Data.Text as Text
-
+import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome (..))
-import Hypha.Types.BuildPlan
-  ( BuildPlan, PackageOrigin (..), PlannedUnit (..), lookupUnit )
+import Hypha.Types.BuildPlan ( BuildPlan, PackageOrigin (..), PlannedUnit (..), lookupUnit )
 import Hypha.Types.PackageId
-  ( PackageName (..), PackageId (..), PackageRef (..), Version (..)
-  , parsePackageRef )
 
 -- | Metadata for a single package, as returned by the @package@ command.
 data PackageResult = PackageResult
@@ -96,7 +93,7 @@ mkSuccessOutcome rawName ver isLocal depsCount origin modules =
         , ("module_index_hint",  "hypha module " <> rawName <> "/<Module>")
         ]
         <> [ (nm, "hypha module " <> rawName <> "/" <> nm) | nm <- modules ]
-  in Outcome body False [] actions
+  in Outcome body PackageCmd False [] actions
 
 packageResultToJSON :: PackageResult -> Value
 packageResultToJSON r = Aeson.object
