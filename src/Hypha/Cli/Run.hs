@@ -302,10 +302,7 @@ renderCabalStoreError = \case
   StoreNotFound p   -> "store directory missing (" <> Text.pack p <> ")"
   GhcVersionUnknown -> "could not determine GHC version from store path"
 
--- | Per-command dispatch.  Each arm runs inside 'Hypha' (a
--- 'ReaderT' 'HyphaOptions' ('ExceptT' 'HyphaError' 'IO') stack) so
--- plan loading, resolver wiring, and command execution compose
--- without case-cascades on 'Either'.
+-- | Per-command dispatch.
 runClientCommand :: ClientCommand -> Hypha (Outcome Value)
 runClientCommand = \case
   LookupCommand q ->
