@@ -32,27 +32,22 @@ module Hypha.Hoogle.Local
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Exception (displayException)
 import Control.Exception.Safe (IOException, SomeException, try)
-import System.IO.Error (isDoesNotExistError)
 import Control.Monad (when)
 import Data.List (isPrefixOf)
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified Data.Text.IO as TIO
-import qualified Hoogle
+import Hypha.Cache qualified as Cache
+import Hypha.Hoogle.Format ( decodeEntities, splitNameSig, stripTags )
+import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
+import Hypha.Types.PackageId ( PackageId (..), PackageName (..), Version (..) )
+import Data.Text qualified as Text
+import Data.Text.IO qualified as TIO
+import Hoogle qualified
 import System.Directory
-  ( XdgDirectory (..), copyFile, createDirectoryIfMissing
-  , createFileLink, doesDirectoryExist, doesFileExist, getXdgDirectory
-  , listDirectory, removeDirectoryRecursive )
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory, takeExtension, takeFileName)
+import System.IO.Error (isDoesNotExistError)
 import System.IO (hPutStrLn, stderr)
 import System.Process (readProcessWithExitCode)
-
-import Hypha.Hoogle.Format
-  ( decodeEntities, splitNameSig, stripTags )
-import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
-import Hypha.Types.PackageId
-  ( PackageId (..), PackageName (..), Version (..) )
 
 -- | Opaque handle to the local Hoogle DB lifecycle.
 data HyphaHoogle = HyphaHoogle
@@ -233,7 +228,7 @@ collectTxtForUnit runner storeRoot distRoot lu = do
 -- @hoogle generate@ step can point at a single directory.
 haddockOutputPath :: PackageId -> IO FilePath
 haddockOutputPath pid = do
-  dir <- getXdgDirectory XdgCache "hypha"
+  dir <- Cache.cacheRoot
   let outDir = dir </> "hoogle-txt"
       file   = Text.unpack (unPackageName (pkgName pid))
             <> "-"

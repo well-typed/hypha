@@ -31,12 +31,11 @@ module Hypha.Search.Cache
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Monad (void)
-import Data.Text (Text)
 import Database.SQLite.Simple
-  ( Connection, NamedParam ((:=)), Only (..), Query (..), execute, executeMany
-  , executeNamed, execute_, open, query_, queryNamed )
-import qualified Database.SQLite.Simple as Sql
-import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
+import Database.SQLite.Simple qualified as Sql
+import Data.Text (Text)
+import Hypha.Cache qualified as Cache
+import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
 -- | Handle on the on-disk cache.  Wraps a single 'Connection' guarded by
@@ -51,7 +50,7 @@ data IndexCache = IndexCache
 -- | Default cache location: @$XDG_CACHE_HOME/hypha/hypha.db@.
 defaultCachePath :: IO FilePath
 defaultCachePath = do
-  dir <- getXdgDirectory XdgCache "hypha"
+  dir <- Cache.cacheRoot
   createDirectoryIfMissing True dir
   pure (dir </> "hypha.db")
 

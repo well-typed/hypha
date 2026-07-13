@@ -38,6 +38,7 @@ import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Hypha.BuildEnv.Cabal (CabalStoreError (..), mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cache (hackageCacheDir)
+import Hypha.Cache qualified as Cache
 import Hypha.Cli.Parser
 import Hypha.Command.Deps qualified as Deps
 import Hypha.Command.Doctor qualified as Doctor
@@ -445,7 +446,7 @@ runLookupCommand q = do
       createDirectoryIfMissing True d
       pure d
     Nothing -> do
-      x <- getXdgDirectory XdgCache "hypha"
+      x <- Cache.cacheRoot
       let d = x </> "no-project"
       createDirectoryIfMissing True d
       pure d
