@@ -13,6 +13,7 @@ module Hypha.Hackage.Api
     -- * Internals exposed for testing
   , userAgent
   , sourceTarballUrl
+  , packageJsonUrl
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -160,31 +161,29 @@ mkHackageClient manager cacheDir = do
 
 -- | Create an offline HackageClient that serves only from the on-disk cache.
 -- A cache miss yields a typed 'OfflineCacheMiss' error.
+--
+-- 'fetchVersions' reads back the same @\<pkg\>.json@ cache entry that
+-- 'fetchPackageJson' (online or offline) populates, so a package fetched in
+-- one mode is available to the other under @--offline@.
 mkOfflineHackageClient :: FilePath -> IO (HackageClient IO)
 mkOfflineHackageClient cacheDir = pure HackageClient
-  { fetchPackageJson = \pkgName -> do
-      let url = packageJsonUrl pkgName
-      cacheKey <- Cache.mkCacheKey url
-      mCached  <- Cache.lookupCache cacheDir cacheKey
-      case mCached of
-        Nothing  -> pure (Left (OfflineCacheMiss pkgName))
-        Just cr  -> pure (decodeJsonBody cr)
-  , fetchVersions = \pkgName -> do
-      let url = preferredVersionsUrl pkgName
-      cacheKey <- Cache.mkCacheKey url
-      mCached  <- Cache.lookupCache cacheDir cacheKey
-      case mCached of
-        Nothing -> pure (Left (OfflineCacheMiss pkgName))
-        Just cr -> pure (Right (parseVersions (crBody cr)))
+  { fetchPackageJson = fetchPackageJsonOffline cacheDir
+  , fetchVersions = \pkgName ->
+      fmap extractVersionList <$> fetchPackageJsonOffline cacheDir pkgName
   }
+
+fetchPackageJsonOffline :: FilePath -> PackageName -> IO (Either HackageError Value)
+fetchPackageJsonOffline cacheDir pkgName = do
+  let url = packageJsonUrl pkgName
+  cacheKey <- Cache.mkCacheKey url
+  mCached  <- Cache.lookupCache cacheDir cacheKey
+  case mCached of
+    Nothing -> pure (Left (OfflineCacheMiss pkgName))
+    Just cr -> pure (decodeJsonBody cr)
 
 packageJsonUrl :: PackageName -> String
 packageJsonUrl pkgName =
   "https://hackage.haskell.org/package/" ++ Text.unpack (unPackageName pkgName) ++ ".json"
-
-preferredVersionsUrl :: PackageName -> String
-preferredVersionsUrl pkgName =
-  "https://hackage.haskell.org/package/" ++ Text.unpack (unPackageName pkgName) ++ "/preferred"
 
 -- | URL for a package source tarball on Hackage.
 sourceTarballUrl :: PackageId -> String
@@ -342,34 +341,6 @@ touchCache :: FilePath -> Cache.CacheKey -> CachedResponse -> IO ()
 touchCache cacheDir key cr = do
   now <- getCurrentTime
   Cache.insertCache cacheDir key (cr { crStoredAt = now })
-
--- | Parse versions from the preferred-versions file.  The file is a
--- @cabal@-syntax constraint expression.  Lines look like
--- @containers ==0.7.0.0 || >0.6.7@.  We extract every @x.y.z@-style token.
--- If Hackage returns HTML (e.g. a 404 page for a package without a
--- preferred file) we get back an empty list because no token matches.
-parseVersions :: BS.ByteString -> [Version]
-parseVersions bs =
-  [ Version v
-  | ln <- BS8.split '\n' bs
-  , not (BS.null ln)
-  , not ("--" `BS.isPrefixOf` ln)
-  , v <- extractVersions (Text.pack (BS8.unpack ln))
-  ]
-  where
-    extractVersions :: Text.Text -> [Text.Text]
-    extractVersions = filter looksLikeVersion . Text.split (not . versionChar)
-
-    versionChar :: Char -> Bool
-    versionChar c = (c >= '0' && c <= '9') || c == '.'
-
-    looksLikeVersion :: Text.Text -> Bool
-    looksLikeVersion t =
-         not (Text.null t)
-      && Text.any (== '.') t
-      && Text.all versionChar t
-      && Text.head t /= '.'
-      && Text.last t /= '.'
 
 -- | Format a 'UTCTime' as an RFC 822 / HTTP-date string (e.g.
 -- @"Wed, 21 Oct 2015 07:28:00 GMT"@).
