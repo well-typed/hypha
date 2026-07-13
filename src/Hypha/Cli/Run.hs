@@ -15,7 +15,7 @@ module Hypha.Cli.Run
   , humanFromValue
   ) where
 
-import Control.Exception (IOException, displayException)
+import Control.Exception (IOException, displayException, fromException, ErrorCall (..))
 import Control.Exception.Safe (SomeException (..), bracket, try, tryAny)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson.Key (Key)
@@ -793,12 +793,21 @@ reportInternalError e = do
   internalErrorExit
 
 -- | Render an escaped exception for the envelope's @message@ field.
+--
 -- 'displayException' on the 'SomeException' wrapper appends GHC's
--- @HasCallStack@ backtrace (GHC ≥ 9.10), which is debugging detail —
--- unwrapping to the inner exception keeps the machine channel to the
--- actual failure.
+-- @HasCallStack@ backtrace (GHC ≥ 9.10), and 'ErrorCall' itself carries a
+-- legacy CallStack in its location string on all GHC versions.
+-- Structurally extract just the message: for 'ErrorCall' (what 'error'
+-- throws) the 'ErrorCall' pattern synonym discards the location; for
+-- everything else, pattern matching on 'SomeException' drops the
+-- 'ExceptionContext' (and thus the 'Backtraces' annotation) on GHC ≥ 9.10.
 envelopeMessage :: SomeException -> Text
-envelopeMessage (SomeException inner) = Text.pack (displayException inner)
+envelopeMessage se =
+  Text.pack (case fromException se of
+    Just (ErrorCall m) -> m
+    Nothing ->
+      case se of
+        SomeException inner -> displayException inner)
 
 -- | Shared tail of the internal-error paths: the dedicated exit code.
 internalErrorExit :: IO a
