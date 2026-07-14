@@ -15,7 +15,7 @@ module Hypha.Cli.Run
   , humanFromValue
   ) where
 
-import Control.Exception (IOException, displayException)
+import Control.Exception (IOException, displayException, fromException, ErrorCall (..))
 import Control.Exception.Safe (SomeException (..), bracket, try, tryAny)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson.Key (Key)
@@ -38,6 +38,7 @@ import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Hypha.BuildEnv.Cabal (CabalStoreError (..), mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cache (hackageCacheDir)
+import Hypha.Cache qualified as Cache
 import Hypha.Cli.Parser
 import Hypha.Command.Deps qualified as Deps
 import Hypha.Command.Doctor qualified as Doctor
@@ -445,7 +446,7 @@ runLookupCommand q = do
       createDirectoryIfMissing True d
       pure d
     Nothing -> do
-      x <- getXdgDirectory XdgCache "hypha"
+      x <- Cache.cacheRoot
       let d = x </> "no-project"
       createDirectoryIfMissing True d
       pure d
@@ -771,16 +772,14 @@ processError opts tag err = do
 -- catches exceptions it knows how to handle structurally
 -- ('HttpException' inside "Hypha.Hoogle.Remote" / "Hypha.Hackage.*");
 -- everything else lands here via the 'tryAny' in the lifecycle
--- wrappers.  We emit a single @INTERNAL_ERROR@ envelope on stdout (so
--- JSON consumers still see a well-formed response), a one-line summary
--- on stderr, then exit with the dedicated 'exitInternalError' code so
--- callers can distinguish "hypha itself crashed" from any other
--- failure class.
+-- wrappers.  We emit a single @INTERNAL_ERROR@ envelope on stdout then
+-- exit with the dedicated 'exitInternalError' code so callers can
+-- distinguish "hypha itself crashed" from any other failure class.
 processInternalError :: HyphaOptions -> CommandTag -> SomeException -> IO ()
 processInternalError opts tag e = do
   emitEnvelope opts
     (encodeInternalErrorEnvelope (commandName tag) (envelopeMessage e))
-  internalErrorExit e
+  internalErrorExit
 
 -- | Variant of 'processInternalError' for contexts with no parsed
 -- command and no output-shaping flags — the @hypha-mcp@ binary's
@@ -792,24 +791,28 @@ reportInternalError e = do
     (encodeEnvelopeValue defaultEnvelopeOpts
       (encodeInternalErrorEnvelope "<internal>" (envelopeMessage e)))
   hFlush stdout
-  internalErrorExit e
+  internalErrorExit
 
 -- | Render an escaped exception for the envelope's @message@ field.
+--
 -- 'displayException' on the 'SomeException' wrapper appends GHC's
--- @HasCallStack@ backtrace (GHC ≥ 9.10), which is debugging detail —
--- unwrapping to the inner exception keeps the machine channel to the
--- actual failure.  The full rendering (backtrace included) still goes
--- to @stderr@ via 'internalErrorExit'.
+-- @HasCallStack@ backtrace (GHC ≥ 9.10), and 'ErrorCall' itself carries a
+-- legacy CallStack in its location string on all GHC versions.
+-- Structurally extract just the message: for 'ErrorCall' (what 'error'
+-- throws) the 'ErrorCall' pattern synonym discards the location; for
+-- everything else, pattern matching on 'SomeException' drops the
+-- 'ExceptionContext' (and thus the 'Backtraces' annotation) on GHC ≥ 9.10.
 envelopeMessage :: SomeException -> Text
-envelopeMessage (SomeException inner) = Text.pack (displayException inner)
+envelopeMessage se =
+  Text.pack (case fromException se of
+    Just (ErrorCall m) -> m
+    Nothing ->
+      case se of
+        SomeException inner -> displayException inner)
 
--- | Shared tail of the internal-error paths: the full exception
--- rendering (including any backtrace) on @stderr@ and the dedicated
--- exit code.
-internalErrorExit :: SomeException -> IO a
-internalErrorExit e = do
-  hPutStrLn stderr ("INTERNAL_ERROR: " <> displayException e)
-  System.exitWith (toSystemExitCode exitInternalError)
+-- | Shared tail of the internal-error paths: the dedicated exit code.
+internalErrorExit :: IO a
+internalErrorExit = System.exitWith (toSystemExitCode exitInternalError)
 
 -- | Surface the structured error to @stderr@ (so the user sees the
 -- @CODE: message@ line that complements the JSON envelope on stdout).

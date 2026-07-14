@@ -248,6 +248,7 @@ test-suite hypha-tests
     , falsify
     , temporary
     , zlib
+    , raw-strings-qq
     , text
     , time
     , transformers

@@ -14,11 +14,15 @@ module Hypha.Command.Server
     -- * Entry points
   , runServer
   , buildServerConfig
+    -- * Internals exposed for testing
+  , collectModuleRows
+  , briefException
   ) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Stream (mapConcurrentlyBounded)
-import Control.Exception.Safe (SomeException, try)
+import Control.Exception (SomeException (..), displayException, evaluate, fromException, ErrorCall (..))
+import Control.Exception.Safe (try)
 import Control.Monad
 import Data.ByteString.Lazy qualified as LBS
 import Data.IORef qualified as IORef
@@ -114,8 +118,9 @@ reportPrebuildOutcomes outcomes = do
   mapM_ logFailure [ (pid, e) | (pid, Left  e)       <- outcomes ]
   mapM_ logMissing [  pid     | (pid, Right Nothing) <- outcomes ]
   where
-    logFailure (pid, e) = hPutStrLn stderr
-      ("warning: prebuild failed for " <> renderPkgId pid <> ": " <> show e)
+    logFailure (pid, e) = hPutStrLn stderr $
+      "warning: prebuild failed for " <> renderPkgId pid
+        <> ": " <> Text.unpack (briefException e)
     logMissing pid      = hPutStrLn stderr
       ("note: prebuild produced no haddock for " <> renderPkgId pid)
 
@@ -123,6 +128,40 @@ reportPrebuildOutcomes outcomes = do
 renderPkgId :: PackageId -> String
 renderPkgId (PackageId (PackageName n) (Version v)) =
   Text.unpack n <> "-" <> Text.unpack v
+
+-- | Render a caught exception as one tidy line for a @warning:@/@note:@
+-- log message.
+--
+-- On GHC \>= 9.10 'error' attaches a 'CallStack' in two places: as a
+-- legacy location string inside 'ErrorCall', and as a 'Backtraces'
+-- annotation in the 'ExceptionContext' carried by 'SomeException'.
+-- Both are pure noise for the failures this module catches (a cpphs
+-- @#error@ hitting a build-time-only macro, a Haddock subprocess
+-- misbehaving) — the failure is either permanent and non-actionable or
+-- already identified by the package\/module label the caller prepends.
+--
+-- Rather than string-matching on the rendered output (fragile — an
+-- @error "CallStack overflow"@ message would be truncated), we extract
+-- the message structurally:
+--
+-- 1. For 'ErrorCall' (what 'error' throws), 'fromException' + the
+--    'ErrorCall' pattern synonym yields just the message string,
+--    discarding the legacy location on /all/ GHC versions.
+-- 2. For every other exception type, pattern matching on
+--    'SomeException' drops the 'ExceptionContext' (and thus the
+--    'Backtraces' annotation) on GHC \>= 9.10; on older GHC the context
+--    does not exist, so the match is a harmless no-op.
+--
+-- What remains is collapsed to a single line.
+briefException :: SomeException -> Text
+briefException se =
+  Text.unwords (Text.words (Text.pack msg))
+  where
+    msg = case fromException se of
+      Just (ErrorCall m) -> m
+      Nothing ->
+        case se of
+          SomeException e -> displayException e
 
 -- | Extract every distinct 'PackageId' from a plan.
 planPackageIds :: BuildPlan -> [PackageId]
@@ -463,42 +502,67 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
     -- | Resolve a module file against an explicit list of source roots,
-    -- in priority order, then extract one cache row per top-level
-    -- declaration.  Signatures land in the @sig@ column courtesy of
-    -- "Hypha.Source.Parser", so a tier-1 lookup is self-sufficient
-    -- and the agent no longer needs a follow-up @hypha symbol@ just
-    -- to learn the type.
-    --
-    -- The export-list filter is best-effort: when the module has an
-    -- explicit @module M (a, b, ...) where@ header we restrict to
-    -- those names; otherwise (no header, or 'parseExports' could not
-    -- read one) we emit every top-level decl.  Over-inclusion is
-    -- harmless for the search index — internal names still resolve,
-    -- and the agent sees exactly the providers it would see today.
+    -- in priority order, then delegate to 'collectModuleRows'.
     collectMod compKey srcDirs modPath = do
       mFile <- firstExistingModule srcDirs modPath
       case mFile of
         Nothing -> pure []
         Just f  -> do
           src <- TIO.readFile f
-          let decls   = either (const []) id (Parser.parseDecls f src)
-              exps    = Set.fromList (Locate.parseExports src)
-              keep nm = Set.null exps || nm `Set.member` exps
-              sigFor d = case Parser.declSigText src d of
-                          Just t  -> t
-                          Nothing -> Text.empty
-          pure [ (compKey, modPath, nm, sigFor d)
-               | d <- decls
-               , let nm = Parser.declName d
-               , not (Text.null nm)
-               , keep nm
-               ]
+          collectModuleRows compKey modPath f src
 
     firstExistingModule [] _ = pure Nothing
     firstExistingModule (r:rs) modPath = do
       let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
       ok <- Dir.doesFileExist candidate
       if ok then pure (Just candidate) else firstExistingModule rs modPath
+
+-- | Extract one cache row per top-level declaration from a single
+-- module's source.  Signatures land in the @sig@ column courtesy of
+-- "Hypha.Source.Parser", so a tier-1 lookup is self-sufficient and the
+-- agent no longer needs a follow-up @hypha symbol@ just to learn the
+-- type.
+--
+-- The export-list filter is best-effort: when the module has an
+-- explicit @module M (a, b, ...) where@ header we restrict to those
+-- names; otherwise (no header, or 'Locate.parseExports' could not read
+-- one) we emit every top-level decl.  Over-inclusion is harmless for
+-- the search index — internal names still resolve, and the agent sees
+-- exactly the providers it would see today.
+--
+-- Some packages guard code with build-time-only CPP macros (e.g.
+-- @#error "CURRENT_PACKAGE_KEY undefined"@, only ever defined by a
+-- real GHC invocation) that "Hypha.Source.Parser" can never satisfy —
+-- it has no compiler session to ask.  That is an inherent limit of
+-- parsing without compiling, not something a smarter cpphs config can
+-- fix.  So this forces the parse eagerly and catches any exception
+-- (the CPP failure surfaces as a plain 'error' call deep inside
+-- @cpphs@) at the single-module granularity: one unparseable module
+-- loses its own rows, but 'buildAndCacheIndex' keeps indexing every
+-- other module and package in the plan instead of aborting outright.
+collectModuleRows :: Text -> Text -> FilePath -> Text -> IO [(Text, Text, Text, Text)]
+collectModuleRows compKey modPath f src = do
+  result <- try (evaluate rows)
+  case result of
+    Left (e :: SomeException) -> do
+      hPutStrLn stderr $
+        "warning: index build skipped module " <> Text.unpack modPath
+          <> " (" <> Text.unpack compKey <> "): " <> Text.unpack (briefException e)
+      pure []
+    Right rs -> pure rs
+  where
+    decls    = either (const []) id (Parser.parseDecls f src)
+    exps     = Set.fromList (Locate.parseExports src)
+    keep nm  = Set.null exps || nm `Set.member` exps
+    sigFor d = case Parser.declSigText src d of
+                 Just t  -> t
+                 Nothing -> Text.empty
+    rows = [ (compKey, modPath, nm, sigFor d)
+           | d <- decls
+           , let nm = Parser.declName d
+           , not (Text.null nm)
+           , keep nm
+           ]
 
 -- | Pick the source roots to scan for a package.  If any of the common
 -- @hs-source-dirs@ subdirectories exist we walk those exclusively;
