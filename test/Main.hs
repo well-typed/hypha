@@ -33,9 +33,11 @@ import qualified Unit.Project
 import qualified Unit.Server
 import qualified Unit.ServerSlots
 import qualified Unit.Haddock
+import qualified Unit.HaddockExtract
 import qualified Unit.InternalError
 import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
+import qualified Unit.SourceExtract
 import qualified Unit.SourceParser
 
 main :: IO ()
@@ -72,8 +74,10 @@ main = defaultMain (testGroup "hypha"
   , Unit.Server.tests
   , Unit.ServerSlots.tests
   , Unit.Haddock.tests
+  , Unit.HaddockExtract.tests
   , Unit.InternalError.tests
   , Unit.LookupPrepLocal.tests
   , Unit.RepoCache.tests
+  , Unit.SourceExtract.tests
   , Unit.SourceParser.tests
   ])
