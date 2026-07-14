@@ -44,13 +44,15 @@ instance MimeRender JS BL.ByteString where
 -- GET  /                           → home
 -- GET  /search?q=...               → search fragment
 -- GET  /pkg/:pkg                   → package overview
--- GET  /pkg/:pkg/:mod              → module view
+-- GET  /pkg/:pkg/:mod              → module documentation view
 -- GET  /pkg/:pkg/:mod/:sym         → symbol card
--- GET  /haddock/:pkgver/:path      → rewritten Haddock HTML
+-- GET  /haddock/:pkgver/*          → raw Haddock files (HTML rewritten,
+--                                    assets served with their real MIME)
 -- GET  /source/:pkg/:mod           → source view
 -- GET  /assets/style.css           → embedded CSS
 -- GET  /assets/htmx.min.js         → embedded HTMX
 -- GET  /assets/keybindings.js      → embedded keybindings
+-- GET  /assets/theme.js            → embedded theme switcher
 -- GET  /healthz                    → health check
 -- @
 type HyphaApi
@@ -60,11 +62,12 @@ type HyphaApi
   :<|> "pkg"     :> Capture "pkg" String :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Capture "sym" String :> Get '[HTML] (Html ())
-  :<|> "haddock" :> Capture "pkgver" String :> CaptureAll "path" String :> Get '[HTML] (Html ())
+  :<|> "haddock" :> Capture "pkgver" String :> Raw
   :<|> "source"  :> Capture "pkg" String :> Capture "mod" String :> QueryParam "line" Int :> Get '[HTML] (Html ())
   :<|> "assets" :> "style.css"      :> Get '[CSS] BL.ByteString
   :<|> "assets" :> "htmx.min.js"    :> Get '[JS]  BL.ByteString
   :<|> "assets" :> "keybindings.js" :> Get '[JS]  BL.ByteString
+  :<|> "assets" :> "theme.js"       :> Get '[JS]  BL.ByteString
   :<|> "healthz" :> Get '[PlainText] String
 
 api :: Proxy HyphaApi

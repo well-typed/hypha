@@ -90,3 +90,151 @@
 .export-list li a { display: block; }
 .export-list li a code { background: transparent; padding: 0; }
 .export-list li:hover { background: var(--code-bg); }
+
+/* ------------------------------------------------------------------ */
+/* Module documentation page                                           */
+
+.mod-doc { max-width: none; }
+
+.mod-head {
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+.mod-title { font-family: var(--mono); font-size: 1.45rem; }
+.mod-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+.mod-actions .action {
+  font-size: 0.82rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+}
+.mod-actions .action:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.doc-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+}
+.badge-prebuilt { background: rgba(46, 125, 79, 0.14);  color: var(--ok); }
+.badge-source   { background: var(--accent-soft);        color: var(--accent); }
+.badge-exports  { background: rgba(179, 115, 15, 0.14);  color: var(--warn-c); }
+
+/* Content + sticky "On this page" rail. */
+.doc-with-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15rem;
+  gap: 2rem;
+  align-items: start;
+}
+.doc-body { min-width: 0; }
+
+.toc-rail {
+  position: sticky;
+  top: 4.5rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+  font-size: 0.85rem;
+  border-left: 1px solid var(--border);
+  padding-left: 1rem;
+}
+.toc-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  margin-bottom: 0.4rem;
+}
+.toc-group {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 0.7rem 0 0.15rem;
+}
+.toc-list { list-style: none; padding: 0; margin: 0; }
+.toc-list li { margin: 0; }
+.toc-list a {
+  display: block;
+  font-family: var(--mono);
+  color: var(--muted);
+  padding: 0.12rem 0.3rem;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toc-list a:hover {
+  color: var(--accent);
+  background: var(--code-bg);
+  text-decoration: none;
+}
+
+@media (max-width: 1200px) {
+  .doc-with-rail { grid-template-columns: 1fr; }
+  .toc-rail { display: none; }
+}
+
+/* Topbar theme toggle. */
+.theme-toggle {
+  min-width: 4.2rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* Home hero hint chips. */
+.hint-chips {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1.2rem;
+  flex-wrap: wrap;
+}
+.hint-chip {
+  color: var(--muted);
+  font-size: 0.85rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+}
+
+/* Home stats. */
+.stat-row {
+  display: flex;
+  gap: 1rem;
+  margin: 1.4rem 0 0;
+  flex-wrap: wrap;
+}
+.stat-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  box-shadow: var(--shadow-1);
+  padding: 0.8rem 1.3rem;
+  min-width: 9rem;
+}
+.stat-card .stat-n {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.stat-card .stat-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

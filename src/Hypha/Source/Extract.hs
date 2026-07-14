@@ -31,6 +31,8 @@ import Hypha.Types.Doc (DocText (..))
 data SymbolInfo = SymbolInfo
   { siSignature :: !(Maybe Text)
   , siHaddock   :: !(Maybe DocText)
+  , siKind      :: !(Maybe Parser.DeclKind)
+    -- ^ Declaration kind when the parser could classify the symbol.
   , siSigLine   :: !(Maybe Int)
     -- ^ Line of the bare @sym :: ...@ signature, when present.  This is
     -- the most faithful source anchor: it sits above any CPP @#ifdef@
@@ -50,7 +52,7 @@ extractSymbolInfo src sym =
       mDecl    = Parser.findDecl sym decls
   in case mDecl of
        Nothing ->
-         SymbolInfo Nothing Nothing Nothing Nothing
+         SymbolInfo Nothing Nothing Nothing Nothing Nothing
        Just d  ->
          let mSig = sigText numbered d
              hd   = haddockBefore numbered d
@@ -58,6 +60,7 @@ extractSymbolInfo src sym =
          in SymbolInfo
               { siSignature = mSig
               , siHaddock   = hd
+              , siKind      = Just (Parser.declKind d)
               , siSigLine   = Parser.declSigLine d
               , siLine      = case defL of
                                  Just _  -> defL
@@ -165,8 +168,12 @@ moduleHeaderBlock ls = do
       stripped = map (Text.stripStart . snd) prior
       -- Skip pragmas and blank lines sitting between the comment block
       -- and the module keyword, then collect the contiguous comments.
+      -- Pragma lines terminate the collection: @{-# LANGUAGE ... #-}@
+      -- satisfies 'isCommentLine' (it starts with @{-@) but is not
+      -- prose, and files conventionally stack pragmas directly above
+      -- the header block.
       rest     = dropWhile isSkippable stripped
-      block    = takeWhile isCommentLine rest
+      block    = takeWhile (\t -> isCommentLine t && not (isPragmaLine t)) rest
   if any isHaddockStarter block && not (null block)
     then Just (DocText (Text.stripEnd (Text.unlines (reverse block))))
     else Nothing
@@ -176,7 +183,10 @@ moduleHeaderBlock ls = do
         (i : _) -> Just i
         []      -> Nothing
     isModuleLine t = "module " `Text.isPrefixOf` t || t == "module"
-    isSkippable t = Text.null t || "{-#" `Text.isPrefixOf` t
+    isSkippable t = Text.null t || isPragmaLine t
+
+isPragmaLine :: Text -> Bool
+isPragmaLine = Text.isPrefixOf "{-#"
 
 -- Internals --------------------------------------------------------
 

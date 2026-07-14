@@ -30,7 +30,11 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
     meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1"]
     title_ (toHtml title)
     link_ [rel_ "stylesheet", href_ "/assets/style.css"]
+    -- theme.js runs synchronously so data-theme lands before first
+    -- paint — no flash of the wrong theme.  CSP forbids inlining it.
+    script_ [src_ "/assets/theme.js"] (mempty :: Text)
     script_ [src_ "/assets/htmx.min.js", defer_ ""] (mempty :: Text)
+    script_ [src_ "/assets/keybindings.js", defer_ ""] (mempty :: Text)
   body_ $ do
     -- Initial progress slot — htmx replaces this with a real fragment
     -- on first poll.  Rendered hidden so the page never flashes a
@@ -45,9 +49,13 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
       div_ [class_ "topbar"] $ do
         a_ [href_ "/", class_ "brand"] "hypha"
         UISearch.searchInput
-      div_ [class_ "sidebar"] $ do
-        div_ [class_ "section-title"] "Packages"
-        UITree.packageTree pkgs
+        button_ [ id_ "theme-toggle"
+                , class_ "theme-toggle"
+                , type_ "button"
+                , title_ "Theme"
+                ]
+                "Auto"
+      div_ [class_ "sidebar"] $ UITree.sidebar pkgs
       div_ [class_ "main"] $ do
         breadcrumbs crumbs
         body

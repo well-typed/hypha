@@ -56,6 +56,18 @@ tests = testGroup "Unit.SourceExtract"
         Left e  -> assertFailure (show e)
         Right d -> mdiHeader d @?= Nothing
 
+  , testCase "pragmas stacked above the header never leak into the prose" $ do
+      let src = Text.unlines
+            [ "{-# LANGUAGE DerivingStrategies #-}"
+            , "{-# LANGUAGE OverloadedStrings  #-}"
+            , "-- | Real header prose."
+            , "module Pragmatic where"
+            , "x = 1"
+            ]
+      case Extract.extractModuleDoc "Pragmatic.hs" src of
+        Left e  -> assertFailure (show e)
+        Right d -> fmap unDocText (mdiHeader d) @?= Just "-- | Real header prose."
+
   , testCase "license comment separated by a blank line is not a header" $ do
       let src = Text.unlines
             [ "-- Copyright (c) nobody"

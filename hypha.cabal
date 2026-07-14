@@ -100,7 +100,9 @@ library
     Hypha.Server.Slots
     Hypha.Server.Haddock.Extract
     Hypha.Server.Haddock.Rewrite
+    Hypha.Server.ModuleDoc
     Hypha.Server.Ui.Layout
+    Hypha.Server.Ui.ModuleDoc
     Hypha.Server.Ui.Search
     Hypha.Server.Ui.Tree
     Hypha.Server.Ui.Doc

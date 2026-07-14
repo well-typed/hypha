@@ -5,9 +5,12 @@ module Hypha.Server.Ui.Search
   , resultsFragment
   , emptyResults
   , buildingFragment
+  , highlightTokens
   ) where
 
+import Data.List (sortOn)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Lucid
 import Lucid.Base (makeAttributes)
 
@@ -50,11 +53,12 @@ searchInput = do
     ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | Render search results as an unordered list.
--- Each row carries (package, module path, symbol name, signature).
+-- Each row carries (package, module path, symbol name, signature);
+-- the query tokens drive @\<mark\>@ highlighting on the symbol name.
 -- An empty hit list still produces a visible "No matches." row — use
 -- 'emptyResults' for the truly-empty case (no query in flight).
-resultsFragment :: [(Text, Text, Text, Text)] -> Html ()
-resultsFragment rows = ul_ [class_ "results", id_ "results"] $
+resultsFragment :: [Text] -> [(Text, Text, Text, Text)] -> Html ()
+resultsFragment tokens rows = ul_ [class_ "results", id_ "results"] $
   if null rows
     then li_ [class_ "empty"] "No matches."
     else mapM_ row rows
@@ -62,9 +66,41 @@ resultsFragment rows = ul_ [class_ "results", id_ "results"] $
     row :: (Text, Text, Text, Text) -> Html ()
     row (pkg, modPath, name, sig) = li_ $ do
       a_ [href_ ("/pkg/" <> pkg <> "/" <> modPath <> "/" <> name)] $ do
-        span_ [class_ "name"]   (toHtml name)
+        span_ [class_ "name"]   (highlightTokens tokens name)
         span_ [class_ "sig"]    (toHtml sig)
         span_ [class_ "pkgmod"] (toHtml (pkg <> " \183 " <> modPath))
+
+-- | Wrap the first case-insensitive occurrence of every token in
+-- @\<mark\>@.  Matches are claimed left-to-right and never overlap or
+-- nest; unmatched text passes through verbatim.
+highlightTokens :: [Text] -> Text -> Html ()
+highlightTokens tokens t = render 0 (claim (sortOn fst candidates) (-1))
+  where
+    lower = Text.toLower t
+
+    candidates =
+      [ (i, Text.length tok)
+      | tok0 <- tokens
+      , let tok = Text.toLower tok0
+      , not (Text.null tok)
+      , Just i <- [firstIndex tok]
+      ]
+
+    firstIndex needle =
+      let (pre, rest) = Text.breakOn needle lower
+      in if Text.null rest then Nothing else Just (Text.length pre)
+
+    -- Keep only intervals that start after the previous kept one ends.
+    claim [] _ = []
+    claim ((s, l) : xs) end
+      | s > end   = (s, l) : claim xs (s + l - 1)
+      | otherwise = claim xs end
+
+    render pos [] = toHtml (Text.drop pos t)
+    render pos ((s, l) : xs) = do
+      toHtml (Text.take (s - pos) (Text.drop pos t))
+      mark_ (toHtml (Text.take l (Text.drop s t)))
+      render (s + l) xs
 
 -- | Empty results UL — used when there is no query in flight so the
 -- floating dropdown collapses (CSS @.results:empty { display: none; }@).

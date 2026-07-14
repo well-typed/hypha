@@ -146,3 +146,14 @@
 @media (prefers-reduced-motion: reduce) {
   .results .building { animation: none; }
 }
+
+/* Query-token highlighting inside result names. */
+.results li .name mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0;
+}
+
+/* Keyboard cursor row (keybindings.js moves the .cursor class). */
+.results li.cursor a { text-decoration: none; }

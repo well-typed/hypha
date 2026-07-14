@@ -10,8 +10,15 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
 import Text.RawString.QQ (r)
 
+import Data.Text.Lazy qualified as LText
+import Lucid (renderText)
+
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, collectModuleRows, parseBind )
+import Hypha.Server.App (mimeFor, sanitizeSegments)
+import Hypha.Server.Ui.Search (highlightTokens)
+import Hypha.Server.Ui.Tree (splitByOrigin)
+import Hypha.Types.BuildPlan (PackageOrigin (..))
 
 mkIPv4 :: [Int] -> IP
 mkIPv4 = IPv4 . toIPv4
@@ -24,7 +31,66 @@ tests = testGroup "Unit.Server"
   [ testGroup "Server.parseBind" parseBindTests
   , testGroup "Server.collectModuleRows" collectModuleRowsTests
   , testGroup "Server.briefException" briefExceptionTests
+  , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
+  , testGroup "App.mimeFor" mimeForTests
+  , testGroup "Tree.splitByOrigin" splitByOriginTests
+  , testGroup "Search.highlightTokens" highlightTokensTests
   ]
+
+sanitizeSegmentsTests :: [TestTree]
+sanitizeSegmentsTests =
+  [ testCase "plain html file accepted" $
+      sanitizeSegments ["Data-Map.html"] @?= Just ["Data-Map.html"]
+  , testCase "nested src path accepted" $
+      sanitizeSegments ["src", "Foo.html"] @?= Just ["src", "Foo.html"]
+  , testCase "empty path rejected" $
+      sanitizeSegments [] @?= Nothing
+  , testCase "parent traversal rejected" $
+      sanitizeSegments ["..", "x"] @?= Nothing
+  , testCase "slash inside a segment rejected" $
+      sanitizeSegments ["a/b"] @?= Nothing
+  , testCase "empty segment rejected" $
+      sanitizeSegments [""] @?= Nothing
+  , testCase "dotfile rejected" $
+      sanitizeSegments [".hidden"] @?= Nothing
+  ]
+
+mimeForTests :: [TestTree]
+mimeForTests =
+  [ testCase "css"       $ mimeFor "ocean.css"  @?= "text/css; charset=utf-8"
+  , testCase "min.js"    $ mimeFor "b.min.js"   @?= "application/javascript; charset=utf-8"
+  , testCase "html"      $ mimeFor "c.html"     @?= "text/html; charset=utf-8"
+  , testCase "png"       $ mimeFor "d.png"      @?= "image/png"
+  , testCase "extension-less falls back to octet-stream" $
+      mimeFor "LICENSE" @?= "application/octet-stream"
+  ]
+
+splitByOriginTests :: [TestTree]
+splitByOriginTests =
+  [ testCase "local packages land in the project group, rest are dependencies" $ do
+      let local   = ("mine",  OriginLocal "/src/mine")
+          hackage = ("aeson", OriginHackage)
+          dist    = ("base",  OriginDistribution)
+          srp     = ("dep",   OriginSourceRepo Nothing Nothing Nothing)
+      splitByOrigin [hackage, local, dist, srp]
+        @?= ([local], [hackage, dist, srp])
+  ]
+
+highlightTokensTests :: [TestTree]
+highlightTokensTests =
+  [ testCase "single token wraps its first occurrence" $
+      renderHl ["map"] "fmap" @?= "f<mark>map</mark>"
+  , testCase "match is case-insensitive but preserves original text" $
+      renderHl ["MAP"] "mapMaybe" @?= "<mark>map</mark>Maybe"
+  , testCase "several tokens highlight without overlapping" $
+      renderHl ["fold", "map"] "foldMap" @?= "<mark>fold</mark><mark>Map</mark>"
+  , testCase "no match passes text through verbatim" $
+      renderHl ["zip"] "fold" @?= "fold"
+  , testCase "overlapping tokens never nest marks" $
+      renderHl ["foldm", "map"] "foldmap" @?= "<mark>foldm</mark>ap"
+  ]
+  where
+    renderHl toks t = LText.toStrict (renderText (highlightTokens toks t))
 
 parseBindTests :: [TestTree]
 parseBindTests =

@@ -1,31 +1,72 @@
 :root {
   color-scheme: light dark;
-  --bg:        #fdfcfa;
+  --bg:        #faf9f7;
   --panel:     #ffffff;
-  --fg:        #1a1a1a;
-  --muted:     #6b6f76;
+  --panel-2:   #f3f1ec;
+  --fg:        #1c1b1a;
+  --muted:     #6d7078;
+  --faint:     #9a9da6;
   --accent:    #b0413e;
   --accent-2:  #5a3a86;
+  --accent-soft: rgba(176, 65, 62, 0.10);
+  --ok:        #2e7d4f;
+  --warn-c:    #b3730f;
   --code-bg:   #f4f1ea;
-  --code-fg:   #1a1a1a;
-  --border:    #e4e2dd;
-  --shadow:    0 2px 8px rgba(0, 0, 0, 0.04);
+  --code-fg:   #1c1b1a;
+  --border:    #e6e3dc;
+  --border-strong: #d5d1c8;
+  --shadow:    0 2px 8px rgba(28, 27, 26, 0.04);
+  --shadow-1:  0 1px 2px rgba(28, 27, 26, 0.05);
+  --shadow-2:  0 4px 16px rgba(28, 27, 26, 0.08);
+  --r-s: 6px; --r-m: 10px; --r-l: 14px;
   --mono:      ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
   --sans:      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
+
+/* Dark palette applies (a) automatically when the OS prefers dark and
+ * no explicit light choice was stored, and (b) whenever theme.js
+ * stamps data-theme="dark".  The two blocks must stay in sync. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg:        #0f1115;
-    --panel:     #161922;
-    --fg:        #e8e9ee;
-    --muted:     #8a8f9c;
+  :root:not([data-theme="light"]) {
+    --bg:        #0e1014;
+    --panel:     #151821;
+    --panel-2:   #1b1f2a;
+    --fg:        #e9eaef;
+    --muted:     #8b909d;
+    --faint:     #5d6270;
     --accent:    #f08c84;
     --accent-2:  #b3a1e5;
+    --accent-soft: rgba(240, 140, 132, 0.15);
+    --ok:        #6fbf92;
+    --warn-c:    #d9a555;
     --code-bg:   #1a1d26;
-    --code-fg:   #e8e9ee;
+    --code-fg:   #e9eaef;
     --border:    #262a36;
+    --border-strong: #333849;
     --shadow:    0 2px 12px rgba(0, 0, 0, 0.32);
+    --shadow-1:  0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2:  0 6px 24px rgba(0, 0, 0, 0.45);
   }
+}
+:root[data-theme="dark"] {
+  --bg:        #0e1014;
+  --panel:     #151821;
+  --panel-2:   #1b1f2a;
+  --fg:        #e9eaef;
+  --muted:     #8b909d;
+  --faint:     #5d6270;
+  --accent:    #f08c84;
+  --accent-2:  #b3a1e5;
+  --accent-soft: rgba(240, 140, 132, 0.15);
+  --ok:        #6fbf92;
+  --warn-c:    #d9a555;
+  --code-bg:   #1a1d26;
+  --code-fg:   #e9eaef;
+  --border:    #262a36;
+  --border-strong: #333849;
+  --shadow:    0 2px 12px rgba(0, 0, 0, 0.32);
+  --shadow-1:  0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2:  0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
 * { box-sizing: border-box; }
@@ -49,6 +90,12 @@ a {
 }
 a:hover { color: var(--accent-2); text-decoration: underline; }
 
+:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 h1, h2, h3, h4 {
   margin: 0 0 0.5rem;
   font-weight: 600;
@@ -66,7 +113,7 @@ code, pre {
 code { padding: 0.05em 0.35em; border-radius: 3px; font-size: 0.92em; }
 pre  {
   padding: 0.8rem 1rem;
-  border-radius: 6px;
+  border-radius: var(--r-s);
   overflow-x: auto;
   border: 1px solid var(--border);
   line-height: 1.45;
@@ -82,5 +129,18 @@ kbd {
   border-radius: 4px;
   color: var(--fg);
 }
+
+button {
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-s);
+  padding: 0.3rem 0.65rem;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+button:hover { border-color: var(--border-strong); background: var(--panel-2); }
 
 ::selection { background: var(--accent); color: #fff; }
