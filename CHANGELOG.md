@@ -6,6 +6,30 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`hypha server` module pages now show real documentation** instead
+  of a bare export list, resolved through a typed priority chain:
+  prebuilt Haddock (hypha cache → local dist-dir → cabal store) is
+  embedded and restyled inside the hypha shell; otherwise the docs are
+  **rendered on the fly from source** (module header prose, per-decl
+  signatures, haddock comments, kind badges, a sticky "On this page"
+  rail, haddock-compatible `v:`/`t:` anchors) with zero extra disk;
+  the export-only fallback states the reason for the degradation.
+- `Hypha.Source.Parser` classifies declarations (`DeclKind`) and now
+  covers `data`/`newtype`/`class`/`type`/`type family`/`pattern`/
+  `foreign` decls — they were previously invisible to the search
+  index and symbol pages.
+- Server shell overhaul: three-state theme toggle (auto/light/dark),
+  filterable Project/Dependencies sidebar groups with active-entry
+  highlight, keyboard-first search (`/`, `Ctrl-K`, `↑↓`, `Enter`,
+  `Esc`) with `<mark>` match highlighting, home stat cards, symbol
+  card copy-signature button and kind badge, source-view header with
+  a docs backlink.
+- `/haddock/:pkgver/*` serves non-HTML assets (CSS/JS/fonts/images)
+  with correct MIME types and rejects path traversal, so raw Haddock
+  pages finally render styled.
+
 ### Changed
 
 - `hypha-mcp`'s `hypha.exec` tool description spells out the argv-array

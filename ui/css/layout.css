@@ -238,3 +238,9 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* Module/doc pages get a wider column than plain reading pages so the
+ * content + TOC rail use large viewports instead of leaving a dead
+ * right margin. (:has is fine: the server targets current browsers.) */
+.main:has(.mod-doc),
+.main:has(.source-view) { max-width: 82rem; }
