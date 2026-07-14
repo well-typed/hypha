@@ -12,6 +12,10 @@
 module Hypha.Source.Extract
   ( SymbolInfo (..)
   , extractSymbolInfo
+    -- * Batch module extraction
+  , ModuleDocInfo (..)
+  , DocEntry (..)
+  , extractModuleDoc
   ) where
 
 import Data.Text qualified as Text
@@ -60,6 +64,120 @@ extractSymbolInfo src sym =
                                  Nothing -> Parser.declSigLine d
               }
 
+-- Batch module extraction -------------------------------------------
+
+-- | Everything the module documentation view needs, extracted from a
+-- single parse of the module source.
+data ModuleDocInfo = ModuleDocInfo
+  { mdiHeader  :: !(Maybe DocText)
+    -- ^ The module-level @-- |@ comment block above the @module@
+    -- keyword, when present.
+  , mdiEntries :: ![DocEntry]
+    -- ^ One entry per top-level declaration, in source order.
+  }
+  deriving stock (Show, Eq)
+
+-- | A single top-level declaration, ready for rendering.
+data DocEntry = DocEntry
+  { deName      :: !Text
+  , deKind      :: !Parser.DeclKind
+  , deSignature :: !(Maybe Text)
+    -- ^ The @name :: ...@ signature for values; for type\/class
+    -- declarations without one, the raw source slice of the
+    -- declaration body (clamped to 'declSliceLimit' lines).
+  , deHaddock   :: !(Maybe DocText)
+  , deSigLine   :: !(Maybe Int)
+  , deDefLine   :: !(Maybe Int)
+  }
+  deriving stock (Show, Eq)
+
+-- | Extract the whole module's documentation in one parse.  The
+-- per-symbol path ('extractSymbolInfo') re-parses the module for every
+-- query, which is fine for a single symbol card but quadratic when a
+-- module page needs every export.
+extractModuleDoc :: FilePath -> Text -> Either Parser.ParseError ModuleDocInfo
+extractModuleDoc path src = do
+  decls <- Parser.parseDecls path src
+  let numbered = numberedLines src
+  pure ModuleDocInfo
+    { mdiHeader  = moduleHeaderBlock numbered
+    , mdiEntries = map (entryFor numbered) decls
+    }
+  where
+    entryFor ls d = DocEntry
+      { deName      = Parser.declName d
+      , deKind      = Parser.declKind d
+      , deSignature = signatureFor ls d
+      , deHaddock   = stripDocEnd <$> (anchorLineOf d >>= haddockAbove ls)
+      , deSigLine   = Parser.declSigLine d
+      , deDefLine   = Parser.declDefLine d
+      }
+
+    -- The line the decl's Haddock block sits above: the signature when
+    -- there is one, else the first definition line.
+    anchorLineOf d = case Parser.declSigLine d of
+      Just n  -> Just n
+      Nothing -> Parser.declDefLine d
+
+    -- Values render their signature; type-ish decls without a @::@
+    -- signature render the (clamped) source slice of their body so
+    -- constructors, fields, and methods stay visible.  Function bodies
+    -- are never sliced — they are implementation, not interface.
+    signatureFor ls d = case sigText ls d of
+      Just t  -> Just t
+      Nothing
+        | Parser.declKind d == Parser.DkFunction -> Nothing
+        | otherwise -> do
+            s <- Parser.declDefLine d
+            e <- Parser.declDefEndLine d
+            declSlice ls s e
+
+-- | Trim trailing whitespace from a 'DocText' (the line-based
+-- collectors produce a trailing newline via 'Text.unlines').
+stripDocEnd :: DocText -> DocText
+stripDocEnd (DocText t) = DocText (Text.stripEnd t)
+
+-- | Maximum number of source lines a type\/class body slice may carry
+-- before it is clamped with a trailing ellipsis.
+declSliceLimit :: Int
+declSliceLimit = 40
+
+-- | Slice lines @[s .. e]@ out of the numbered source, clamped to
+-- 'declSliceLimit' lines with a trailing @…@ marker when truncated.
+declSlice :: [(Int, Text)] -> Int -> Int -> Maybe Text
+declSlice ls s e =
+  case [ t | (i, t) <- ls, i >= s, i <= e ] of
+    []    -> Nothing
+    slice ->
+      let clamped = take declSliceLimit slice
+          suffix  = [ "\x2026" | length slice > declSliceLimit ]
+      in Just (Text.stripEnd (Text.unlines (clamped <> suffix)))
+
+-- | The module-level Haddock header: the contiguous comment block that
+-- ends directly above the @module@ keyword (allowing pragma and blank
+-- lines in between), provided it contains a @-- |@ starter.  A comment
+-- block separated from the header scan by a blank line boundary within
+-- itself (e.g. a licence header higher up) is not collected.
+moduleHeaderBlock :: [(Int, Text)] -> Maybe DocText
+moduleHeaderBlock ls = do
+  modLn <- lookupModuleLine
+  let prior    = reverse (takeWhile (\(k, _) -> k < modLn) ls)
+      stripped = map (Text.stripStart . snd) prior
+      -- Skip pragmas and blank lines sitting between the comment block
+      -- and the module keyword, then collect the contiguous comments.
+      rest     = dropWhile isSkippable stripped
+      block    = takeWhile isCommentLine rest
+  if any isHaddockStarter block && not (null block)
+    then Just (DocText (Text.stripEnd (Text.unlines (reverse block))))
+    else Nothing
+  where
+    lookupModuleLine =
+      case [ i | (i, t) <- ls, isModuleLine (Text.stripStart t) ] of
+        (i : _) -> Just i
+        []      -> Nothing
+    isModuleLine t = "module " `Text.isPrefixOf` t || t == "module"
+    isSkippable t = Text.null t || "{-#" `Text.isPrefixOf` t
+
 -- Internals --------------------------------------------------------
 
 -- | Pair each line with its 1-based index.
@@ -91,13 +209,18 @@ sigText ls d = do
 haddockBefore :: [(Int, Text)] -> Parser.Decl -> Maybe DocText
 haddockBefore ls d = do
   startLn <- Parser.declSigLine d
-  let prior   = reverse (takeWhile (\(k, _) -> k < startLn) ls)
+  haddockAbove ls startLn
+
+-- | The contiguous Haddock comment block directly above @startLn@.
+haddockAbove :: [(Int, Text)] -> Int -> Maybe DocText
+haddockAbove ls startLn =
+  let prior    = reverse (takeWhile (\(k, _) -> k < startLn) ls)
       stripped = map (Text.stripStart . snd) prior
       block    = takeWhile isCommentLine stripped
       hasStart = any isHaddockStarter block
-  if hasStart && not (null block)
-    then Just (DocText (Text.unlines (reverse block)))
-    else Nothing
+  in if hasStart && not (null block)
+       then Just (DocText (Text.unlines (reverse block)))
+       else Nothing
 
 isCommentLine :: Text -> Bool
 isCommentLine t =
