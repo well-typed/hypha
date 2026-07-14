@@ -15,6 +15,7 @@
 -- what we can read.
 module Hypha.Source.Parser
   ( Decl (..)
+  , DeclKind (..)
   , ParseError (..)
   , parseDecls
   , parseDeclsIO
@@ -46,6 +47,7 @@ import System.IO.Unsafe (unsafePerformIO)
 data Decl = Decl
   { declName       :: !Text
   , declSiblings   :: ![Text]
+  , declKind       :: !DeclKind
   , declSigLine    :: !(Maybe Int)
     -- ^ Start line of the @sym :: ...@ signature, 1-based.
   , declSigEndLine :: !(Maybe Int)
@@ -54,7 +56,25 @@ data Decl = Decl
     -- re-slice the original source to recover the signature text
     -- with continuations intact.
   , declDefLine    :: !(Maybe Int)
+  , declDefEndLine :: !(Maybe Int)
+    -- ^ End line of the definition span (inclusive, 1-based).  For
+    -- data\/class declarations this delimits the whole body so callers
+    -- can slice the constructor\/method block out of the source.
   }
+  deriving stock (Show, Eq)
+
+-- | What sort of top-level declaration a 'Decl' names.  Drives the
+-- kind badges in the server UI and lets consumers separate types from
+-- values without re-parsing the source.
+data DeclKind
+  = DkFunction
+  | DkData
+  | DkNewtype
+  | DkClass
+  | DkTypeSyn
+  | DkTypeFamily
+  | DkPatternSyn
+  | DkForeign
   deriving stock (Show, Eq)
 
 -- | Carrier for any parser failure surfaced from @ghc-lib-parser@.
@@ -210,9 +230,14 @@ mergeByName = go []
     merge a b = Decl
       { declName       = declName a
       , declSiblings   = declSiblings a `orEmpty` declSiblings b
+        -- A bare 'DkFunction' is the least informative kind (every
+        -- signature defaults to it), so any more specific kind from
+        -- the other half of the merge wins.
+      , declKind       = if declKind a == DkFunction then declKind b else declKind a
       , declSigLine    = declSigLine a    `orFirst` declSigLine b
       , declSigEndLine = declSigEndLine a `orFirst` declSigEndLine b
       , declDefLine    = declDefLine a    `orFirst` declDefLine b
+      , declDefEndLine = declDefEndLine a `orFirst` declDefEndLine b
       }
 
     orFirst (Just x) _ = Just x
@@ -224,24 +249,56 @@ mergeByName = go []
 declsFromTop :: LHsDecl GhcPs -> [Decl]
 declsFromTop ld = case unLoc ld of
   SigD _ (TypeSig _ lnames _ty) ->
-    let names      = map (rdrText . unLoc) lnames
-        (mS, mE)   = locLines ld
-    in [ Decl { declName       = nm
-              , declSiblings   = filter (/= nm) names
-              , declSigLine    = mS
-              , declSigEndLine = mE
-              , declDefLine    = Nothing
-              }
-       | nm <- names ]
+    let names    = map (rdrText . unLoc) lnames
+        (mS, mE) = locLines ld
+    in [ sigDecl nm names mS mE DkFunction | nm <- names ]
+  SigD _ (PatSynSig _ lnames _ty) ->
+    let names    = map (rdrText . unLoc) lnames
+        (mS, mE) = locLines ld
+    in [ sigDecl nm names mS mE DkPatternSyn | nm <- names ]
   ValD _ (FunBind { fun_id = L _ rn }) ->
-    let (mS, _) = locLines ld
-    in [ Decl { declName       = rdrText rn
-              , declSiblings   = []
-              , declSigLine    = Nothing
-              , declSigEndLine = Nothing
-              , declDefLine    = mS
-              } ]
+    let (mS, mE) = locLines ld
+    in [ defDecl (rdrText rn) mS mE DkFunction ]
+  ValD _ (PatSynBind _ (PSB { psb_id = L _ rn })) ->
+    let (mS, mE) = locLines ld
+    in [ defDecl (rdrText rn) mS mE DkPatternSyn ]
+  TyClD _ tc ->
+    let (mS, mE) = locLines ld
+    in case tc of
+         SynDecl { tcdLName = L _ rn } ->
+           [ defDecl (rdrText rn) mS mE DkTypeSyn ]
+         FamDecl { tcdFam = FamilyDecl { fdLName = L _ rn } } ->
+           [ defDecl (rdrText rn) mS mE DkTypeFamily ]
+         ClassDecl { tcdLName = L _ rn } ->
+           [ defDecl (rdrText rn) mS mE DkClass ]
+         DataDecl { tcdLName = L _ rn, tcdDataDefn = defn } ->
+           let k = case dd_cons defn of
+                     NewTypeCon {} -> DkNewtype
+                     _             -> DkData
+           in [ defDecl (rdrText rn) mS mE k ]
+  ForD _ (ForeignImport { fd_name = L _ rn }) ->
+    let (mS, mE) = locLines ld
+    in [ defDecl (rdrText rn) mS mE DkForeign ]
   _ -> []
+  where
+    sigDecl nm names mS mE k = Decl
+      { declName       = nm
+      , declSiblings   = filter (/= nm) names
+      , declKind       = k
+      , declSigLine    = mS
+      , declSigEndLine = mE
+      , declDefLine    = Nothing
+      , declDefEndLine = Nothing
+      }
+    defDecl nm mS mE k = Decl
+      { declName       = nm
+      , declSiblings   = []
+      , declKind       = k
+      , declSigLine    = Nothing
+      , declSigEndLine = Nothing
+      , declDefLine    = mS
+      , declDefEndLine = mE
+      }
 
 locLines :: LHsDecl GhcPs -> (Maybe Int, Maybe Int)
 locLines ld = case locA (getLoc ld) of

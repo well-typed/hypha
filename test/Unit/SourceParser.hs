@@ -14,7 +14,7 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Hypha.Source.Parser
-  ( Decl (..), parseDecls, findDecl, declSigText )
+  ( Decl (..), DeclKind (..), parseDecls, findDecl, declSigText )
 
 tests :: TestTree
 tests = testGroup "Unit.SourceParser"
@@ -79,5 +79,54 @@ tests = testGroup "Unit.SourceParser"
           d <- maybe (fail "noSig missing") pure (findDecl "noSig" ds)
           declSigLine d @?= Nothing
           declDefLine d @?= Just 3
+        Left e -> fail (show e)
+
+  , testCase "parseDecls classifies declaration kinds" $ do
+      let src = Text.unlines
+            [ "{-# LANGUAGE TypeFamilies, PatternSynonyms #-}"
+            , "module Fixture where"
+            , "data Colour = Red | Green"
+            , "newtype Wrap = Wrap Int"
+            , "class Pretty a where"
+            , "  pretty :: a -> String"
+            , "type Alias = Int"
+            , "type family Elem c"
+            , "pattern None :: Maybe a"
+            , "pattern None = Nothing"
+            , "run :: Int -> Int"
+            , "run x = x"
+            ]
+      case parseDecls "Fixture.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> show e)
+        Right ds -> do
+          let kindOf n = declKind <$> findDecl n ds
+          kindOf "Colour" @?= Just DkData
+          kindOf "Wrap"   @?= Just DkNewtype
+          kindOf "Pretty" @?= Just DkClass
+          kindOf "Alias"  @?= Just DkTypeSyn
+          kindOf "Elem"   @?= Just DkTypeFamily
+          kindOf "None"   @?= Just DkPatternSyn
+          kindOf "run"    @?= Just DkFunction
+          -- class methods stay inside the class body: not top-level rows
+          kindOf "pretty" @?= Nothing
+          -- span slicing support for multi-line type decls
+          (declDefLine    =<< findDecl "Colour" ds) @?= Just 3
+          (declDefEndLine =<< findDecl "Colour" ds) @?= Just 3
+          (declDefEndLine =<< findDecl "Pretty" ds) @?= Just 6
+
+  , testCase "merged sig+def carries kind and both spans" $ do
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "run :: Int -> Int"
+            , "run x = x"
+            ]
+      case parseDecls "M.hs" src of
+        Right ds -> do
+          d <- maybe (fail "run missing") pure (findDecl "run" ds)
+          declKind d       @?= DkFunction
+          declSigLine d    @?= Just 3
+          declDefLine d    @?= Just 4
+          declDefEndLine d @?= Just 4
         Left e -> fail (show e)
   ]
