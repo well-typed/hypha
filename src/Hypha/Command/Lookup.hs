@@ -150,7 +150,7 @@ buildOutcome q providers tiers remoteOutcome =
       , outcomeOutsidePlan = False
       , outcomeOverrides   = []
       , outcomeActions     = Map.fromList
-          [ ( pPkg p <> "/" <> pMod p
+          [ ( pPkg p <> "/" <> pMod p <> "/" <> pName p
             , "hypha symbol "
                 <> pPkg p <> "/" <> pMod p <> "/" <> pName p )
           | p <- take 5 providers
