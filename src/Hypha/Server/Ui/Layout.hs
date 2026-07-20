@@ -54,7 +54,7 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
                 , type_ "button"
                 , title_ "Theme"
                 ]
-                "Auto"
+                "Theme"
       div_ [class_ "sidebar"] $ UITree.sidebar pkgs
       div_ [class_ "main"] $ do
         breadcrumbs crumbs
