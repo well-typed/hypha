@@ -6,6 +6,27 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Default output format is now YAML** instead of JSON. YAML is
+  token-leaner for LLM consumption (no brace/quote overhead), has a
+  perfect isomorphism with JSON, and renders multi-line strings
+  (Haddock, source snippets) as literal block scalars instead of
+  `\n`-escaped single lines. Use `--json` to opt into the previous
+  JSON envelope format for machine pipelines.
+- **Removed `schema`, `command`, and `ok` from the output envelope.**
+  The consumer always knows what they invoked, and the presence of
+  `result` vs `error` is the success/failure signal — the boolean was
+  redundant. The envelope is now purely structural.
+- **Renamed `--human` to `--json`** (inverted semantics). The old
+  `--human` flag was a misleading name for what was actually plain
+  text output; the new default is YAML via `aeson-yaml`, and `--json`
+  opts into the compact JSON envelope.
+- **Removed `in_plan` from `package` command output.** The field was
+  hardcoded to `true` and redundant with the envelope-level
+  `outside_plan` flag.
+- Added `aeson-yaml` dependency (BSD3, pure Haskell, no C FFI).
+
 ### Added
 
 - **`hypha server` module pages now show real documentation** instead
