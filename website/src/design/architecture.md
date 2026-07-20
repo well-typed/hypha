@@ -17,8 +17,9 @@ library: hypha
   └── Server ......... HTMX-driven doc browser with command-palette UX
 ```
 
-For full details see the master design spec in the repository:
-[`docs/superpowers/specs/2026-05-18-hypha-design.md`](https://gitlab.well-typed.com/well-typed/hypha/-/blob/main/docs/superpowers/specs/2026-05-18-hypha-design.md).
+For full details see the design specs and implementation plans in the
+repository, under
+[`docs/superpowers/`](https://gitlab.well-typed.com/well-typed/hypha/-/tree/main/docs/superpowers).
 
 ## Development
 
