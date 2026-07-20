@@ -1,0 +1,25 @@
+[book]
+title = "Hypha"
+authors = ["Well-Typed LLP"]
+description = "A Haskell-aware code/doc browser tuned for AI agents and humans alike."
+src = "src"
+language = "en"
+
+[output.html]
+# Custom hypha theme lives in hypha.css (palette lifted from ui/css).
+additional-css = ["hypha.css"]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://gitlab.well-typed.com/well-typed/hypha"
+edit-url-template = "https://gitlab.well-typed.com/well-typed/hypha/-/edit/main/website/{path}"
+# site-url is intentionally unset until the GitLab Pages URL is known.
+# Relative links work regardless; set this to the path prefix (e.g. "/hypha/")
+# once Pages is enabled so absolute asset links resolve.
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20

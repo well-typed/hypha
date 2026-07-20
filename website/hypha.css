@@ -1,0 +1,113 @@
+/* hypha custom theme.
+ *
+ * Palette lifted verbatim from the server UI (ui/css/base.css) so the docs
+ * site and the tool read as one product. We override mdBook's CSS custom
+ * properties for the two themes we ship: `light` (default) and `navy`
+ * (preferred dark). Loaded via book.toml `additional-css`, after mdBook's
+ * own theme CSS, so these declarations win.
+ */
+
+/* ---- Light theme -------------------------------------------------------- */
+.light {
+    --bg: #faf9f7;
+    --fg: #1c1b1a;
+
+    --sidebar-bg: #f2efe8;
+    --sidebar-fg: #3b3a38;
+    --sidebar-non-existant: #9a9da6;
+    --sidebar-active: #b0413e;   /* accent */
+    --sidebar-spacer: #e6e3dc;
+
+    --scrollbar: #d5d1c8;
+
+    --icons: #9a9da6;
+    --icons-hover: #b0413e;
+
+    --links: #b0413e;            /* accent */
+
+    --inline-code-color: #b0413e;
+
+    --theme-popup-bg: #ffffff;
+    --theme-popup-border: #e6e3dc;
+    --theme-hover: #f4f1ea;
+
+    --quote-bg: rgba(176, 65, 62, 0.06);
+    --quote-border: #5a3a86;     /* accent-2 */
+
+    --table-border-color: #e6e3dc;
+    --table-header-bg: #f4f1ea;
+    --table-alternate-bg: #f6f3ee;
+
+    --searchbar-border-color: #d5d1c8;
+    --searchbar-bg: #ffffff;
+    --searchbar-fg: #1c1b1a;
+    --searchbar-shadow-color: #d5d1c8;
+    --searchresults-header-fg: #6d7078;
+    --searchresults-border-color: #e6e3dc;
+    --searchresults-li-bg: #f4f1ea;
+    --search-mark-bg: rgba(176, 65, 62, 0.22);
+
+    --color-scheme: light;
+}
+
+/* ---- Navy theme (preferred dark) --------------------------------------- */
+.navy {
+    --bg: #0e1014;
+    --fg: #e9eaef;
+
+    --sidebar-bg: #151821;       /* panel */
+    --sidebar-fg: #c7cad3;
+    --sidebar-non-existant: #5d6270;
+    --sidebar-active: #f08c84;   /* accent */
+    --sidebar-spacer: #262a36;
+
+    --scrollbar: #333849;
+
+    --icons: #5d6270;
+    --icons-hover: #f08c84;
+
+    --links: #f08c84;            /* accent */
+
+    --inline-code-color: #f08c84;
+
+    --theme-popup-bg: #151821;
+    --theme-popup-border: #262a36;
+    --theme-hover: #1a1d26;
+
+    --quote-bg: rgba(240, 140, 132, 0.10);
+    --quote-border: #b3a1e5;     /* accent-2 */
+
+    --table-border-color: #262a36;
+    --table-header-bg: #1a1d26;
+    --table-alternate-bg: #12151d;
+
+    --searchbar-border-color: #333849;
+    --searchbar-bg: #151821;
+    --searchbar-fg: #e9eaef;
+    --searchbar-shadow-color: #000000;
+    --searchresults-header-fg: #8b909d;
+    --searchresults-border-color: #262a36;
+    --searchresults-li-bg: #1a1d26;
+    --search-mark-bg: rgba(240, 140, 132, 0.28);
+
+    --color-scheme: dark;
+}
+
+/* ---- Shared tweaks ------------------------------------------------------ */
+
+/* Menu bar picks up the page background rather than mdBook's grey. */
+.menu-bar,
+.menu-bar:hover {
+    background: var(--bg);
+}
+
+/* Blockquotes read as accent-bordered callouts. */
+blockquote {
+    border-inline-start: 3px solid var(--quote-border);
+    background: var(--quote-bg);
+}
+
+/* Give the intro logo a little breathing room. */
+.content p > img[alt="hypha logo"] {
+    margin: 0.5rem auto 1rem;
+}
