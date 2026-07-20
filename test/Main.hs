@@ -21,6 +21,7 @@ import qualified Unit.BuildEnvCompose
 import qualified Unit.Components
 import qualified Unit.Deps
 import qualified Unit.Doctor
+import qualified Unit.EmbeddedAssets
 import qualified Unit.Hackage
 import qualified Unit.Mcp
 import qualified Unit.PackageCache
@@ -62,6 +63,7 @@ main = defaultMain (testGroup "hypha"
   , Unit.Components.tests
   , Unit.Deps.tests
   , Unit.Doctor.tests
+  , Unit.EmbeddedAssets.tests
   , Unit.Project.tests
   , Unit.Hackage.tests
   , Unit.Mcp.tests
