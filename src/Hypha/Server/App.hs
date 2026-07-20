@@ -6,6 +6,7 @@ module Hypha.Server.App
     -- * Pure helpers (exported for tests)
   , sanitizeSegments
   , mimeFor
+  , scopeSearchRows
   ) where
 
 import Control.Monad.IO.Class (liftIO)
@@ -129,8 +130,8 @@ progressPage cfg = do
   pure (UI.progressFragment ready done total)
 
 -- | Search results fragment (HTMX target).
-searchPage :: ServerConfig -> Maybe String -> Handler (Html ())
-searchPage cfg mq = do
+searchPage :: ServerConfig -> Maybe String -> Maybe String -> Handler (Html ())
+searchPage cfg mq mpkg = do
   let q = Text.strip (maybe "" Text.pack mq)
   if Text.null q
     then pure UISearch.emptyResults
@@ -140,7 +141,7 @@ searchPage cfg mq = do
         then pure UISearch.buildingFragment
         else do
           rows <- liftIO (scHumanSearch cfg q)
-          pure (UISearch.resultsFragment (Fuzzy.tokenize q) rows)
+          pure (UISearch.resultsFragment (Fuzzy.tokenize q) (scopeSearchRows mpkg rows))
 
 -- | Package overview page — show pinned version + linked module index.
 pkgPage :: ServerConfig -> String -> Handler (Html ())
@@ -249,6 +250,16 @@ mimeFor fp = case Text.toLower ext of
   _       -> "application/octet-stream"
   where
     ext = snd (Text.breakOnEnd "." (Text.pack fp))
+
+-- | Filter search rows down to one package when a scope is requested.
+-- Both a missing @pkg@ query parameter and an explicitly empty one
+-- (sent once the scope chip has just been cleared, since the hidden
+-- input's now-empty value is still included in the htmx request) mean
+-- "no scope" — every row passes through unfiltered.
+scopeSearchRows :: Maybe String -> [(Text, Text, Text, Text)] -> [(Text, Text, Text, Text)]
+scopeSearchRows mp rows = case mp of
+  Just p | not (null p) -> filter (\(pkg, _, _, _) -> pkg == Text.pack p) rows
+  _                      -> rows
 
 -- | Source code view with skylighting-rendered Haskell + optional
 -- @?line=N@ scroll target.

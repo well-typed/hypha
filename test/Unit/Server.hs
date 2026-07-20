@@ -15,7 +15,7 @@ import Lucid (renderText)
 
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, collectModuleRows, parseBind )
-import Hypha.Server.App (mimeFor, sanitizeSegments)
+import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
 import Hypha.Server.Ui.Search (highlightTokens)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
@@ -33,6 +33,7 @@ tests = testGroup "Unit.Server"
   , testGroup "Server.briefException" briefExceptionTests
   , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
   , testGroup "App.mimeFor" mimeForTests
+  , testGroup "App.scopeSearchRows" scopeSearchRowsTests
   , testGroup "Tree.splitByOrigin" splitByOriginTests
   , testGroup "Tree.hackageLink" hackageLinkTests
   , testGroup "Search.highlightTokens" highlightTokensTests
@@ -65,6 +66,22 @@ mimeForTests =
   , testCase "extension-less falls back to octet-stream" $
       mimeFor "LICENSE" @?= "application/octet-stream"
   ]
+
+scopeSearchRowsTests :: [TestTree]
+scopeSearchRowsTests =
+  [ testCase "no scope parameter keeps every row" $
+      scopeSearchRows Nothing rows @?= rows
+  , testCase "empty scope parameter keeps every row" $
+      scopeSearchRows (Just "") rows @?= rows
+  , testCase "non-empty scope keeps only matching rows" $
+      scopeSearchRows (Just "aeson") rows @?= [aesonRow]
+  , testCase "scope matching no package yields no rows" $
+      scopeSearchRows (Just "nope") rows @?= []
+  ]
+  where
+    aesonRow      = ("aeson", "Data.Aeson", "encode", "Value -> ByteString")
+    containersRow = ("containers", "Data.Map", "lookup", "k -> Map k v -> Maybe v")
+    rows = [aesonRow, containersRow]
 
 splitByOriginTests :: [TestTree]
 splitByOriginTests =

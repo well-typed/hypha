@@ -42,7 +42,7 @@ instance MimeRender JS BL.ByteString where
 --
 -- @
 -- GET  /                           → home
--- GET  /search?q=...               → search fragment
+-- GET  /search?q=...&pkg=...       → search fragment (pkg optionally scopes to one package)
 -- GET  /pkg/:pkg                   → package overview
 -- GET  /pkg/:pkg/:mod              → module documentation view
 -- GET  /pkg/:pkg/:mod/:sym         → symbol card
@@ -57,7 +57,7 @@ instance MimeRender JS BL.ByteString where
 -- @
 type HyphaApi
   =    Get '[HTML] (Html ())
-  :<|> "search"  :> QueryParam "q" String :> Get '[HTML] (Html ())
+  :<|> "search"  :> QueryParam "q" String :> QueryParam "pkg" String :> Get '[HTML] (Html ())
   :<|> "progress" :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Get '[HTML] (Html ())
   :<|> "pkg"     :> Capture "pkg" String :> Capture "mod" String :> Get '[HTML] (Html ())
