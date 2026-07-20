@@ -56,9 +56,3 @@ integration, caching, troubleshooting, and design — lives on the
 ## License
 
 BSD-3-Clause. See [`LICENSE`](LICENSE).
-
----
-
-<p align="center">
-  <em>Built with <code>λ</code> by <a href="https://well-typed.com">Well-Typed LLP</a></em>
-</p>

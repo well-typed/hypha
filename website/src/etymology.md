@@ -15,7 +15,3 @@ Pre-alpha. Work is tracked in the repository under `issues/` and in
 
 BSD-3-Clause. See
 [`LICENSE`](https://gitlab.well-typed.com/well-typed/hypha/-/blob/main/LICENSE).
-
----
-
-Built with `λ` by [Well-Typed LLP](https://well-typed.com).

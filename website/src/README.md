@@ -52,4 +52,4 @@ follow-up question. Both are expensive.
 
 ---
 
-BSD-3-Clause. Built with `λ` by [Well-Typed LLP](https://well-typed.com).
+Licensed under BSD-3-Clause.

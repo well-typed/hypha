@@ -1,6 +1,5 @@
 [book]
 title = "Hypha"
-authors = ["Well-Typed LLP"]
 description = "A Haskell-aware code/doc browser tuned for AI agents and humans alike."
 src = "src"
 language = "en"
