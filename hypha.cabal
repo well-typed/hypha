@@ -19,11 +19,13 @@ data-files:
   ui/css/base.css
   ui/css/layout.css
   ui/css/components/doc.css
+  ui/css/components/haddock.css
   ui/css/components/progress.css
   ui/css/components/search.css
   ui/css/components/tree.css
   ui/js/htmx.min.js
   ui/js/keybindings.js
+  ui/js/theme.js
   ui/icons/module.svg
   ui/icons/package.svg
   ui/icons/search.svg
@@ -214,6 +216,7 @@ test-suite hypha-tests
     Unit.BuildEnvCompose
     Unit.Components
     Unit.Doctor
+    Unit.EmbeddedAssets
     Unit.Hackage
     Unit.Module
     Unit.Deps
