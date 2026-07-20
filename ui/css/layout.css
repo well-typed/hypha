@@ -195,22 +195,6 @@
   color: var(--muted);
 }
 
-/* Home hero hint chips. */
-.hint-chips {
-  display: flex;
-  gap: 1rem;
-  margin-top: 1.2rem;
-  flex-wrap: wrap;
-}
-.hint-chip {
-  color: var(--muted);
-  font-size: 0.85rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.3rem 0.8rem;
-}
-
 /* Home stats. */
 .stat-row {
   display: flex;

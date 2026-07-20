@@ -111,17 +111,6 @@ homePage cfg = pure $ UI.shellPage (scProjectName cfg) [] (scPackages cfg) $
       statCard (length proj) "project components"
       statCard (length deps) "dependencies"
       statCard (length (scPackages cfg)) "total in plan"
-    div_ [class_ "hint-chips"] $ do
-      span_ [class_ "hint-chip"] $ do
-        kbd_ "/"
-        toHtml (" or " :: Text)
-        kbd_ "Ctrl-K"
-        toHtml (" to search" :: Text)
-      span_ [class_ "hint-chip"] $ do
-        kbd_ "\x2191\x2193"
-        toHtml (" to pick, " :: Text)
-        kbd_ "Enter"
-        toHtml (" to jump" :: Text)
   where
     (proj, deps) = UITree.splitByOrigin (scPackages cfg)
 

@@ -100,7 +100,6 @@
   margin-bottom: 0.15rem;
 }
 .results li:hover         { background: var(--code-bg); }
-.results li.cursor        { background: var(--code-bg); border-color: var(--border); }
 .results li .pkgmod       {
   color: var(--accent-2);
   font-size: 0.78rem;
@@ -154,6 +153,3 @@
   border-radius: 2px;
   padding: 0;
 }
-
-/* Keyboard cursor row (keybindings.js moves the .cursor class). */
-.results li.cursor a { text-decoration: none; }
