@@ -14,6 +14,7 @@
 
 stages:
   - test
+  - deploy
 
 variables:
   # Keep cabal's data dir inside the project so GitLab cache can reach it
@@ -60,3 +61,44 @@ build-9.12:
   variables:
     GHC_VERSION: "9.12.4"
     PROJECT_FILE: "cabal.ghc-9.12.4.project"
+
+# ---------------------------------------------------------------------------
+# Documentation site (mdBook → GitLab Pages)
+#
+# The docs jobs deliberately use buildpack-deps:*-curl, which ships curl +
+# ca-certificates on glibc, so there is NO apt-get step — this keeps the docs
+# pipeline independent of the apt/GPG issues that affect the GHC images. The
+# mdBook binary is downloaded from its GitHub release (no Rust toolchain).
+# Bump MDBOOK_VERSION deliberately when upgrading.
+# ---------------------------------------------------------------------------
+.docs:
+  image: buildpack-deps:bookworm-curl
+  variables:
+    MDBOOK_VERSION: "0.4.40"
+  before_script:
+    - curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" -o mdbook.tar.gz
+    - tar -xzf mdbook.tar.gz
+
+# Build the book on MRs/pushes: fails the pipeline on a broken SUMMARY,
+# missing chapter, or bad config. Does not deploy.
+docs-build:
+  extends: .docs
+  stage: test
+  script:
+    - ./mdbook build website
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Publish to GitLab Pages from the default branch. GitLab serves the
+# `public/` artifact automatically for a job named `pages`.
+pages:
+  extends: .docs
+  stage: deploy
+  script:
+    - ./mdbook build website --dest-dir "$CI_PROJECT_DIR/public"
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
