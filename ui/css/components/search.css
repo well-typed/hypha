@@ -153,3 +153,31 @@
   border-radius: 2px;
   padding: 0;
 }
+
+/* Package-scope chip: Tab (in the search box) adds it, click its ×
+ * or Backspace-on-empty-query removes it. Styled like .origin-pill's
+ * chip language (tree.css) rather than introducing a new visual idiom. */
+.search-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.2em 0.5em;
+  border-radius: 0.3em;
+  font-size: 0.8em;
+  font-family: var(--mono);
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-right: 0.4rem;
+  flex-shrink: 0;
+}
+.search-scope .remove {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font-size: 1em;
+  line-height: 1;
+  cursor: pointer;
+}
+.search-scope .remove:hover { opacity: 0.7; }

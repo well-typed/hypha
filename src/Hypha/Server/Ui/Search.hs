@@ -29,6 +29,10 @@ searchInput = do
     span_ [class_ "search-indicator", title_ "Searching\x2026"] $ do
       span_ [class_ "spinner"]     (pure ())
       span_ [class_ "indicator-label"] "Searching\x2026"
+    -- Empty by default; keybindings.js sets this when the Tab-triggered
+    -- scope chip is added, and clears it when the chip is removed. htmx
+    -- includes it on every request via hx-include below.
+    input_ [ type_ "hidden", name_ "pkg", class_ "search-scope-value" ]
     input_
       [ class_       "search-input"
       , type_        "search"
@@ -46,6 +50,9 @@ searchInput = do
         -- absolute-positioned dropdown styling would shrink to its
         -- (now-tiny) parent.
       , makeAttributes "hx-indicator" ".search-indicator"
+        -- The scope hidden input isn't inside a <form>, so htmx won't
+        -- pick it up automatically — hx-include names it explicitly.
+      , makeAttributes "hx-include"   ".search-scope-value"
       ]
     -- Results render as a floating dropdown anchored to the input, so
     -- search works the same on every page — including the symbol and
