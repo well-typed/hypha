@@ -37,7 +37,7 @@
 }
 
 /* Executable tag rendered after the parent package name in the
- * sidebar (e.g. ":exe:nike-cli").  Reuses the muted treatment of
+ * sidebar (e.g. ":exe:hypha-cli").  Reuses the muted treatment of
  * .sublib-tag but borrows the secondary accent so executables stay
  * visually distinct from sub-libraries at a glance. */
 .tree li a .exe-tag {

@@ -14,7 +14,7 @@ tests :: TestTree
 tests = testGroup "Unit.Components"
   [ testCase "parses main lib + two sublibs + two exes from fixture" $ do
       let root  = "test" </> "fixtures" </> "cabal"
-          cabal = root </> "nike.cabal"
+          cabal = root </> "hypha.cabal"
       comps <- parseLibComponents cabal root
       let summary =
             sort [ ( renderKind (ciKind c)
@@ -23,7 +23,7 @@ tests = testGroup "Unit.Components"
                  | c <- comps
                  ]
       summary @?=
-        [ ( "exe:nike-cli",     [root </> "app"] )
+        [ ( "exe:hypha-cli",     [root </> "app"] )
         , ( "exe:wrap",         [root </> "app/wrap"] )
         , ( "lib",              [root </> "src"] )
         , ( "sublib:bench",     [root </> "bench-src"] )

@@ -17,38 +17,38 @@ import Hypha.Types.PackageId (PackageName (..))
 tests :: TestTree
 tests = testGroup "Property.ComponentName"
   [ testCase "parses simple package" $
-      parseComponentName "nike"
-        @?= ComponentName (PackageName "nike") MainLib
+      parseComponentName "hypha"
+        @?= ComponentName (PackageName "hypha") MainLib
   , testCase "parses pkg:sublib" $
-      parseComponentName "nike:lib-breakdown"
-        @?= ComponentName (PackageName "nike") (SubLib "lib-breakdown")
+      parseComponentName "hypha:lib-breakdown"
+        @?= ComponentName (PackageName "hypha") (SubLib "lib-breakdown")
   , testCase "parses pkg:exe:name" $
-      parseComponentName "nike:exe:nike-cli"
-        @?= ComponentName (PackageName "nike") (Exe "nike-cli")
+      parseComponentName "hypha:exe:hypha-cli"
+        @?= ComponentName (PackageName "hypha") (Exe "hypha-cli")
   , testCase "renders main lib" $
-      renderComponentName (ComponentName (PackageName "nike") MainLib)
-        @?= "nike"
+      renderComponentName (ComponentName (PackageName "hypha") MainLib)
+        @?= "hypha"
   , testCase "renders sublib" $
       renderComponentName
-        (ComponentName (PackageName "nike") (SubLib "lib-breakdown"))
-        @?= "nike:lib-breakdown"
+        (ComponentName (PackageName "hypha") (SubLib "lib-breakdown"))
+        @?= "hypha:lib-breakdown"
   , testCase "renders exe" $
       renderComponentName
-        (ComponentName (PackageName "nike") (Exe "nike-cli"))
-        @?= "nike:exe:nike-cli"
+        (ComponentName (PackageName "hypha") (Exe "hypha-cli"))
+        @?= "hypha:exe:hypha-cli"
   , testCase "empty sublib suffix collapses to MainLib" $
-      parseComponentName "nike:"
-        @?= ComponentName (PackageName "nike") MainLib
+      parseComponentName "hypha:"
+        @?= ComponentName (PackageName "hypha") MainLib
   , testCase "empty exe suffix collapses to MainLib" $
-      parseComponentName "nike:exe:"
-        @?= ComponentName (PackageName "nike") MainLib
+      parseComponentName "hypha:exe:"
+        @?= ComponentName (PackageName "hypha") MainLib
   , testCase "disambiguation: pkg:foo is sublib, pkg:exe:foo is exe" $ do
       let a = parseComponentName "pkg:foo"
           b = parseComponentName "pkg:exe:foo"
       renderComponentName a @?= "pkg:foo"
       renderComponentName b @?= "pkg:exe:foo"
   , testProperty "render . parse . render = render (all three kinds)" $ do
-      pkg  <- gen (Gen.elem (pure "nike" <> pure "containers" <> pure "happy"))
+      pkg  <- gen (Gen.elem (pure "hypha" <> pure "containers" <> pure "happy"))
       kind <- gen (Gen.elem
                      (   pure MainLib
                       <> pure (SubLib "lib-foo")

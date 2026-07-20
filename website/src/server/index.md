@@ -48,8 +48,8 @@ hypha server listening on http://127.0.0.1:4287
   </p>
   <!-- Placeholder; overwrite images/server-source-view.png in place. -->
 
-- **Private libraries.** Sublibs appear as separate sidebar entries (`nike`,
-  `nike:lib-breakdown`), each with their own pages and search scope.
+- **Private libraries.** Sublibs appear as separate sidebar entries (`hypha`,
+  `hypha:lib-breakdown`), each with their own pages and search scope.
 
 See **[Endpoints & Flags](reference.md)** for the full HTTP surface and
 command-line options.

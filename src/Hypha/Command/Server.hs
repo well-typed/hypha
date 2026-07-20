@@ -423,7 +423,7 @@ moduleDocFor cacheRoot plan env resolver pkgT modT = do
                [] -> info
                _  -> info { Extract.mdiEntries = ordered }
 
--- | Resolve a composite component name (e.g. @nike:lib-foo@) into the
+-- | Resolve a composite component name (e.g. @hypha:lib-foo@) into the
 -- parent package's source dir + the component's source-root list.  The
 -- parent dir is what 'Locate.locateSymbolDefinitionInDir' wants for
 -- re-export sweeps; the source roots are what 'findModuleFileIn' wants
