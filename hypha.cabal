@@ -98,8 +98,11 @@ library
     Hypha.Logging
     Hypha.Server.Assets
     Hypha.Server.Slots
+    Hypha.Server.Haddock.Extract
     Hypha.Server.Haddock.Rewrite
+    Hypha.Server.ModuleDoc
     Hypha.Server.Ui.Layout
+    Hypha.Server.Ui.ModuleDoc
     Hypha.Server.Ui.Search
     Hypha.Server.Ui.Tree
     Hypha.Server.Ui.Doc
@@ -215,6 +218,7 @@ test-suite hypha-tests
     Unit.Deps
     Unit.Project
     Unit.Haddock
+    Unit.HaddockExtract
     Unit.Server
     Unit.ServerSlots
     Property.HaddockRewrite
@@ -227,6 +231,7 @@ test-suite hypha-tests
     Unit.InternalError
     Unit.LookupPrepLocal
     Unit.RepoCache
+    Unit.SourceExtract
     Unit.SourceParser
   build-depends:
     , aeson

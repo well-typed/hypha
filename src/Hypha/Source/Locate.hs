@@ -141,12 +141,17 @@ parseExports src =
       in if Text.null afterParen
            then []
            else
+             -- No cap: the list is naturally bounded by the header
+             -- size, and truncating it silently drops real exports
+             -- (Data.Map exports well over 100 names) — downstream
+             -- consumers use this as an export *filter*, so a cap
+             -- loses documentation, it doesn't just shorten a list.
              let inside    = stripBalanced (Text.drop 1 afterParen)
                  entries   = splitTopLevel inside
-             in take 100 [ ident | e <- entries
-                                , let ident = leading e
-                                , not (Text.null ident)
-                                ]
+             in [ ident | e <- entries
+                        , let ident = leading e
+                        , not (Text.null ident)
+                        ]
   where
     -- Find the slab from @module@ through the matching @where@.  Returns
     -- 'Nothing' when no module header is present.  Strips line comments

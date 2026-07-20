@@ -1,0 +1,123 @@
+/* Embedded prebuilt-Haddock content (.haddock-embed) — maps Haddock's
+ * stable markup (div.top, p.src, div.doc, div.subs, table.info, ...)
+ * onto hypha's design tokens so extracted pages read as native. */
+
+.haddock-embed { line-height: 1.6; }
+
+/* One declaration block. */
+.haddock-embed .top {
+  margin: 1.4rem 0 0;
+  padding: 1rem 0 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Signature line. */
+.haddock-embed p.src {
+  font-family: var(--mono);
+  font-size: 0.92rem;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-s);
+  padding: 0.6rem 0.9rem;
+  margin: 0 0 0.6rem;
+  overflow-x: auto;
+}
+.haddock-embed p.src .keyword { color: var(--accent-2); font-weight: 600; }
+.haddock-embed p.src a.def {
+  font-weight: 700;
+  color: var(--fg);
+}
+.haddock-embed p.src a.link {
+  float: right;
+  font-size: 0.8rem;
+  color: var(--faint);
+  margin-left: 0.8rem;
+}
+.haddock-embed p.src a.selflink {
+  color: var(--faint);
+  margin-left: 0.4rem;
+}
+
+/* Prose under a declaration. */
+.haddock-embed .doc { color: var(--fg); }
+.haddock-embed .doc p { margin: 0.5rem 0; }
+.haddock-embed .doc pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-s);
+}
+
+/* Group headers (h1 = Haddock section groups). */
+.haddock-embed h1,
+.haddock-embed h2,
+.haddock-embed h3 {
+  font-size: 1.05rem;
+  margin: 2rem 0 0.2rem;
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Constructors / fields / methods sub-tables. */
+.haddock-embed .subs {
+  margin: 0.6rem 0 0.6rem 1rem;
+}
+.haddock-embed .subs p.caption,
+.haddock-embed .instances p.caption {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0.6rem 0 0.2rem;
+}
+.haddock-embed .subs table,
+.haddock-embed table.info {
+  border-collapse: collapse;
+  width: 100%;
+}
+.haddock-embed .subs td {
+  padding: 0.25rem 0.6rem 0.25rem 0;
+  vertical-align: top;
+  border-bottom: 1px dashed var(--border);
+}
+.haddock-embed .subs td.src {
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+.haddock-embed .subs td.doc { color: var(--muted); }
+
+/* Instance lists (details/summary in modern Haddock). */
+.haddock-embed .instances,
+.haddock-embed details {
+  margin: 0.4rem 0;
+}
+.haddock-embed summary { cursor: pointer; color: var(--muted); }
+
+/* Module description block above the interface. */
+.haddock-description {
+  margin-bottom: 1rem;
+}
+.haddock-description p.caption { display: none; } /* "Description" label */
+
+/* Haddock's own contents list re-hosted in the TOC rail. */
+.toc-haddock p.caption { display: none; }
+.toc-haddock ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.toc-haddock ul ul { padding-left: 0.8rem; }
+.toc-haddock li { margin: 0.15rem 0; }
+.toc-haddock a {
+  color: var(--muted);
+  font-size: 0.85rem;
+  display: block;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+}
+.toc-haddock a:hover {
+  color: var(--accent);
+  background: var(--code-bg);
+  text-decoration: none;
+}

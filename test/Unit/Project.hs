@@ -70,6 +70,13 @@ testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $
         lookupPackage (PackageName "base") bp @?= Just (Version "4.18.3.0")
         lookupPackage (PackageName "text") bp @?= Just (Version "2.0.2")
         lookupPackage (PackageName "nonexistent") bp @?= Nothing
+        -- mylib contributes two units (lib + exe:myexe).  The map is
+        -- keyed by package name, so the library-carrying unit must be
+        -- the one retained: its dist-dir holds the rendered Haddock.
+        case lookupUnit (PackageName "mylib") bp of
+          Nothing -> error "Expected a unit for mylib"
+          Just pu -> puDistDir pu @?= Just
+            ("test/fixtures/tiny-project/dist-newstyle/build/x86_64-linux/ghc-9.6.7/mylib-0.1.0")
 
 testParseOverride :: TestTree
 testParseOverride = testCase "parsePackageOverride parses async=2.2.6" $ do

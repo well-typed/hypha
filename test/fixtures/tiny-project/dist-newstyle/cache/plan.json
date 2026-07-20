@@ -1,61 +1,80 @@
 {
-  "cabal-version": "3.10.2.1",
-  "cabal-lib-version": "3.10.2.1",
-  "compiler-id": "ghc-9.6.7",
-  "os": "linux",
-  "arch": "x86_64",
-  "install-plan": [
-    {
-      "id": "async-2.2.5-inplace",
-      "pkg-name": "async",
-      "pkg-version": "2.2.5",
-      "type": "pre-existing",
-      "components": {
-        "lib": {
-          "depends": []
-        }
-      }
-    },
-    {
-      "type": "configured",
-      "id": "mylib-0.1.0-inplace",
-      "pkg-name": "mylib",
-      "pkg-version": "0.1.0",
-      "style": "local",
-      "pkg-src": {
-        "type": "local",
-        "path": "test/fixtures/tiny-project"
-      },
-      "dist-dir": "test/fixtures/tiny-project/dist-newstyle/build/x86_64-linux/ghc-9.6.7/mylib-0.1.0",
-      "components": {
-        "lib": {
-          "depends": [
-            "base-4.18.3.0"
-          ]
-        }
-      }
-    },
-    {
-      "id": "base-4.18.3.0",
-      "pkg-name": "base",
-      "pkg-version": "4.18.3.0",
-      "type": "pre-existing",
-      "components": {
-        "lib": {
-          "depends": []
-        }
-      }
-    },
-    {
-      "id": "text-2.0.2",
-      "pkg-name": "text",
-      "pkg-version": "2.0.2",
-      "type": "pre-existing",
-      "components": {
-        "lib": {
-          "depends": []
-        }
-      }
+ "cabal-version": "3.10.2.1",
+ "cabal-lib-version": "3.10.2.1",
+ "compiler-id": "ghc-9.6.7",
+ "os": "linux",
+ "arch": "x86_64",
+ "install-plan": [
+  {
+   "id": "async-2.2.5-inplace",
+   "pkg-name": "async",
+   "pkg-version": "2.2.5",
+   "type": "pre-existing",
+   "components": {
+    "lib": {
+     "depends": []
     }
-  ]
+   }
+  },
+  {
+   "type": "configured",
+   "id": "mylib-0.1.0-inplace",
+   "pkg-name": "mylib",
+   "pkg-version": "0.1.0",
+   "style": "local",
+   "pkg-src": {
+    "type": "local",
+    "path": "test/fixtures/tiny-project"
+   },
+   "dist-dir": "test/fixtures/tiny-project/dist-newstyle/build/x86_64-linux/ghc-9.6.7/mylib-0.1.0",
+   "components": {
+    "lib": {
+     "depends": [
+      "base-4.18.3.0"
+     ]
+    }
+   }
+  },
+  {
+   "id": "base-4.18.3.0",
+   "pkg-name": "base",
+   "pkg-version": "4.18.3.0",
+   "type": "pre-existing",
+   "components": {
+    "lib": {
+     "depends": []
+    }
+   }
+  },
+  {
+   "id": "text-2.0.2",
+   "pkg-name": "text",
+   "pkg-version": "2.0.2",
+   "type": "pre-existing",
+   "components": {
+    "lib": {
+     "depends": []
+    }
+   }
+  },
+  {
+   "type": "configured",
+   "id": "mylib-0.1.0-inplace-myexe",
+   "pkg-name": "mylib",
+   "pkg-version": "0.1.0",
+   "style": "local",
+   "pkg-src": {
+    "type": "local",
+    "path": "test/fixtures/tiny-project"
+   },
+   "dist-dir": "test/fixtures/tiny-project/dist-newstyle/build/x86_64-linux/ghc-9.6.7/mylib-0.1.0/x/myexe",
+   "components": {
+    "exe:myexe": {
+     "depends": [
+      "base-4.18.3.0"
+     ]
+    }
+   }
+  }
+ ]
 }

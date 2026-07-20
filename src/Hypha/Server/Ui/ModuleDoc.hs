@@ -1,0 +1,201 @@
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE OverloadedStrings #-}
+-- | The module documentation page.  Renders whichever 'ModuleDocView'
+-- the server resolved: embedded prebuilt Haddock, docs extracted from
+-- source on the fly, or (last resort) the bare export list with the
+-- reason we could not do better.
+module Hypha.Server.Ui.ModuleDoc
+  ( modulePage
+  , anchorFor
+  , kindBadge
+  ) where
+
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Lucid
+
+import qualified Hypha.Server.Ui.Haddock as Haddock
+import           Hypha.Server.ModuleDoc
+import           Hypha.Source.Extract (DocEntry (..), ModuleDocInfo (..))
+import           Hypha.Source.Parser (DeclKind (..))
+import           Hypha.Types.Doc (DocText (..))
+
+-- | Whole module page body (rendered inside the shell).
+modulePage :: Text -> Text -> ModuleDocView -> Html ()
+modulePage pkgT modT view = div_ [class_ "mod-doc"] $ do
+  moduleHead pkgT modT view
+  case view of
+    ViewPrebuilt pd    -> prebuiltBody pd
+    ViewFromSource sd  -> sourceBody pkgT modT sd
+    ViewExportsOnly names reason -> exportsBody pkgT modT names reason
+
+-- | Shared page header: module title, package link, doc-source badge,
+-- and the action links.
+moduleHead :: Text -> Text -> ModuleDocView -> Html ()
+moduleHead pkgT modT view = header_ [class_ "mod-head"] $ do
+  h1_ [class_ "mod-title"] (toHtml modT)
+  p_ [class_ "meta"] $ do
+    toHtml ("in package " :: Text)
+    a_ [href_ ("/pkg/" <> pkgT)] (toHtml pkgT)
+  div_ [class_ "mod-actions"] $ do
+    sourceBadge
+    a_ [class_ "action", href_ ("/source/" <> pkgT <> "/" <> modT)]
+       "View source"
+    rawHaddockAction
+  where
+    sourceBadge = case view of
+      ViewPrebuilt _      -> span_ [class_ "doc-badge badge-prebuilt"]
+                               "prebuilt haddock"
+      ViewFromSource _    -> span_ [class_ "doc-badge badge-source"]
+                               "rendered from source"
+      ViewExportsOnly _ _ -> span_ [class_ "doc-badge badge-exports"]
+                               "exports only"
+
+    rawHaddockAction = case rawPkgVer of
+      Nothing  -> mempty
+      Just pv  ->
+        a_ [ class_ "action"
+           , href_ ("/haddock/" <> pv <> "/"
+                     <> Text.replace "." "-" modT <> ".html")
+           ]
+           "Raw haddock \x2197"
+
+    rawPkgVer = case view of
+      ViewPrebuilt pd     -> Just (pdPkgVer pd)
+      ViewFromSource sd   -> sdRawHaddock sd
+      ViewExportsOnly _ _ -> Nothing
+
+-- | Embedded prebuilt Haddock: description + interface fragments on
+-- the left, Haddock's own contents list feeding the rail.
+prebuiltBody :: PrebuiltDoc -> Html ()
+prebuiltBody pd = div_ [class_ "doc-with-rail"] $ do
+  div_ [class_ "doc-body haddock-embed"] $ do
+    maybe mempty (div_ [class_ "haddock-description"] . toHtmlRaw)
+          (pdDescription pd)
+    toHtmlRaw (pdInterface pd)
+  case pdContents pd of
+    Nothing  -> mempty
+    Just toc -> nav_ [class_ "toc-rail"] $ do
+      div_ [class_ "toc-title"] "On this page"
+      div_ [class_ "toc-haddock"] (toHtmlRaw toc)
+
+-- | Docs rendered on the fly from the module source.
+sourceBody :: Text -> Text -> SourceDoc -> Html ()
+sourceBody pkgT modT sd = div_ [class_ "doc-with-rail"] $ do
+  div_ [class_ "doc-body"] $ do
+    case mdiHeader info of
+      Nothing -> mempty
+      Just (DocText t) ->
+        div_ [class_ "haddock module-prose"] (Haddock.renderHaddockHtml t)
+    if null (mdiEntries info)
+      then p_ [class_ "hint"] "No top-level declarations found."
+      else mapM_ (entrySection pkgT modT) (mdiEntries info)
+  tocRail (mdiEntries info)
+  where
+    info = sdInfo sd
+
+-- | One documented declaration.
+entrySection :: Text -> Text -> DocEntry -> Html ()
+entrySection pkgT modT e =
+  section_ [class_ "decl", id_ (anchorFor (deKind e) (deName e))] $ do
+    div_ [class_ "decl-head"] $ do
+      kindBadge (deKind e)
+      a_ [ class_ "decl-name"
+         , href_ ("/pkg/" <> pkgT <> "/" <> modT <> "/" <> deName e)
+         ]
+         (toHtml (deName e))
+      a_ [ class_ "decl-anchor"
+         , href_ ("#" <> anchorFor (deKind e) (deName e))
+         , title_ "Link to this declaration"
+         ]
+         "#"
+      srcLink
+    maybe mempty
+          (\sig -> pre_ [class_ "signature"] (code_ (toHtml sig)))
+          (deSignature e)
+    case deHaddock e of
+      Nothing          -> mempty
+      Just (DocText t) -> div_ [class_ "haddock"] (Haddock.renderHaddockHtml t)
+  where
+    srcLink = case anchorLine of
+      Nothing -> mempty
+      Just n  ->
+        a_ [ class_ "decl-src"
+           , href_ ("/source/" <> pkgT <> "/" <> modT
+                     <> "?line=" <> tshow n <> "#L" <> tshow n)
+           , title_ "Jump to source"
+           ]
+           "src"
+    anchorLine = case deSigLine e of
+      Just n  -> Just n
+      Nothing -> deDefLine e
+
+-- | Sticky \"On this page\" rail generated from the entries, grouped
+-- into types and values.  Hidden on narrow viewports by CSS.
+tocRail :: [DocEntry] -> Html ()
+tocRail entries
+  | null entries = mempty
+  | otherwise = nav_ [class_ "toc-rail"] $ do
+      div_ [class_ "toc-title"] "On this page"
+      tocGroup "Types"  [ e | e <- entries, isTypeKind (deKind e) ]
+      tocGroup "Values" [ e | e <- entries, not (isTypeKind (deKind e)) ]
+  where
+    tocGroup :: Text -> [DocEntry] -> Html ()
+    tocGroup _ [] = mempty
+    tocGroup label es = do
+      div_ [class_ "toc-group"] (toHtml label)
+      ul_ [class_ "toc-list"] $
+        mapM_ (\e -> li_ $
+                 a_ [href_ ("#" <> anchorFor (deKind e) (deName e))]
+                    (toHtml (deName e)))
+              es
+
+-- | Last-resort view: names only, with the reason shown — degradation
+-- is never silent.
+exportsBody :: Text -> Text -> [Text] -> Text -> Html ()
+exportsBody pkgT modT names reason = div_ [class_ "doc-body"] $ do
+  p_ [class_ "warn"] (toHtml reason)
+  if null names
+    then p_ [class_ "hint"] "No exports detected."
+    else ul_ [class_ "export-list"] $
+      mapM_ (\nm -> li_ $
+               a_ [href_ ("/pkg/" <> pkgT <> "/" <> modT <> "/" <> nm)]
+                  (code_ (toHtml nm)))
+            names
+
+-- | Haddock-compatible anchor for a declaration: values get @v:@,
+-- types get @t:@ — matching the anchors prebuilt pages use, so
+-- @#frag@ links resolve the same whichever view renders the module.
+anchorFor :: DeclKind -> Text -> Text
+anchorFor k nm
+  | isTypeKind k = "t:" <> nm
+  | otherwise    = "v:" <> nm
+
+isTypeKind :: DeclKind -> Bool
+isTypeKind = \case
+  DkData       -> True
+  DkNewtype    -> True
+  DkClass      -> True
+  DkTypeSyn    -> True
+  DkTypeFamily -> True
+  _            -> False
+
+-- | Small badge naming the declaration form.  Functions carry no badge
+-- — they are the common case and the signature already says it all.
+kindBadge :: DeclKind -> Html ()
+kindBadge = \case
+  DkFunction   -> mempty
+  DkData       -> badge "kb-type"    "data"
+  DkNewtype    -> badge "kb-type"    "newtype"
+  DkClass      -> badge "kb-class"   "class"
+  DkTypeSyn    -> badge "kb-type"    "type"
+  DkTypeFamily -> badge "kb-type"    "type family"
+  DkPatternSyn -> badge "kb-pattern" "pattern"
+  DkForeign    -> badge "kb-foreign" "foreign"
+  where
+    badge :: Text -> Text -> Html ()
+    badge cls label =
+      span_ [class_ ("kind-badge " <> cls)] (toHtml label)
+
+tshow :: Int -> Text
+tshow = Text.pack . show

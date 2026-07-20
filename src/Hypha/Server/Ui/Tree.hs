@@ -1,16 +1,51 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.Ui.Tree
-  ( packageTree
+  ( sidebar
+  , packageTree
+  , splitByOrigin
   , originBadge
   , originBadgeFull
+  , hackageLink
   ) where
 
+import Data.List (partition)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Lucid
 
 import Hypha.Types.BuildPlan (PackageOrigin (..))
+
+-- | Full sidebar: a client-side filter box above two collapsible
+-- groups — the project's own packages first, dependencies below.
+-- Empty groups are omitted entirely.
+sidebar :: [(Text, PackageOrigin)] -> Html ()
+sidebar pkgs = do
+  input_ [ class_ "tree-filter"
+         , type_ "search"
+         , placeholder_ "Filter packages\x2026"
+         ]
+  let (proj, deps) = splitByOrigin pkgs
+  group "Project" proj
+  group "Dependencies" deps
+  where
+    group _ [] = mempty
+    group label items = details_ [open_ ""] $ do
+      summary_ [class_ "tree-group"] $ do
+        toHtml (label :: Text)
+        span_ [class_ "count"] (toHtml (Text.pack (show (length items))))
+      packageTree items
+
+-- | Partition sidebar entries into (project packages, dependencies).
+-- Only 'OriginLocal' counts as project: source-repository-package and
+-- tarball entries are pinned third-party code, not the project itself.
+splitByOrigin
+  :: [(Text, PackageOrigin)]
+  -> ([(Text, PackageOrigin)], [(Text, PackageOrigin)])
+splitByOrigin = partition (isLocal . snd)
+  where
+    isLocal (OriginLocal _) = True
+    isLocal _               = False
 
 -- | Sidebar package list linking to each component's overview page.
 -- Each row places a single-letter origin chip to the left of the
@@ -67,6 +102,21 @@ originBadgeFull o =
          OriginRemoteTarball u           -> span_ [class_ "origin-detail"]
                                               (toHtml (" \x2014 " <> u))
          _                                -> pure ()
+
+-- | Right-aligned "view on Hackage" link for the package page header.
+-- Only 'OriginHackage' packages get one — a local, source-repo, or
+-- tarball package has no matching Hackage listing, so showing the
+-- link there would send the user to a 404 (or worse, someone else's
+-- same-named package).
+hackageLink :: Text -> Text -> PackageOrigin -> Html ()
+hackageLink pkg ver OriginHackage =
+  a_ [ class_ "hackage-link"
+     , href_ ("https://hackage.haskell.org/package/" <> pkg <> "-" <> ver)
+     , target_ "_blank"
+     , rel_ "noopener"
+     ]
+     "\x2197 Hackage"
+hackageLink _ _ _ = mempty
 
 originDetails :: Maybe Text -> Maybe Text -> Maybe FilePath -> Html ()
 originDetails url ref subdir =

@@ -10,8 +10,15 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
 import Text.RawString.QQ (r)
 
+import Data.Text.Lazy qualified as LText
+import Lucid (renderText)
+
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, collectModuleRows, parseBind )
+import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
+import Hypha.Server.Ui.Search (highlightTokens)
+import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
+import Hypha.Types.BuildPlan (PackageOrigin (..))
 
 mkIPv4 :: [Int] -> IP
 mkIPv4 = IPv4 . toIPv4
@@ -24,7 +31,109 @@ tests = testGroup "Unit.Server"
   [ testGroup "Server.parseBind" parseBindTests
   , testGroup "Server.collectModuleRows" collectModuleRowsTests
   , testGroup "Server.briefException" briefExceptionTests
+  , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
+  , testGroup "App.mimeFor" mimeForTests
+  , testGroup "App.scopeSearchRows" scopeSearchRowsTests
+  , testGroup "Tree.splitByOrigin" splitByOriginTests
+  , testGroup "Tree.hackageLink" hackageLinkTests
+  , testGroup "Search.highlightTokens" highlightTokensTests
   ]
+
+sanitizeSegmentsTests :: [TestTree]
+sanitizeSegmentsTests =
+  [ testCase "plain html file accepted" $
+      sanitizeSegments ["Data-Map.html"] @?= Just ["Data-Map.html"]
+  , testCase "nested src path accepted" $
+      sanitizeSegments ["src", "Foo.html"] @?= Just ["src", "Foo.html"]
+  , testCase "empty path rejected" $
+      sanitizeSegments [] @?= Nothing
+  , testCase "parent traversal rejected" $
+      sanitizeSegments ["..", "x"] @?= Nothing
+  , testCase "slash inside a segment rejected" $
+      sanitizeSegments ["a/b"] @?= Nothing
+  , testCase "empty segment rejected" $
+      sanitizeSegments [""] @?= Nothing
+  , testCase "dotfile rejected" $
+      sanitizeSegments [".hidden"] @?= Nothing
+  ]
+
+mimeForTests :: [TestTree]
+mimeForTests =
+  [ testCase "css"       $ mimeFor "ocean.css"  @?= "text/css; charset=utf-8"
+  , testCase "min.js"    $ mimeFor "b.min.js"   @?= "application/javascript; charset=utf-8"
+  , testCase "html"      $ mimeFor "c.html"     @?= "text/html; charset=utf-8"
+  , testCase "png"       $ mimeFor "d.png"      @?= "image/png"
+  , testCase "extension-less falls back to octet-stream" $
+      mimeFor "LICENSE" @?= "application/octet-stream"
+  ]
+
+scopeSearchRowsTests :: [TestTree]
+scopeSearchRowsTests =
+  [ testCase "no scope parameter keeps every row" $
+      scopeSearchRows Nothing rows @?= rows
+  , testCase "empty scope parameter keeps every row" $
+      scopeSearchRows (Just "") rows @?= rows
+  , testCase "non-empty scope keeps only matching rows" $
+      scopeSearchRows (Just "aeson") rows @?= [aesonRow]
+  , testCase "scope matching no package yields no rows" $
+      scopeSearchRows (Just "nope") rows @?= []
+  ]
+  where
+    aesonRow      = ("aeson", "Data.Aeson", "encode", "Value -> ByteString")
+    containersRow = ("containers", "Data.Map", "lookup", "k -> Map k v -> Maybe v")
+    rows = [aesonRow, containersRow]
+
+splitByOriginTests :: [TestTree]
+splitByOriginTests =
+  [ testCase "local packages land in the project group, rest are dependencies" $ do
+      let local   = ("mine",  OriginLocal "/src/mine")
+          hackage = ("aeson", OriginHackage)
+          dist    = ("base",  OriginDistribution)
+          srp     = ("dep",   OriginSourceRepo Nothing Nothing Nothing)
+      splitByOrigin [hackage, local, dist, srp]
+        @?= ([local], [hackage, dist, srp])
+  ]
+
+hackageLinkTests :: [TestTree]
+hackageLinkTests =
+  [ testCase "hackage-origin package links to the exact pinned version" $ do
+      let html = renderLink "aeson" "2.2.1.0" OriginHackage
+      assertBool "expected the Hackage href"
+        ("href=\"https://hackage.haskell.org/package/aeson-2.2.1.0\"" `Text.isInfixOf` html)
+      assertBool "expected target=_blank"
+        ("target=\"_blank\"" `Text.isInfixOf` html)
+      assertBool "expected rel=noopener"
+        ("rel=\"noopener\"" `Text.isInfixOf` html)
+  , testCase "local package renders nothing" $
+      renderLink "mylib" "0.1.0.0" (OriginLocal "./mylib") @?= ""
+  , testCase "source-repo package renders nothing" $
+      renderLink "foo" "1.0" (OriginSourceRepo Nothing Nothing Nothing) @?= ""
+  , testCase "local tarball package renders nothing" $
+      renderLink "foo" "1.0" (OriginLocalTarball "./foo-1.0.tar.gz") @?= ""
+  , testCase "remote tarball package renders nothing" $
+      renderLink "foo" "1.0" (OriginRemoteTarball "https://example.com/foo-1.0.tar.gz") @?= ""
+  , testCase "distribution package (e.g. base) renders nothing" $
+      renderLink "base" "4.19.0.0" OriginDistribution @?= ""
+  ]
+  where
+    renderLink :: Text.Text -> Text.Text -> PackageOrigin -> Text.Text
+    renderLink pkg ver origin = LText.toStrict (renderText (hackageLink pkg ver origin))
+
+highlightTokensTests :: [TestTree]
+highlightTokensTests =
+  [ testCase "single token wraps its first occurrence" $
+      renderHl ["map"] "fmap" @?= "f<mark>map</mark>"
+  , testCase "match is case-insensitive but preserves original text" $
+      renderHl ["MAP"] "mapMaybe" @?= "<mark>map</mark>Maybe"
+  , testCase "several tokens highlight without overlapping" $
+      renderHl ["fold", "map"] "foldMap" @?= "<mark>fold</mark><mark>Map</mark>"
+  , testCase "no match passes text through verbatim" $
+      renderHl ["zip"] "fold" @?= "fold"
+  , testCase "overlapping tokens never nest marks" $
+      renderHl ["foldm", "map"] "foldmap" @?= "<mark>foldm</mark>ap"
+  ]
+  where
+    renderHl toks t = LText.toStrict (renderText (highlightTokens toks t))
 
 parseBindTests :: [TestTree]
 parseBindTests =

@@ -6,6 +6,7 @@ module Hypha.Server.Ui.Source
 import qualified Data.Text as Text
 import Data.Text (Text)
 import Lucid
+import Lucid.Base (makeAttributes)
 import qualified Skylighting as Sky
 
 -- | Render a Haskell source listing with line numbers, optional highlighted
@@ -13,15 +14,26 @@ import qualified Skylighting as Sky
 -- back to a plain @<pre>@ when the syntax description is missing — the
 -- view never blocks on a non-fatal parse.
 sourceView
-  :: Text        -- ^ module path (used for the heading)
+  :: Text        -- ^ package (URL component, for the docs backlink)
+  -> Text        -- ^ module path (used for the heading)
   -> Maybe Int   -- ^ optional line to highlight + scroll to (@#L\<n\>@)
   -> Text        -- ^ full source body
   -> Html ()
-sourceView modPath mLine body = div_ [class_ "source-view"] $ do
+sourceView pkg modPath mLine body = div_ [class_ "source-view"] $ do
   div_ [class_ "source-head"] $ do
     span_ [class_ "source-title"] (toHtml modPath)
+    button_ [ class_ "copy-btn"
+            , type_ "button"
+            , makeAttributes "data-copy" modPath
+            , title_ "Copy module path"
+            ]
+            "Copy"
     maybe mempty (\n -> span_ [class_ "source-line-hint"]
                           (toHtml ("line " <> Text.pack (show n)))) mLine
+    a_ [ class_ "source-docs-link"
+       , href_ ("/pkg/" <> pkg <> "/" <> modPath)
+       ]
+       "\x2190 Docs"
   table_ [class_ "source"] $
     tbody_ $ mapM_ row (numbered body)
   where

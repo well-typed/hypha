@@ -13,7 +13,7 @@ module Hypha.Project.Plan
 import Control.Exception.Safe (IOException, try)
 import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString.Base16 as Base16
-import Data.List (sort)
+import Data.List (sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -78,7 +78,15 @@ unitsFromPlan
      -- this task; Task 5 populates it from the source cache.
   -> IO (Map PackageName PlannedUnit)
 unitsFromPlan pj sourceCacheLookup = do
-  let allUnits     = Map.elems (CP.pjUnits pj)
+      -- A package contributes one unit per component (lib, exes, test
+      -- suites).  The map below is keyed by package *name* and
+      -- 'Map.fromList' retains the last duplicate, so order units
+      -- with the library-carrying one last: it is the unit whose
+      -- dist-dir holds the rendered Haddock and whose dependencies
+      -- describe the library.  Without this, hypha's own test-suite
+      -- unit used to win and @puDistDir@ pointed at @t/<pkg>-tests@.
+  let allUnits = sortOn (\u -> CP.CompNameLib `Map.member` CP.uComps u)
+                        (Map.elems (CP.pjUnits pj))
       unitIdToPkgId = Map.fromList
         [ (CP.uId u, CP.uPId u) | u <- allUnits ]
   pairs <- mapM

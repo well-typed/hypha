@@ -24,6 +24,9 @@ import Control.Concurrent.Stream (mapConcurrentlyBounded)
 import Control.Exception (SomeException (..), displayException, evaluate, fromException, ErrorCall (..))
 import Control.Exception.Safe (try)
 import Control.Monad
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
+import Control.Monad.Trans.Maybe (MaybeT (..), hoistMaybe, runMaybeT)
 import Data.ByteString.Lazy qualified as LBS
 import Data.IORef qualified as IORef
 import Data.List (sortOn)
@@ -38,7 +41,7 @@ import Data.Text qualified as Text
 import Data.Text (Text)
 import GHC.Natural (Natural)
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Haddock.Generate (ensureHaddockFor, haddockDirFor)
+import Hypha.Haddock.Generate (ensureHaddockFor)
 import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
@@ -46,7 +49,9 @@ import Hypha.Search.PackageCache (CacheOrigin (..))
 import Hypha.Search.PackageCache qualified as Cache
 import Hypha.Server.App qualified as App
 import Hypha.Server.Bind
+import Hypha.Server.Haddock.Extract qualified as HExtract
 import Hypha.Server.Haddock.Rewrite qualified as Rewrite
+import Hypha.Server.ModuleDoc
 import Hypha.Server.Slots qualified as Slots
 import Hypha.Source.Extract qualified as Extract
 import Hypha.Source.Locate qualified as Locate
@@ -83,7 +88,7 @@ runServer
   -> ServerOpts
   -> IO (Either BindError ())
 runServer mRoot plan env resolver opts = do
-  cfg <- buildServerConfig (soCacheRoot opts) mRoot plan resolver
+  cfg <- buildServerConfig (soCacheRoot opts) mRoot plan env resolver
   let bind = soBind opts
   hPutStrLn stderr ("hypha server listening on " <> renderBindUrl bind)
   when (soPrebuild opts) $
@@ -173,9 +178,10 @@ buildServerConfig
   :: FilePath
   -> Maybe ProjectRoot
   -> BuildPlan
+  -> BuildEnv IO
   -> PackageResolver IO
   -> IO App.ServerConfig
-buildServerConfig cacheRoot mRoot plan resolver = do
+buildServerConfig cacheRoot mRoot plan env resolver = do
   let pids     = planPackageIds plan
       packages = concatMap (componentNames plan) pids
   slots <- Slots.initialiseSlots pids
@@ -263,21 +269,31 @@ buildServerConfig cacheRoot mRoot plan resolver = do
                       (Just n, _, _)        -> Just n
                       (Nothing, Just n, _)  -> Just n
                       (Nothing, Nothing, l) -> l
-                pure (Just (sig, hd, resolvedMod, mLine))
-    , App.scHaddockHtml  = \pkgVer segments -> do
-        let pidM = parsePkgVer pkgVer
-        case pidM of
-          Nothing  -> pure Nothing
-          Just pid -> do
-            let dir = haddockDirFor cacheRoot pid
-                path = foldl (FP.</>) dir segments
-            exists <- Dir.doesFileExist path
-            if not exists
-              then pure Nothing
-              else do
-                bs <- LBS.readFile path
-                let txt = Text.decodeUtf8 (LBS.toStrict bs)
-                pure (Just (LBS.fromStrict (Text.encodeUtf8 (Rewrite.rewriteHaddockHtml txt))))
+                pure (Just SymbolCardData
+                  { scdSignature = sig
+                  , scdHaddock   = hd
+                  , scdModule    = resolvedMod
+                  , scdLine      = mLine
+                  , scdKind      = Extract.siKind info
+                  })
+    , App.scHaddockFile  = \pkgVer segments -> runMaybeT $ do
+        -- Resolve through the full chain (hypha cache → local dist-dir
+        -- → store) instead of assuming the hypha cache, so prebuilt
+        -- docs are served from wherever they actually live.
+        pid <- hoistMaybe (parsePkgVer pkgVer)
+        idx <- MaybeT (ensureHaddockFor cacheRoot plan env pid)
+        let dir  = FP.takeDirectory idx
+            path = FP.joinPath (dir : map Text.unpack segments)
+        exists <- lift (Dir.doesFileExist path)
+        guard exists
+        bytes <- lift (LBS.readFile path)
+        let payload
+              | FP.takeExtension path == ".html" =
+                  LBS.fromStrict . Text.encodeUtf8
+                    . Rewrite.rewriteHaddockHtml
+                    . Text.decodeUtf8 . LBS.toStrict $ bytes
+              | otherwise = bytes
+        pure (path, payload)
     , App.scSourceText   = \pkgT modT -> do
         mDirs <- resolveComponentDirs plan resolver pkgT
         case mDirs of
@@ -302,16 +318,110 @@ buildServerConfig cacheRoot mRoot plan resolver = do
               Just (_, dirs) -> do
                 mods <- enumModulesIn dirs
                 pure (Just (ver, mods, origin))
-    , App.scModuleExports = \pkgT modT -> do
-        mDirs <- resolveComponentDirs plan resolver pkgT
-        case mDirs of
-          Nothing        -> pure []
-          Just (_, dirs) -> do
-            mFile <- Locate.findModuleFileIn dirs modT
-            case mFile of
-              Nothing -> pure []
-              Just f  -> Locate.parseExports <$> TIO.readFile f
+    , App.scModuleDoc = moduleDocFor cacheRoot plan env resolver
     }
+
+-- | The documentation-priority chain for a module page (see
+-- 'ModuleDocView'):
+--
+-- 1. Prebuilt Haddock — resolved via 'ensureHaddockFor' (hypha cache →
+--    local dist-dir → store); the module's HTML page is sliced into
+--    embeddable regions and its links rewritten.
+-- 2. On-the-fly source rendering — one 'Extract.extractModuleDoc' pass
+--    over the module source, entries filtered\/ordered by the export
+--    list when one parses.
+-- 3. Export names + the reason we could not do better; the reason is
+--    also traced to stderr, never swallowed.
+moduleDocFor
+  :: FilePath
+  -> BuildPlan
+  -> BuildEnv IO
+  -> PackageResolver IO
+  -> Text            -- ^ component name from the URL
+  -> Text            -- ^ dotted module path
+  -> IO ModuleDocView
+moduleDocFor cacheRoot plan env resolver pkgT modT = do
+  mHad <- haddockLocation
+  mPre <- case mHad of
+    Nothing        -> pure Nothing
+    Just (pv, dir) -> prebuiltView pv dir
+  case mPre of
+    Just v  -> pure v
+    Nothing -> sourceView (fst <$> mHad)
+  where
+    cn = parseComponentName pkgT
+
+    -- @(pkg-ver, haddock dir)@ when rendered docs exist anywhere.
+    haddockLocation :: IO (Maybe (Text, FilePath))
+    haddockLocation = runMaybeT $ do
+      rp  <- MaybeT (either (const Nothing) Just <$> resolvePkg resolver (cnPackage cn))
+      idx <- MaybeT (ensureHaddockFor cacheRoot plan env (rpPkgId rp))
+      pure (renderPackageId (rpPkgId rp), FP.takeDirectory idx)
+
+    prebuiltView :: Text -> FilePath -> IO (Maybe ModuleDocView)
+    prebuiltView pv dir = runMaybeT $ do
+      let file = dir FP.</> (Text.unpack (Text.replace "." "-" modT) <> ".html")
+      exists <- lift (Dir.doesFileExist file)
+      guard exists
+      html  <- lift (TIO.readFile file)
+      parts <- hoistMaybe (HExtract.extractModuleDocHtml html)
+      let ctx = Rewrite.EmbedContext { Rewrite.ecComponent = pkgT
+                                     , Rewrite.ecPkgVer    = pv }
+          rw  = Rewrite.rewriteEmbeddedDocHtml ctx
+      pure $ ViewPrebuilt PrebuiltDoc
+        { pdPkgVer      = pv
+        , pdDescription = rw <$> HExtract.ppDescription parts
+        , pdInterface   = rw (HExtract.ppInterface parts)
+        , pdContents    = rw <$> HExtract.ppContents parts
+        }
+
+    -- On failure carries (reason, export names best-effort) so the
+    -- last-resort view still lists something useful.
+    sourceView :: Maybe Text -> IO ModuleDocView
+    sourceView mPv = do
+      r <- runExceptT $ do
+        (_, dirs) <- liftMaybeReason "package source could not be resolved"
+                       (resolveComponentDirs plan resolver pkgT)
+        f   <- liftMaybeReason
+                 ("module " <> modT <> " has no source file in the package")
+                 (Locate.findModuleFileIn dirs modT)
+        src <- lift (TIO.readFile f)
+        case Extract.extractModuleDoc f src of
+          Left perr -> throwE
+            ( "module source could not be parsed: "
+                <> Parser.parseErrorMessage perr
+            , Locate.parseExports src
+            )
+          Right info -> pure (filterByExports src info)
+      case r of
+        Right info -> pure (ViewFromSource (SourceDoc info mPv))
+        Left (reason, names) -> do
+          hPutStrLn stderr $
+            "hypha server: module docs degraded for "
+              <> Text.unpack pkgT <> "/" <> Text.unpack modT
+              <> ": " <> Text.unpack reason
+          pure (ViewExportsOnly names reason)
+
+    liftMaybeReason
+      :: Text -> IO (Maybe a) -> ExceptT (Text, [Text]) IO a
+    liftMaybeReason reason act =
+      ExceptT (maybe (Left (reason, [])) Right <$> act)
+
+    -- Restrict and order entries by the explicit export list when one
+    -- parses.  A filter that would empty the page (pure re-export
+    -- modules) keeps the full entry list instead — over-inclusion is
+    -- harmless, an empty doc page is not.
+    filterByExports :: Text -> Extract.ModuleDocInfo -> Extract.ModuleDocInfo
+    filterByExports src info =
+      case Locate.parseExports src of
+        []   -> info
+        exps ->
+          let byName = Map.fromList
+                [ (Extract.deName e, e) | e <- Extract.mdiEntries info ]
+              ordered = mapMaybe (`Map.lookup` byName) exps
+          in case ordered of
+               [] -> info
+               _  -> info { Extract.mdiEntries = ordered }
 
 -- | Resolve a composite component name (e.g. @nike:lib-foo@) into the
 -- parent package's source dir + the component's source-root list.  The
