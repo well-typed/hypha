@@ -7,7 +7,7 @@ description: Use whenever working in a Haskell/cabal project — looking up a fu
 
 `hypha` is a CLI that answers Hackage/Hoogle/source questions against the
 **exact versions** pinned in the current cabal project's
-`dist-newstyle/cache/plan.json`. Output is compact JSON by default — much
+`dist-newstyle/cache/plan.json`. Output is compact YAML by default — much
 cheaper than parsing rendered Haddock HTML.
 
 ## When to use
@@ -47,15 +47,15 @@ flows.
 
 ## Global flags — token economy
 
-- **Default output is compact JSON.** Parse it directly; do not pipe to
-  `jq` unless you genuinely need a sub-selection.
+- **Default output is compact YAML.** Read it directly; do not pipe to
+  `jq` or `yq` unless you genuinely need a sub-selection.
 - `--select sig,haddock` — return only the listed fields. Use this when
   you only want the type signature, or only the docs.
 - `--full` — opt into the heavier payload (full Haddock prose, all
   fields). Use sparingly; only when `--select` cannot express what you
   need.
-- `--human` — ANSI prose. Only when showing output to the user, never
-  for parsing.
+- `--json` — JSON envelope instead of YAML. Use when feeding output to
+  a JSON-consuming tool or pipeline.
 - `--pretty-json` — pretty-printed JSON. Debugging only; wastes tokens.
 - `--offline` — skip network. Use when the user is offline or wants
   pinned-only answers.

@@ -1,1 +1,1 @@
-{"actions":{"containers/Data.Map":"hypha symbol containers/Data.Map/lookup"},"command":"lookup","ok":true,"result":{"providers":[{"mod":"Data.Map","name":"lookup","pkg":"containers","sig":"Ord k => k -> Map k a -> Maybe a","tier":"cache"}],"query":"lookup"},"schema":"hypha/v0"}
+{"actions":{"containers/Data.Map/lookup":"hypha symbol containers/Data.Map/lookup"},"result":{"providers":[{"mod":"Data.Map","name":"lookup","pkg":"containers","sig":"Ord k => k -> Map k a -> Maybe a","tier":"cache"}],"query":"lookup"}}

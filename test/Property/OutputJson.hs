@@ -120,29 +120,29 @@ tests = testGroup "OutputJson"
 testSuccessEnvelope :: IO ()
 testSuccessEnvelope = do
   let outcome = successOutcome SymbolCmd (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      val     = encodeSuccessEnvelope SymbolCmd outcome
+      val     = encodeSuccessEnvelope outcome
       keys    = objectKeys val
   keys @?= Set.fromList
-    [ "schema", "command", "ok", "result" ]
+    [ "result" ]
 
 testFailureEnvelope :: IO ()
 testFailureEnvelope = do
   let err  = NotFound (NotFoundPackageInPlan (PackageName "missing"))
-      val  = encodeErrorEnvelope (ClientTag SymbolCmd) err
+      val  = encodeErrorEnvelope err
       keys = objectKeys val
-  keys @?= Set.fromList [ "schema", "command", "ok", "error" ]
+  keys @?= Set.fromList [ "error" ]
 
 testFilterSelect :: IO ()
 testFilterSelect = do
   let outcome = successOutcome SymbolCmd (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeSuccessEnvelope SymbolCmd outcome
-      filtered = filterSelect ["schema", "ok", "result"] env
+      env     = encodeSuccessEnvelope outcome
+      filtered = filterSelect ["result"] env
       keys    = objectKeys filtered
-  keys @?= Set.fromList [ "schema", "ok", "result" ]
+  keys @?= Set.fromList [ "result" ]
 
 testFilterSelectNoop :: IO ()
 testFilterSelectNoop = do
   let outcome = successOutcome SymbolCmd (toCompactJSON (SymbolCard "x" "fn" "p" "1.0" "M" Nothing Nothing Nothing))
-      env     = encodeSuccessEnvelope SymbolCmd outcome
+      env     = encodeSuccessEnvelope outcome
       filtered = filterSelect [] env
   filtered @?= env

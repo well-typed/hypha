@@ -13,7 +13,6 @@ import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 
-import Hypha.Cli.Types (ClientCommandTag (..), CommandTag (..))
 import Hypha.Command.Lookup
   ( Provider (..), RemoteTierOutcome (..), buildOutcome )
 import Hypha.Error (HyphaError)
@@ -39,8 +38,8 @@ tests = testGroup "Golden.Lookup"
                                                   (pure (encode outcome))
     goldPath n = "test" </> "Golden" </> "golden" </> (n <> ".compact.json")
     encode = either
-      (encodeEnvelopeValue envOpts . encodeErrorEnvelope (ClientTag LookupCmd))
-      (encodeOutcomeBytes envOpts LookupCmd
+      (encodeEnvelopeValue envOpts . encodeErrorEnvelope)
+      (encodeOutcomeBytes envOpts
         (Set.fromList ["query", "providers"])
         (Set.fromList ["query", "providers", "tiers_consulted"]))
     envOpts = EnvelopeOpts False [] False

@@ -40,7 +40,7 @@ plainOptions = HyphaOptions
   { hoProjectDir       = Nothing
   , hoPackageOverrides = []
   , hoOffline          = False
-  , hoHuman            = False
+  , hoJson             = False
   , hoPrettyJson       = False
   , hoFull             = False
   , hoSelect           = Nothing
@@ -51,13 +51,10 @@ plainOptions = HyphaOptions
 
 tests :: TestTree
 tests = testGroup "Unit.InternalError"
-  [ testCase "INTERNAL_ERROR envelope carries command, code and exit 9" $ do
-      let envelope = encodeInternalErrorEnvelope "lookup" "boom"
+  [ testCase "INTERNAL_ERROR envelope carries code and exit 9" $ do
+      let envelope = encodeInternalErrorEnvelope "boom"
       case envelope of
         Aeson.Object obj -> do
-          KM.lookup "schema"  obj @?= Just (Aeson.String "hypha/v0")
-          KM.lookup "command" obj @?= Just (Aeson.String "lookup")
-          KM.lookup "ok"      obj @?= Just (Aeson.Bool False)
           case KM.lookup "error" obj of
             Just (Aeson.Object err) -> do
               KM.lookup "code"    err @?= Just (Aeson.String "INTERNAL_ERROR")

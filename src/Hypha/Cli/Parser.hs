@@ -46,8 +46,8 @@ hyphaOptionsParser = HyphaOptions
        <> help "Completely disable network access, try to work only with local data"
         )
   <*> switch
-        ( long "human"
-       <> help "Pretty ANSI text instead of JSON"
+        ( long "json"
+       <> help "Emit JSON envelope instead of YAML (default)"
         )
   <*> switch
         ( long "pretty-json"
@@ -60,7 +60,7 @@ hyphaOptionsParser = HyphaOptions
   <*> optional (strOption
         ( long "select"
        <> metavar "FIELDS"
-       <> help "Post-filter JSON output to listed fields"
+       <> help "Post-filter output to listed fields"
         ))
   <*> switch
         ( long "quiet"

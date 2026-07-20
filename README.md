@@ -28,8 +28,8 @@ follow-up question. Both are expensive.
 
 `hypha` exists to make Haskell knowledge **cheap to consume**:
 
-- **Token economy.** Every command emits compact, structured JSON (or
-  `--human` ANSI prose). No HTML. Use `--select sig,haddock` to drop the
+- **Token economy.** Every command emits compact, structured YAML by
+  default (or `--json` for machine pipelines). No HTML. Use `--select sig,haddock` to drop the
   fields you don't need; use `--full` only when you do.
 - **Cache-aggressive, Hackage-friendly.** Network responses are cached
   on disk with ETag + `If-Modified-Since` revalidation. The same project
@@ -55,11 +55,11 @@ a manifesto for *agent-native* CLIs.  The relevant tenets and how
 
 | cli-pp principle | hypha |
 |---|---|
-| **Agent-native by default** | Compact JSON is the default; `--human` is opt-in. |
+| **Agent-native by default** | Compact YAML is the default; `--json` is opt-in for pipelines. |
 | **Typed exit codes** | `0` success, `2` user error, `3` not found, `4` network, `5` cache corruption, `7` environment, `8` tool missing — every failure is classifiable without parsing error text. |
 | **Local-first data layer** | SQLite caches (per-project + shared global), an on-disk Hoogle DB, ETag-revalidated Hackage HTTP cache, and a fuzzy index — all built so repeat queries stay off the network. |
-| **Compact mode for tokens** | Compact JSON is the *default*; `--select f1,f2` projects fields; `--full` is opt-in. No HTML noise. |
-| **Human + machine output modes** | `--human` for terminals, JSON for pipelines, HTMX-rendered HTML for the `server` UI — same data, three surfaces. |
+| **Compact mode for tokens** | Compact YAML is the *default*; `--select f1,f2` projects fields; `--full` is opt-in. `--json` for machine pipelines. No HTML noise. |
+| **Human + machine output modes** | YAML for agents/terminals, `--json` for pipelines, HTMX-rendered HTML for the `server` UI — same data, three surfaces. |
 | **Actionable errors** | Every `OutcomeEnvelope` failure carries a stable `code` and an `actions` map suggesting the next command to try. |
 | **Verified, not vibes** | Property tests via `falsify`, golden JSON regressions via `tasty-golden`, edge cases via `tasty-hunit`. CI gates merges. |
 | **Non-obvious insight** | Symbols resolve to the canonical declaration even across re-exports and CPP `#ifdef` branches — the value that raw Hackage HTML cannot give you. |
@@ -84,7 +84,7 @@ and *MCP wins for IDE auto-discovery*.  `hypha` follows that split:
 |---------|-------------|
 | **Project-aware queries** | Defaults to the versions pinned in `dist-newstyle/cache/plan.json`. No version guessing. |
 | **Local package + private libraries** | The doc-browser server indexes the package at the project root *and* every cabal `library NAME` sublib of every package in the plan. Sublibs surface as `pkg:sublib` entries in the sidebar, URLs, and search index. (CLI/MCP sublib addressing is planned — see Identifier Syntax.) |
-| **Token-efficient JSON** | Compact JSON by default; opt into more fields with `--full`, opt out with `--select`. No HTML noise. |
+| **Token-efficient output** | Compact YAML by default; opt into more fields with `--full`, opt out with `--select`. `--json` for machine pipelines. No HTML noise. |
 | **Aggressive caching** | ETag-revalidated Hackage cache, persistent SQLite search index, on-disk source + Haddock caches. Drastically reduces HTTP traffic and repeat work. |
 | **Faithful source pointers** | Signatures + Haddock are re-extracted at the re-export target. Source links land on the canonical declaration, even across CPP `#ifdef` branches. |
 | **MCP server** | Ships `hypha-mcp` as an stdio MCP shim for Claude Code, opencode, and any MCP client. Exposes one MCP tool per CLI subcommand (`hypha.lookup`, `hypha.symbol`, …) so IDEs see structured arguments, plus a generic `hypha.exec` escape hatch. |
@@ -173,29 +173,22 @@ cd /path/to/your-cabal-project
 cabal build --dry-run        # writes dist-newstyle/cache/plan.json
 ```
 
-### 2. Query a symbol — compact JSON
+### 2. Query a symbol — compact YAML
 
 ```bash
 hypha symbol async/Control.Concurrent.Async/concurrently
 ```
 
-```json
-{
-  "schema": "hypha/v0",
-  "command": "symbol",
-  "ok": true,
-  "result": {
-    "name": "concurrently",
-    "package": "async",
-    "version": "2.2.5",
-    "module": "Control.Concurrent.Async",
-    "signature": "IO a -> IO b -> IO (a, b)"
-  },
-  "actions": {
-    "view_source": "hypha source async/Control.Concurrent.Async/concurrently",
-    "module_index": "hypha module async/Control.Concurrent.Async"
-  }
-}
+```yaml
+result:
+  name: concurrently
+  package: async
+  version: '2.2.5'
+  module: Control.Concurrent.Async
+  signature: IO a -> IO b -> IO (a, b)
+actions:
+  view_source: hypha source async/Control.Concurrent.Async/concurrently
+  module_index: hypha module async/Control.Concurrent.Async
 ```
 
 ### 3. Project only the fields you need
@@ -204,10 +197,10 @@ hypha symbol async/Control.Concurrent.Async/concurrently
 hypha symbol async/Control.Concurrent.Async/concurrently --select signature,haddock
 ```
 
-### 4. Human-readable output
+### 4. JSON for machine pipelines
 
 ```bash
-hypha symbol async/Control.Concurrent.Async/concurrently --human
+hypha symbol async/Control.Concurrent.Async/concurrently --json
 ```
 
 ## Identifier Syntax
@@ -237,10 +230,10 @@ Examples:
 | `--project-dir DIR` | Override project root |
 | `--package-override PKG=VER` | Replace a plan entry (repeatable) |
 | `--offline` | No network; skip the remote Hoogle tier in `lookup` |
-| `--human` | Pretty ANSI text instead of JSON |
+| `--json` | Emit JSON envelope instead of YAML (default) |
 | `--pretty-json` | Indent JSON output |
 | `--full` | Include all fields (default: compact) |
-| `--select f1,f2,...` | Project only listed JSON fields |
+| `--select f1,f2,...` | Project only listed fields |
 | `--quiet` / `-q` | Suppress informational output |
 | `--verbose` / `-v` | Show debug output |
 

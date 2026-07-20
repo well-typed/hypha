@@ -1,1 +1,1 @@
-{"actions":{"query":"x","retry_online":"hypha lookup x","tiers_consulted":"cache,local-hoogle"},"command":"lookup","error":{"code":"HOOGLE_OFFLINE","exit_code":4,"message":"--offline (or HYPHA_OFFLINE) suppresses remote tier"},"ok":false,"schema":"hypha/v0"}
+{"actions":{"query":"x","retry_online":"hypha lookup x","tiers_consulted":"cache,local-hoogle"},"error":{"code":"HOOGLE_OFFLINE","exit_code":4,"message":"--offline (or HYPHA_OFFLINE) suppresses remote tier"}}

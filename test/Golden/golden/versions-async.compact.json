@@ -1,1 +1,1 @@
-{"actions":{"package_info":"hypha package async","reverse_deps":"hypha deps async --reverse"},"command":"versions","ok":true,"result":{"available_versions":[],"package":"async","pinned_version":"2.2.5"},"schema":"hypha/v0"}
+{"actions":{"package_info":"hypha package async","reverse_deps":"hypha deps async --reverse"},"result":{"available_versions":[],"package":"async","pinned_version":"2.2.5"}}

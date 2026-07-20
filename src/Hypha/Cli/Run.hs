@@ -12,28 +12,23 @@ module Hypha.Cli.Run
     -- * Internals exposed for testing
   , processInternalError
   , runClientCommand
-  , humanFromValue
   ) where
 
 import Control.Exception (IOException, displayException, fromException, ErrorCall (..))
 import Control.Exception.Safe (SomeException (..), bracket, try, tryAny)
 import Crypto.Hash.SHA256 qualified as SHA256
-import Data.Aeson.Key (Key)
-import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Key qualified as Key
 import Data.Aeson qualified as Aeson
 import Data.Aeson (Value)
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
+import qualified Data.Aeson.Yaml as Aeson.Yaml
 import Data.Map.Strict qualified as Map
 import Data.Maybe (maybeToList)
 import Data.Set qualified as Set
 import Data.Set (Set)
 import Data.Text.Encoding qualified as Text
-import Data.Text.IO qualified as TIO
 import Data.Text qualified as Text
 import Data.Text (Text)
-import Data.Vector qualified as V
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Hypha.BuildEnv.Cabal (CabalStoreError (..), mkCabalBuildEnv)
 import Hypha.BuildEnv.Type (BuildEnv (..))
@@ -79,9 +74,9 @@ import System.Process (readProcessWithExitCode)
 traceStart :: Monad m => HyphaM m ()
 traceStart = trace (LogInfo "starting hypha")
 
--- | Client-command lifecycle: run the command, emit exactly one JSON
--- envelope on stdout (or, with @--human@, a terminal rendering of the
--- same 'Value'), exit with the typed code.
+-- | Client-command lifecycle: run the command, emit exactly one
+-- envelope on stdout (YAML by default, JSON with @--json@), exit with
+-- the typed code.
 runClientMain :: HyphaOptions -> ClientCommand -> IO ()
 runClientMain opts ccmd = do
   result <- tryAny (runHypha opts (traceStart *> runClientCommand ccmd))
@@ -735,15 +730,15 @@ envelopeOptsFor opts = EnvelopeOpts
   , eoPrettyJson = hoPrettyJson opts
   }
 
--- | Write a pre-built envelope 'Value' to stdout — JSON by default,
--- the human rendering of the /same/ 'Value' under @--human@ — and
--- flush.  Every terminal envelope (success, error, internal error)
--- funnels through here so the two output modes cannot drift apart.
+-- | Write a pre-built envelope 'Value' to stdout — YAML by default,
+-- JSON under @--json@ — and flush.  Every terminal envelope (success,
+-- error, internal error) funnels through here so the two output modes
+-- cannot drift apart.
 emitEnvelope :: HyphaOptions -> Aeson.Value -> IO ()
 emitEnvelope opts envelope = do
-  if hoHuman opts
-    then TIO.putStrLn (humanFromValue envelope)
-    else LBS.hPut stdout (encodeEnvelopeValue (envelopeOptsFor opts) envelope)
+  if hoJson opts
+    then LBS.hPut stdout (encodeEnvelopeValue (envelopeOptsFor opts) envelope)
+    else LBS.hPut stdout (Aeson.Yaml.encode envelope)
   hFlush stdout
 
 -- | Emit a successful outcome to stdout, honouring all output-shaping
@@ -754,7 +749,7 @@ processOutcome :: HyphaOptions -> Outcome Value -> IO ()
 processOutcome opts outcome = do
   let cmd     = outcomeTag outcome
       envOpts = envelopeOptsFor opts
-      envelope = encodeOutcomeEnvelope envOpts cmd
+      envelope = encodeOutcomeEnvelope envOpts
                    (compactKeysFor cmd) (fullKeysFor cmd) outcome
   emitEnvelope opts envelope
   System.exitWith System.ExitSuccess
@@ -762,8 +757,8 @@ processOutcome opts outcome = do
 -- | Emit a 'HyphaError' as a JSON error envelope on stdout, a one-line
 -- @CODE: message@ on stderr, then exit with the typed code.
 processError :: HyphaOptions -> CommandTag -> HyphaError -> IO ()
-processError opts tag err = do
-  emitEnvelope opts (encodeErrorEnvelope tag err)
+processError opts _tag err = do
+  emitEnvelope opts (encodeErrorEnvelope err)
   reportError err
   System.exitWith (toSystemExitCode (errorExitCode err))
 
@@ -776,20 +771,18 @@ processError opts tag err = do
 -- exit with the dedicated 'exitInternalError' code so callers can
 -- distinguish "hypha itself crashed" from any other failure class.
 processInternalError :: HyphaOptions -> CommandTag -> SomeException -> IO ()
-processInternalError opts tag e = do
+processInternalError opts _tag e = do
   emitEnvelope opts
-    (encodeInternalErrorEnvelope (commandName tag) (envelopeMessage e))
+    (encodeInternalErrorEnvelope (envelopeMessage e))
   internalErrorExit
 
 -- | Variant of 'processInternalError' for contexts with no parsed
 -- command and no output-shaping flags — the @hypha-mcp@ binary's
--- top-level @catchAny@.  Always emits compact JSON, with the
--- @\"<internal>\"@ sentinel in the command field.
+-- top-level @catchAny@.  Always emits compact YAML.
 reportInternalError :: SomeException -> IO ()
 reportInternalError e = do
   LBS.hPut stdout
-    (encodeEnvelopeValue defaultEnvelopeOpts
-      (encodeInternalErrorEnvelope "<internal>" (envelopeMessage e)))
+    (Aeson.Yaml.encode (encodeInternalErrorEnvelope (envelopeMessage e)))
   hFlush stdout
   internalErrorExit
 
@@ -845,90 +838,3 @@ fullKeysFor = \case
   DoctorCmd   -> Doctor.fullKeys
   DepsCmd     -> Deps.fullKeys
   SymbolCmd   -> Symbol.fullKeys
-
--- | A small, dependency-free human renderer used by @--human@.  Walks the
--- envelope and prints a readable summary.  This is a stop-gap until the
--- DocH→ANSI renderer lands (Plan A task 11 / issue 017).
-humanFromValue :: Value -> Text
-humanFromValue (Aeson.Object obj) =
-  let cmd      = stringAt obj "command"
-      ok       = boolAt   obj "ok"
-      outside  = boolAt   obj "outside_plan"
-      line0    = "hypha " <> cmd <> (if ok then "" else "  [error]")
-      line1    = if outside then "  [outside-plan]" else ""
-      body     = renderResult (KM.lookup "result"  obj)
-      acts     = renderActions (KM.lookup "actions" obj)
-      errBlock = if ok then ""
-                 else case KM.lookup "error" obj of
-                        Just (Aeson.Object e) ->
-                          "\n" <> stringAt e "code" <> ": "
-                                <> stringAt e "message"
-                        _ -> ""
-  in Text.intercalate "\n" $ filter (not . Text.null)
-       [ line0 <> line1, errBlock, body, acts ]
-humanFromValue other = renderJsonValue 0 other
-
--- | Look up a 'String' value in an Aeson 'Object', defaulting to empty.
-stringAt :: KM.KeyMap Value -> Key -> Text
-stringAt obj k = case KM.lookup k obj of
-  Just (Aeson.String s) -> s
-  _                     -> ""
-
--- | Look up a 'Bool' value in an Aeson 'Object', defaulting to 'False'.
-boolAt :: KM.KeyMap Value -> Key -> Bool
-boolAt obj k = case KM.lookup k obj of
-  Just (Aeson.Bool b) -> b
-  _                   -> False
-
-renderActions :: Maybe Value -> Text
-renderActions (Just (Aeson.Object km)) | not (KM.null km) =
-  "actions:\n" <> Text.intercalate "\n"
-    [ "  " <> Key.toText k <> "  " <> case val of
-                                        Aeson.String s -> s
-                                        _              -> ""
-    | (k, val) <- KM.toList km
-    ]
-renderActions _ = ""
-
--- | Tiny indented value printer used as a fallback for the @result@ body.
-renderResult :: Maybe Value -> Text
-renderResult Nothing  = ""
-renderResult (Just v) = "result:\n" <> renderJsonValue 1 v
-
-renderJsonValue :: Int -> Value -> Text
-renderJsonValue depth v =
-  let ind = Text.replicate (depth * 2) " "
-  in case v of
-       Aeson.Object km ->
-         if KM.null km
-         then ind <> "{}"
-         else Text.intercalate "\n"
-           [ case val of
-               -- Non-empty nested objects/arrays rendered on their own lines
-               Aeson.Object km2 | not (KM.null km2) -> ind <> Key.toText k <> ":\n" <> renderJsonValue (depth + 1) val
-               Aeson.Array  xs  | not (V.null xs)   -> ind <> Key.toText k <> ":\n" <> renderJsonValue (depth + 1) val
-               -- Empty objects/arrays and leaf values inline
-               _                                     -> ind <> Key.toText k <> ": " <> renderInline val
-           | (k, val) <- KM.toList km ]
-       Aeson.Array xs ->
-         if V.null xs
-         then ind <> "[]"
-         else Text.intercalate "\n"
-           [ ind <> "- " <> renderInline x | x <- V.toList xs ]
-       other -> ind <> renderInline other
-
-renderInline :: Value -> Text
-renderInline = \case
-  Aeson.String s -> s
-  Aeson.Number n ->
-    let s = Text.pack (show n)
-        -- Trim redundant ".0" suffix from whole-number Scientific values
-    in if ".0" `Text.isSuffixOf` s then Text.dropEnd 2 s else s
-  Aeson.Bool b   -> if b then "true" else "false"
-  Aeson.Null     -> "null"
-  Aeson.Object km ->
-    let entries = [ Key.toText k <> ": " <> renderInline val | (k, val) <- KM.toList km ]
-    in "{" <> Text.intercalate ", " entries <> "}"
-  Aeson.Array xs ->
-    let items = [ renderInline x | x <- V.toList xs ]
-    in "[" <> Text.intercalate ", " items <> "]"

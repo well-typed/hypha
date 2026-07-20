@@ -30,7 +30,6 @@ import Hypha.Types.PackageId
 data PackageResult = PackageResult
   { prName           :: !Text
   , prVersion        :: !Text
-  , prInPlan         :: !Bool
   , prIsLocal        :: !Bool
   , prDepsCount      :: !Int
   , prExposedModules :: ![Text]
@@ -44,7 +43,7 @@ data PackageResult = PackageResult
 
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList
-  [ "name", "version", "in_plan", "is_local", "deps_count"
+  [ "name", "version", "is_local", "deps_count"
   , "exposed_modules", "origin" ]
 fullKeys    = compactKeys
 
@@ -77,7 +76,6 @@ mkSuccessOutcome rawName ver isLocal depsCount origin modules =
   let result = PackageResult
         { prName           = rawName
         , prVersion        = unVersion ver
-        , prInPlan         = True
         , prIsLocal        = isLocal
         , prDepsCount      = depsCount
         , prExposedModules = modules
@@ -99,7 +97,6 @@ packageResultToJSON :: PackageResult -> Value
 packageResultToJSON r = Aeson.object
   [ "name"           .= prName r
   , "version"        .= prVersion r
-  , "in_plan"        .= prInPlan r
   , "is_local"       .= prIsLocal r
   , "deps_count"     .= prDepsCount r
   , "exposed_modules" .= prExposedModules r
