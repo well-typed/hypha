@@ -7,7 +7,7 @@ language = "en"
 [output.html]
 # Custom hypha theme lives in hypha.css (palette lifted from ui/css).
 additional-css = ["hypha.css"]
-default-theme = "light"
+default-theme = "navy"
 preferred-dark-theme = "navy"
 git-repository-url = "https://gitlab.well-typed.com/well-typed/hypha"
 edit-url-template = "https://gitlab.well-typed.com/well-typed/hypha/-/edit/main/website/{path}"
