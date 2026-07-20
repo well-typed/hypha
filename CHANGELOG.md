@@ -20,15 +20,14 @@ loosely follows [Semantic Versioning](https://semver.org/).
   covers `data`/`newtype`/`class`/`type`/`type family`/`pattern`/
   `foreign` decls — they were previously invisible to the search
   index and symbol pages.
-- Server shell overhaul: three-state theme toggle (auto/light/dark),
+- Server shell overhaul: two-state theme toggle (light/dark),
   filterable Project/Dependencies sidebar groups with active-entry
-  highlight, keyboard-first search (`/`, `Ctrl-K`, `↑↓`, `Enter`,
-  `Esc`) with `<mark>` match highlighting, home stat cards, symbol
-  card copy-signature button and kind badge, source-view header with
-  a docs backlink.
+  highlight, home stat cards, symbol card copy-signature button
+  and kind badge, source-view header with a docs backlink.
 - `/haddock/:pkgver/*` serves non-HTML assets (CSS/JS/fonts/images)
   with correct MIME types and rejects path traversal, so raw Haddock
   pages finally render styled.
+- Fuzzy search can be restricted per-package by pressing `Tab`.
 
 ### Changed
 
