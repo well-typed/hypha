@@ -24,12 +24,12 @@ powers both the CLI and a local doc-browser server, so agents and humans see
 the same data.
 
 <p align="center">
-  <img src="website/src/images/placeholder.svg" width="46%" alt="hypha CLI — default YAML output" />
+  <img src="website/src/images/hero-cli.png" width="46%" alt="hypha CLI — default YAML output" />
   &nbsp;
-  <img src="website/src/images/placeholder.svg" width="46%" alt="hypha doc-browser server" />
+  <img src="website/src/images/hero-server.png" width="46%" alt="hypha doc-browser server" />
 </p>
-<!-- Swap the two placeholders for website/src/images/hero-cli.png and
-     hero-server.png once captured — see website/src/images/CAPTURE-LIST.md. -->
+<!-- Placeholders until captured; overwrite website/src/images/hero-cli.png
+     and hero-server.png in place — see website/src/images/CAPTURE-LIST.md. -->
 
 ## Install
 

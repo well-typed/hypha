@@ -33,9 +33,9 @@ for an agent to parse. The top level is just `result:` (the answer) and
 `actions:` (suggested follow-up commands).
 
 <p align="center">
-  <img src="../images/placeholder.svg" width="70%" alt="hypha symbol — compact YAML output" />
+  <img src="../images/cli-yaml.png" width="70%" alt="hypha symbol — compact YAML output" />
 </p>
-<!-- SCREENSHOT: replace with images/cli-yaml.png. See images/CAPTURE-LIST.md. -->
+<!-- Placeholder; overwrite images/cli-yaml.png in place. See images/CAPTURE-LIST.md. -->
 
 ## 3. Project only the fields you need
 

@@ -11,9 +11,9 @@ hypha server listening on http://127.0.0.1:4287
 ```
 
 <p align="center">
-  <img src="../images/placeholder.svg" width="80%" alt="hypha server — command palette and symbol card" />
+  <img src="../images/hero-server.png" width="80%" alt="hypha server — command palette and symbol card" />
 </p>
-<!-- SCREENSHOT: replace with images/hero-server.png. See images/CAPTURE-LIST.md. -->
+<!-- Placeholder; overwrite images/hero-server.png in place. -->
 
 ## Highlights
 
@@ -23,9 +23,9 @@ hypha server listening on http://127.0.0.1:4287
   and works the same on every page.
 
   <p align="center">
-    <img src="../images/placeholder.svg" width="80%" alt="fuzzy search dropdown mid-query" />
+    <img src="../images/server-search.png" width="80%" alt="fuzzy search dropdown mid-query" />
   </p>
-  <!-- SCREENSHOT: replace with images/server-search.png. -->
+  <!-- Placeholder; overwrite images/server-search.png in place. -->
 
 - **Live build-progress feedback.** A slim accent-coloured progress bar at
   the top of the page shows how many packages remain to index. A shimmering
@@ -37,16 +37,16 @@ hypha server listening on http://127.0.0.1:4287
   even when the symbol is re-exported.
 
   <p align="center">
-    <img src="../images/placeholder.svg" width="80%" alt="rendered symbol card with Haddock" />
+    <img src="../images/server-symbol-card.png" width="80%" alt="rendered symbol card with Haddock" />
   </p>
-  <!-- SCREENSHOT: replace with images/server-symbol-card.png. -->
+  <!-- Placeholder; overwrite images/server-symbol-card.png in place. -->
 
 - **Skylighting-rendered source view** with a `?line=N` scroll target.
 
   <p align="center">
-    <img src="../images/placeholder.svg" width="80%" alt="highlighted source view" />
+    <img src="../images/server-source-view.png" width="80%" alt="highlighted source view" />
   </p>
-  <!-- SCREENSHOT: replace with images/server-source-view.png. -->
+  <!-- Placeholder; overwrite images/server-source-view.png in place. -->
 
 - **Private libraries.** Sublibs appear as separate sidebar entries (`nike`,
   `nike:lib-breakdown`), each with their own pages and search scope.

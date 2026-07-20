@@ -34,12 +34,13 @@ follow-up question. Both are expensive.
   local doc-browser server, so agents and humans see the same data.
 
 <p align="center">
-  <img src="./images/placeholder.svg" width="47%" alt="hypha CLI — default YAML output" />
+  <img src="./images/hero-cli.png" width="47%" alt="hypha CLI — default YAML output" />
   &nbsp;
-  <img src="./images/placeholder.svg" width="47%" alt="hypha server — doc browser UI" />
+  <img src="./images/hero-server.png" width="47%" alt="hypha server — doc browser UI" />
 </p>
-<!-- SCREENSHOTS: replace the two placeholders above with images/hero-cli.png
-     and images/hero-server.png. See images/CAPTURE-LIST.md. -->
+<!-- These currently show labelled placeholders. Overwrite images/hero-cli.png
+     and images/hero-server.png in place with real captures — no edits needed
+     here. See images/CAPTURE-LIST.md. -->
 
 ## Where to next
 
