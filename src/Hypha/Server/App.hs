@@ -162,10 +162,12 @@ pkgPage cfg pkg = do
   pure $ UI.shellPage pkgT crumbs (scPackages cfg) $ case m of
     Nothing -> p_ [class_ "warn"] (toHtml ("Package " <> pkgT <> " not found."))
     Just (ver, mods, origin) -> div_ [class_ "pkg"] $ do
-      h1_ (toHtml pkgT)
-      p_  [class_ "meta"] $ do
-        toHtml ("version " :: Text)
-        code_ (toHtml ver)
+      div_ [class_ "pkg-head"] $ do
+        h1_ (toHtml pkgT)
+        p_  [class_ "meta"] $ do
+          toHtml ("version " :: Text)
+          code_ (toHtml ver)
+        UITree.hackageLink pkgT ver origin
       UITree.originBadgeFull origin
       h2_ "Modules"
       if null mods

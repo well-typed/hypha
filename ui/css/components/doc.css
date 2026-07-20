@@ -227,3 +227,14 @@ section.decl .haddock   { margin: 0.5rem 0 0; }
 }
 .source-head .copy-btn { margin-left: 0; }
 .source-docs-link { margin-left: auto; font-size: 0.85rem; }
+
+/* Package page header + Hackage link. */
+.pkg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+.pkg-head h1   { margin: 0; }
+.pkg-head .meta { margin: 0; }
+.hackage-link  { margin-left: auto; font-size: 0.85rem; }
