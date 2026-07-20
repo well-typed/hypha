@@ -13,7 +13,6 @@ import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty (TestTree, testGroup)
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Cli.Types
 import Hypha.Command.Symbol (runSymbol)
 import Hypha.Error
   ( HyphaError (DiscoveryFailure, PlanFailure), errorMessage )
@@ -50,7 +49,7 @@ runSymbolCommand =
     result <- runExceptT (pipeline cacheDir)
     case result of
       Left err      -> fail ("Symbol golden failed: " <> show (errorMessage err))
-      Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope SymbolCmd outcome))
+      Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope outcome))
   where
     fixtureDir = "test" </> "fixtures" </> "tiny-project"
     asyncDir   = "test" </> "fixtures"

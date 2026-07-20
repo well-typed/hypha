@@ -9,7 +9,6 @@ import Test.Tasty.Golden (goldenVsString)
 import qualified Data.Aeson as Aeson
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Cli.Types (ClientCommandTag (..))
 import qualified Hypha.BuildEnv.Cabal as Cabal
 import Hypha.Command.Package (runPackage, mkSuccessOutcome)
 import Hypha.Hackage.Api (mkOfflineHackageClient)
@@ -51,7 +50,7 @@ runPackageCommand =
           Right plan -> do
             case runPackage plan "async" of
               Left err  -> error $ "Package command failed: " ++ show err
-              Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope PackageCmd outcome))
+              Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope outcome))
 
 runPackageLocalCommand :: IO LBS.ByteString
 runPackageLocalCommand =
@@ -84,7 +83,7 @@ runPackageLocalCommand =
                         (rpDepsCount rp)
                         (rpOrigin rp)
                         modules
-                pure (Aeson.encode (encodeSuccessEnvelope PackageCmd oc))
+                pure (Aeson.encode (encodeSuccessEnvelope oc))
 
 -- | Resolve modules for a local package by finding its source dir
 -- and parsing the .cabal file.  Uses the plan's puSrcDir for speed.

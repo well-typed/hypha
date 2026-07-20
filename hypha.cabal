@@ -4,8 +4,8 @@ version:            0.2.0
 synopsis:           Agent-first CLI for browsing Hackage and Hoogle, scoped to your cabal build plan.
 description:
   hypha probes a cabal project's actual build plan to answer questions about
-  packages, modules, symbols, sources, and dependencies. JSON-first output for
-  agents; `--human` ANSI text for terminal use; a separate `server` mode (Plan B)
+  packages, modules, symbols, sources, and dependencies. YAML-first output for
+  agents; `--json` for machine pipelines; a separate `server` mode (Plan B)
   serves a browser-based offline doc viewer.
 license:            BSD-3-Clause
 license-file:       LICENSE
@@ -126,6 +126,7 @@ library
   build-depends:
     , aeson                       >= 2.0
     , aeson-pretty                >= 0.8
+    , aeson-yaml                  >= 1.1
     , async                       >= 2.2
     , base16-bytestring           >= 1.0
     , base                        >= 4.18 && < 5

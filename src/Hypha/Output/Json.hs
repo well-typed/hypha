@@ -28,7 +28,6 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Cli.Types
 import Hypha.Error
   ( HyphaError, errorActions, errorCode, errorExitCode, errorMessage )
 import Hypha.Exit (exitInternalError, unExitCode)
@@ -59,64 +58,47 @@ defaultEnvelopeOpts = EnvelopeOpts
   , eoPrettyJson = False
   }
 
--- | The @schema@ / @command@ / @ok@ header shared by every envelope.
-envelopeHeader :: Text -> Bool -> [(Key.Key, Value)]
-envelopeHeader cmdName ok =
-  [ "schema"  .= ("hypha/v0" :: Text)
-  , "command" .= cmdName
-  , "ok"      .= ok
-  ]
-
--- | Build a success envelope 'Value' from an 'Outcome'.  Takes a
--- 'ClientCommandTag' (not the wider 'CommandTag') because only client
--- commands produce outcomes — the server blocks or exits.
-encodeSuccessEnvelope :: ClientCommandTag -> Outcome Value -> Value
-encodeSuccessEnvelope cmdName oc =
+-- | Build a success envelope 'Value' from an 'Outcome'.  The
+-- envelope is purely structural: @result@ plus optional
+-- @outside_plan@, @overrides@, and @actions@ fields.  No metadata
+-- header — the consumer already knows what they invoked.
+encodeSuccessEnvelope :: Outcome Value -> Value
+encodeSuccessEnvelope oc =
   object $
-    envelopeHeader (clientCommandName cmdName) True
-    <> [ "result" .= outcomeResult oc ]
+    [ "result" .= outcomeResult oc ]
     <> [ "outside_plan" .= True | outcomeOutsidePlan oc ]
     <> [ "overrides" .= outcomeOverrides oc | not (null (outcomeOverrides oc)) ]
     <> [ "actions"   .= outcomeActions oc   | not (Map.null (outcomeActions oc)) ]
 
 -- | Build an error envelope 'Value' from a 'HyphaError'
 -- (code/message/exit_code via 'errorCode' / 'errorMessage'
--- / 'errorExitCode', recovery hints via 'errorActions').  Takes the
--- wider 'CommandTag': errors can arise from client and server commands
--- alike (e.g. a malformed @--bind@).
-encodeErrorEnvelope :: CommandTag -> HyphaError -> Value
-encodeErrorEnvelope cmdName err =
+-- / 'errorExitCode', recovery hints via 'errorActions').
+encodeErrorEnvelope :: HyphaError -> Value
+encodeErrorEnvelope err =
   object $
-    envelopeHeader (commandName cmdName) False
-    <> [ "error" .= object
+    [ "error" .= object
            [ "code"      .= errorCode err
            , "message"   .= errorMessage err
            , "exit_code" .= unExitCode (errorExitCode err)
            ]
-       ]
+    ]
     <> [ "actions" .= errorActions err | not (Map.null (errorActions err)) ]
 
 -- | Build the envelope 'Value' for a crash — an exception that escaped
--- the library rather than a reified 'HyphaError'.  The command field
--- is 'Data.Text.Text' rather than a tag because one caller
--- (@hypha-mcp@'s last-resort handler) has no parsed command and uses
--- the @\"<internal>\"@ sentinel; CLI callers pass
--- 'Hypha.Cli.Types.commandName' of the real tag.  The exit code is
+-- the library rather than a reified 'HyphaError'.  The exit code is
 -- pinned to 'exitInternalError' — by definition there is no typed
 -- error to derive one from.
 encodeInternalErrorEnvelope
-  :: Text  -- ^ command field
-  -> Text  -- ^ rendered exception
+  :: Text  -- ^ rendered exception
   -> Value
-encodeInternalErrorEnvelope cmdName msg =
+encodeInternalErrorEnvelope msg =
   object $
-    envelopeHeader cmdName False
-    <> [ "error" .= object
+    [ "error" .= object
            [ "code"      .= ("INTERNAL_ERROR" :: Text)
            , "message"   .= msg
            , "exit_code" .= unExitCode exitInternalError
            ]
-       ]
+    ]
 
 -- | Build the envelope 'Value' /post-projection/.  The result is
 -- structurally identical to what 'encodeOutcomeBytes' would write to
@@ -125,13 +107,12 @@ encodeInternalErrorEnvelope cmdName msg =
 -- 'LBS.ByteString' that could "fail" to decode.
 encodeOutcomeEnvelope
   :: EnvelopeOpts
-  -> ClientCommandTag
   -> Set Text         -- ^ compact key set for the result body
   -> Set Text         -- ^ full key set for the result body
   -> Outcome Value
   -> Value
-encodeOutcomeEnvelope opts cmdName compact full =
-  encodeSuccessEnvelope cmdName . projectOutcome opts compact full
+encodeOutcomeEnvelope opts compact full =
+  encodeSuccessEnvelope . projectOutcome opts compact full
 
 -- | Serialise a pre-built envelope 'Value', honouring the
 -- 'eoPrettyJson' flag.
@@ -146,13 +127,12 @@ encodeEnvelopeValue opts envelope
 -- the human renderer.
 encodeOutcomeBytes
   :: EnvelopeOpts
-  -> ClientCommandTag
   -> Set Text
   -> Set Text
   -> Outcome Value
   -> LBS.ByteString
-encodeOutcomeBytes opts cmdName compact full =
-  encodeEnvelopeValue opts . encodeOutcomeEnvelope opts cmdName compact full
+encodeOutcomeBytes opts compact full =
+  encodeEnvelopeValue opts . encodeOutcomeEnvelope opts compact full
 
 -- | Apply the field-set + --select projection to a success outcome.
 projectOutcome

@@ -80,7 +80,7 @@ hyphaOptionProps =
   [ ("projectDir",      "string",  "Override project root.")
   , ("packageOverride", "array",   "List of `PKG=VER` plan overrides.")
   , ("offline",         "boolean", "Skip network calls.")
-  , ("human",           "boolean", "Emit ANSI prose instead of JSON.")
+  , ("json",            "boolean", "Emit JSON envelope instead of YAML (default).")
   , ("prettyJson",      "boolean", "Indent JSON output (debugging only).")
   , ("full",            "boolean", "Include all JSON fields (default: compact).")
   , ("select",          "string",  "Comma-separated list of fields to keep.")
@@ -91,7 +91,7 @@ hyphaOptionProps =
 commonOptionsDoc :: Text
 commonOptionsDoc = Text.unlines
   [ "Hypha options can be passed via the corresponding fields:"
-  , "  projectDir, packageOverride[], offline, human, prettyJson,"
+  , "  projectDir, packageOverride[], offline, json, prettyJson,"
   , "  full, select, quiet, verbose."
   ]
 
@@ -292,7 +292,7 @@ globalFlagArgv o = do
   projectDir <- optText o "projectDir"
   overrides  <- optTextArray o "packageOverride"
   offline    <- optBool o "offline"
-  human      <- optBool o "human"
+  json       <- optBool o "json"
   prettyJson <- optBool o "prettyJson"
   full       <- optBool o "full"
   sel        <- optText o "select"
@@ -302,7 +302,7 @@ globalFlagArgv o = do
     [ maybe [] (\d -> ["--project-dir", d]) projectDir
     , concatMap (\pv -> ["--package-override", pv]) overrides
     , flag offline    "--offline"
-    , flag human      "--human"
+    , flag json       "--json"
     , flag prettyJson "--pretty-json"
     , flag full       "--full"
     , maybe [] (\s -> ["--select", s]) sel

@@ -29,8 +29,8 @@ data HyphaOptions = HyphaOptions
   , hoOffline           :: !Bool
     -- ^ No network, fail closed.  Honored by 'LookupCommand' (skips
     -- the remote Hoogle tier).
-  , hoHuman             :: !Bool
-    -- ^ Pretty ANSI text instead of JSON.
+  , hoJson              :: !Bool
+    -- ^ Emit JSON envelope instead of YAML (default).
   , hoPrettyJson        :: !Bool
     -- ^ Indent JSON output.
   , hoFull              :: !Bool

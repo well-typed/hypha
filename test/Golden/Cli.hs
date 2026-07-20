@@ -66,11 +66,9 @@ assertNoInternalErrorPollution args = do
     not ("INTERNAL_ERROR" `isInfixOfStr` err)
   assertBool "no INTERNAL_ERROR marker on stdout" $
     not ("INTERNAL_ERROR" `isInfixOfStr` out)
-  assertBool "no \"<internal>\" command marker on stdout" $
-    not ("\"command\":\"<internal>\"" `isInfixOfStr` out)
 
 -- | Either stdout decodes as exactly one JSON value with no trailing
--- bytes, or it's plain text (e.g. @--help@) with no embedded JSON
+-- bytes, or it's plain text / YAML (e.g. @--help@) with no embedded
 -- envelope.  The point is that we never emit two responses for one
 -- invocation.
 assertSingleJsonObjectOrPlainText :: String -> IO ()
@@ -82,11 +80,12 @@ assertSingleJsonObjectOrPlainText raw =
     Nothing ->
       -- Not pure JSON.  Make sure no envelope is /embedded/ in plain
       -- text — that is the exact shape of the regression (help text
-      -- followed by a stray @{"schema":"hypha/v0",...}@).
+      -- followed by a stray envelope).  We check for the error code
+      -- marker that every internal-error envelope carries.
       assertBool
-        ("plain-text output must not contain an embedded JSON envelope; got:\n"
+        ("plain-text output must not contain an embedded envelope; got:\n"
           <> raw)
-        (not ("\"schema\":\"hypha/v0\"" `isInfixOfStr` raw))
+        (not ("INTERNAL_ERROR" `isInfixOfStr` raw))
 
 -- | @isInfixOf@ for strings.  We avoid pulling in @Data.List@'s
 -- polymorphic version under another name to keep the import list flat.
