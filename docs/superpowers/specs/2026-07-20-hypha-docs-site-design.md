@@ -1,8 +1,23 @@
 # Hypha Documentation Split — Lean README + mdBook Docs Site
 
 - **Date:** 2026-07-20
-- **Status:** Approved (design)
+- **Status:** Approved (design) — **implementation BLOCKED, see below**
 - **Author:** Alfredo Di Napoli (with Claude Code)
+
+> **⚠️ Blocked on the YAML-default output change.**
+> A separate workstream is flipping the CLI's default output from
+> **compact JSON** to **YAML** (JSON becomes opt-in via `--json`). Docs
+> implementation is paused until that lands on `main`. When resumed, the
+> output-format framing throughout this spec and the migrated docs MUST be
+> rewritten accordingly:
+> - The pitch "compact JSON is the default" → "YAML is the default; JSON
+>   via `--json`". Affects the Introduction, the cli-printing-press table
+>   ("Compact JSON is the default"), and the "Human + machine output
+>   modes" framing.
+> - Every quick-start / reference **example** currently showing a JSON
+>   block must show YAML (with a `--json` variant where useful).
+> - Examples should be captured from the real YAML-default binary once it
+>   is buildable, not hand-written.
 
 ## Problem
 
