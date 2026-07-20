@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-label="Screenshot coming soon">
+  <rect width="1280" height="720" fill="#f4f1ea"/>
+  <rect x="8" y="8" width="1264" height="704" fill="none" stroke="#d5d1c8" stroke-width="2" stroke-dasharray="12 10" rx="14"/>
+  <circle cx="640" cy="312" r="54" fill="none" stroke="#b0413e" stroke-width="6"/>
+  <path d="M640 284 v56 M612 312 h56" stroke="#b0413e" stroke-width="6" stroke-linecap="round"/>
+  <text x="640" y="430" font-family="ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="600" fill="#1c1b1a" text-anchor="middle">screenshot coming soon</text>
+  <text x="640" y="482" font-family="ui-monospace, monospace" font-size="24" fill="#6d7078" text-anchor="middle">see images/CAPTURE-LIST.md</text>
+</svg>

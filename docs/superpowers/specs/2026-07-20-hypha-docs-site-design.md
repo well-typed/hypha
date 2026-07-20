@@ -1,23 +1,23 @@
 # Hypha Documentation Split — Lean README + mdBook Docs Site
 
 - **Date:** 2026-07-20
-- **Status:** Approved (design) — **implementation BLOCKED, see below**
+- **Status:** Approved (design) — YAML-default merged; implementation in progress
 - **Author:** Alfredo Di Napoli (with Claude Code)
 
-> **⚠️ Blocked on the YAML-default output change.**
-> A separate workstream is flipping the CLI's default output from
-> **compact JSON** to **YAML** (JSON becomes opt-in via `--json`). Docs
-> implementation is paused until that lands on `main`. When resumed, the
-> output-format framing throughout this spec and the migrated docs MUST be
-> rewritten accordingly:
-> - The pitch "compact JSON is the default" → "YAML is the default; JSON
->   via `--json`". Affects the Introduction, the cli-printing-press table
->   ("Compact JSON is the default"), and the "Human + machine output
->   modes" framing.
-> - Every quick-start / reference **example** currently showing a JSON
->   block must show YAML (with a `--json` variant where useful).
-> - Examples should be captured from the real YAML-default binary once it
->   is buildable, not hand-written.
+> **Output-format reality (settled 2026-07-20).**
+> The CLI default output is now **compact YAML** (JSON is opt-in via
+> `--json`), and the envelope metadata (`schema`/`command`/`ok`/`in_plan`)
+> has been **removed** — output is now top-level `result:` + `actions:`.
+> Additional drift the docs must correct against the old README:
+> - `--human` is **removed**; the default YAML *is* the readable surface.
+>   `--cache-dir DIR` is a **new** global flag.
+> - The `mcp` **subcommand is removed**; MCP is served only by the
+>   separate `hypha-mcp` binary.
+> - Identifier version syntax uses a **hyphen** (`async-2.2.6`), not `@`.
+>   `@` is explicitly rejected by the parser.
+> All migrated examples must reflect this. Authoritative sources used:
+> the current (YAML-updated) `README.md`, `src/Hypha/Cli/Parser.hs`,
+> and `src/Hypha/Types/PackageId.hs`.
 
 ## Problem
 
@@ -138,8 +138,9 @@ The current README's sections are migrated as follows:
 2. Tagline (one line).
 3. Two short paragraphs: (a) the token-economy pitch, (b) plan-aware /
    source-faithful pitch.
-4. **Hero image**: CLI `--human` output *and* the server UI, side by
-   side ("one tool, two surfaces").
+4. **Hero image**: CLI default **YAML** output *and* the server UI, side
+   by side ("one tool, two surfaces"). (There is no `--human` flag; the
+   default YAML is the readable terminal surface.)
 5. Install one-liner + `Full documentation → <site URL>` link.
 6. License + Well-Typed footer.
 
@@ -184,12 +185,12 @@ Target: 40–60 lines. Everything else lives on the site.
 
     | Filename                | Referenced by                | Shows |
     |-------------------------|------------------------------|-------|
-    | `hero-cli.png`          | lean README, Introduction    | `hypha symbol … --human` terminal output |
+    | `hero-cli.png`          | lean README, Introduction    | `hypha symbol …` default YAML terminal output |
     | `hero-server.png`       | lean README, Introduction    | server command-palette + symbol card |
     | `server-search.png`     | `server/index.md`            | fuzzy search dropdown mid-query |
     | `server-symbol-card.png`| `server/index.md`            | a rendered symbol card with Haddock |
     | `server-source-view.png`| `server/index.md`            | skylighting source view with `?line=` |
-    | `cli-json.png`          | `getting-started/quick-start.md` | compact JSON output |
+    | `cli-yaml.png`          | `getting-started/quick-start.md` | compact YAML output (default) |
 
 - Markdown references the real filenames from day one
   (`images/hero-cli.png`, …). To keep the site looking complete and the

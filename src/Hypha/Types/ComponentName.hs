@@ -5,9 +5,9 @@
 --
 -- Encoded form:
 --
--- * @nike@                 — main library.
--- * @nike:lib-breakdown@   — sub-library @lib-breakdown@.
--- * @nike:exe:nike-cli@    — executable @nike-cli@.
+-- * @hypha@                 — main library.
+-- * @hypha:lib-breakdown@   — sub-library @lib-breakdown@.
+-- * @hypha:exe:hypha-cli@    — executable @hypha-cli@.
 --
 -- The composite form is what cabal-install uses on the command line,
 -- and what we put in the @pkg@ column of the SQLite search cache so

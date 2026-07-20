@@ -26,7 +26,7 @@ rewriteHaddockHtml = rewriteWith [("a", "href")] crossPackageUrl
 -- @/haddock/\<pkg-ver\>/@ route.
 data EmbedContext = EmbedContext
   { ecComponent :: !Text
-    -- ^ URL component name, e.g. @containers@ or @nike:sublib@.
+    -- ^ URL component name, e.g. @containers@ or @hypha:sublib@.
   , ecPkgVer    :: !Text
     -- ^ @\<pkg\>-\<ver\>@ token, e.g. @containers-0.7@.
   }
