@@ -17,7 +17,7 @@ import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, collectModuleRows, parseBind )
 import Hypha.Server.App (mimeFor, sanitizeSegments)
 import Hypha.Server.Ui.Search (highlightTokens)
-import Hypha.Server.Ui.Tree (splitByOrigin)
+import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 
 mkIPv4 :: [Int] -> IP
@@ -34,6 +34,7 @@ tests = testGroup "Unit.Server"
   , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
   , testGroup "App.mimeFor" mimeForTests
   , testGroup "Tree.splitByOrigin" splitByOriginTests
+  , testGroup "Tree.hackageLink" hackageLinkTests
   , testGroup "Search.highlightTokens" highlightTokensTests
   ]
 
@@ -75,6 +76,31 @@ splitByOriginTests =
       splitByOrigin [hackage, local, dist, srp]
         @?= ([local], [hackage, dist, srp])
   ]
+
+hackageLinkTests :: [TestTree]
+hackageLinkTests =
+  [ testCase "hackage-origin package links to the exact pinned version" $ do
+      let html = renderLink "aeson" "2.2.1.0" OriginHackage
+      assertBool "expected the Hackage href"
+        ("href=\"https://hackage.haskell.org/package/aeson-2.2.1.0\"" `Text.isInfixOf` html)
+      assertBool "expected target=_blank"
+        ("target=\"_blank\"" `Text.isInfixOf` html)
+      assertBool "expected rel=noopener"
+        ("rel=\"noopener\"" `Text.isInfixOf` html)
+  , testCase "local package renders nothing" $
+      renderLink "mylib" "0.1.0.0" (OriginLocal "./mylib") @?= ""
+  , testCase "source-repo package renders nothing" $
+      renderLink "foo" "1.0" (OriginSourceRepo Nothing Nothing Nothing) @?= ""
+  , testCase "local tarball package renders nothing" $
+      renderLink "foo" "1.0" (OriginLocalTarball "./foo-1.0.tar.gz") @?= ""
+  , testCase "remote tarball package renders nothing" $
+      renderLink "foo" "1.0" (OriginRemoteTarball "https://example.com/foo-1.0.tar.gz") @?= ""
+  , testCase "distribution package (e.g. base) renders nothing" $
+      renderLink "base" "4.19.0.0" OriginDistribution @?= ""
+  ]
+  where
+    renderLink :: Text.Text -> Text.Text -> PackageOrigin -> Text.Text
+    renderLink pkg ver origin = LText.toStrict (renderText (hackageLink pkg ver origin))
 
 highlightTokensTests :: [TestTree]
 highlightTokensTests =

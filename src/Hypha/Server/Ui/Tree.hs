@@ -6,6 +6,7 @@ module Hypha.Server.Ui.Tree
   , splitByOrigin
   , originBadge
   , originBadgeFull
+  , hackageLink
   ) where
 
 import Data.List (partition)
@@ -101,6 +102,21 @@ originBadgeFull o =
          OriginRemoteTarball u           -> span_ [class_ "origin-detail"]
                                               (toHtml (" \x2014 " <> u))
          _                                -> pure ()
+
+-- | Right-aligned "view on Hackage" link for the package page header.
+-- Only 'OriginHackage' packages get one — a local, source-repo, or
+-- tarball package has no matching Hackage listing, so showing the
+-- link there would send the user to a 404 (or worse, someone else's
+-- same-named package).
+hackageLink :: Text -> Text -> PackageOrigin -> Html ()
+hackageLink pkg ver OriginHackage =
+  a_ [ class_ "hackage-link"
+     , href_ ("https://hackage.haskell.org/package/" <> pkg <> "-" <> ver)
+     , target_ "_blank"
+     , rel_ "noopener"
+     ]
+     "\x2197 Hackage"
+hackageLink _ _ _ = mempty
 
 originDetails :: Maybe Text -> Maybe Text -> Maybe FilePath -> Html ()
 originDetails url ref subdir =
