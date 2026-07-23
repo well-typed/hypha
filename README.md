@@ -49,9 +49,7 @@ hypha symbol async/Control.Concurrent.Async/concurrently
 
 The full guide — installation, subcommands, the doc-browser server, MCP
 integration, caching, troubleshooting, and design — lives on the
-**[hypha docs site](https://gitlab.well-typed.com/well-typed/hypha/-/tree/main/website)**.
-<!-- TODO: once GitLab Pages is enabled, point this at the Pages URL
-     (e.g. https://well-typed.gitlab.io/hypha/). -->
+**[hypha docs site](https://well-typed.pages.well-typed.com/hypha/)**.
 
 ## License
 
