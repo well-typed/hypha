@@ -94,6 +94,40 @@ tests = testGroup "Unit.SourceExtract"
           assertBool "ends with ellipsis"
             ("\x2026" `Text.isSuffixOf` sigT)
 
+  , testCase "doc block separated from its declaration by a blank line still attaches" $ do
+      -- The containers idiom: a @-- |@ block, a blank line, then the
+      -- signature.  GHC attaches the comment across the blank line, so
+      -- extraction must too.
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "-- | Insert with a function."
+            , "--"
+            , "-- > insertWith (++) 5 \"x\" m"
+            , ""
+            , "insertWith :: Int -> Int"
+            , "insertWith = id"
+            ]
+      case Extract.extractModuleDoc "M.hs" src of
+        Left e  -> assertFailure (show e)
+        Right d -> case mdiEntries d of
+          (e : _) -> fmap unDocText (deHaddock e)
+                       @?= Just "-- | Insert with a function.\n--\n-- > insertWith (++) 5 \"x\" m"
+          []      -> assertFailure "expected an entry"
+
+  , testCase "extractSymbolInfo recovers a doc block sitting above a blank line" $ do
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "-- | Insert with a function."
+            , ""
+            , "insertWith :: Int -> Int"
+            , "insertWith = id"
+            ]
+          info = Extract.extractSymbolInfo src "insertWith"
+      fmap unDocText (Extract.siHaddock info)
+        @?= Just "-- | Insert with a function."
+
   , testCase "function bodies are never sliced into the signature slot" $ do
       let src = Text.unlines
             [ "module M where"

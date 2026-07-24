@@ -111,7 +111,7 @@ extractModuleDoc path src = do
       { deName      = Parser.declName d
       , deKind      = Parser.declKind d
       , deSignature = signatureFor ls d
-      , deHaddock   = stripDocEnd <$> (anchorLineOf d >>= haddockAbove ls)
+      , deHaddock   = anchorLineOf d >>= haddockAbove ls
       , deSigLine   = Parser.declSigLine d
       , deDefLine   = Parser.declDefLine d
       }
@@ -134,11 +134,6 @@ extractModuleDoc path src = do
             s <- Parser.declDefLine d
             e <- Parser.declDefEndLine d
             declSlice ls s e
-
--- | Trim trailing whitespace from a 'DocText' (the line-based
--- collectors produce a trailing newline via 'Text.unlines').
-stripDocEnd :: DocText -> DocText
-stripDocEnd (DocText t) = DocText (Text.stripEnd t)
 
 -- | Maximum number of source lines a type\/class body slice may carry
 -- before it is clamped with a trailing ellipsis.
@@ -164,25 +159,47 @@ declSlice ls s e =
 moduleHeaderBlock :: [(Int, Text)] -> Maybe DocText
 moduleHeaderBlock ls = do
   modLn <- lookupModuleLine
-  let prior    = reverse (takeWhile (\(k, _) -> k < modLn) ls)
-      stripped = map (Text.stripStart . snd) prior
-      -- Skip pragmas and blank lines sitting between the comment block
-      -- and the module keyword, then collect the contiguous comments.
-      -- Pragma lines terminate the collection: @{-# LANGUAGE ... #-}@
-      -- satisfies 'isCommentLine' (it starts with @{-@) but is not
-      -- prose, and files conventionally stack pragmas directly above
-      -- the header block.
-      rest     = dropWhile isSkippable stripped
-      block    = takeWhile (\t -> isCommentLine t && not (isPragmaLine t)) rest
-  if any isHaddockStarter block && not (null block)
-    then Just (DocText (Text.stripEnd (Text.unlines (reverse block))))
-    else Nothing
+  collectHaddockBlock (linesAbove ls modLn)
   where
     lookupModuleLine =
       case [ i | (i, t) <- ls, isModuleLine (Text.stripStart t) ] of
         (i : _) -> Just i
         []      -> Nothing
     isModuleLine t = "module " `Text.isPrefixOf` t || t == "module"
+
+-- | The source lines strictly above @anchor@, stripped of leading
+-- whitespace and ordered nearest-to-the-anchor first — the shape
+-- 'collectHaddockBlock' consumes.
+linesAbove :: [(Int, Text)] -> Int -> [Text]
+linesAbove ls anchor =
+  map (Text.stripStart . snd) (reverse (takeWhile (\(k, _) -> k < anchor) ls))
+
+-- | Collect a leading Haddock comment block from source lines ordered
+-- nearest-to-the-anchor first (the reversed prefix above a declaration
+-- signature or the @module@ keyword).
+--
+-- Blank and pragma lines between the block and its anchor are skipped
+-- before collection.  This matches Haddock itself: a @-- |@ comment
+-- attaches to the following declaration regardless of intervening
+-- blank lines (whitespace is invisible to the parser), and pragmas
+-- conventionally stack directly above a declaration.  A plain
+-- @takeWhile isCommentLine@ would halt at the first blank line and so
+-- be stricter than Haddock — silently dropping the documentation of
+-- any symbol written doc-block / blank-line / signature, a common
+-- idiom in @containers@, @text@, and friends.
+--
+-- Pragma lines are also excluded from the block itself: @{-# ... #-}@
+-- satisfies 'isCommentLine' (it starts with @{-@) but is not prose.
+-- The block is returned in source order, trailing whitespace trimmed,
+-- only when it contains a @-- |@\/@-- ^@ starter.
+collectHaddockBlock :: [Text] -> Maybe DocText
+collectHaddockBlock stripped
+  | not (null block) && any isHaddockStarter block =
+      Just (DocText (Text.stripEnd (Text.unlines (reverse block))))
+  | otherwise = Nothing
+  where
+    block = takeWhile (\t -> isCommentLine t && not (isPragmaLine t))
+                      (dropWhile isSkippable stripped)
     isSkippable t = Text.null t || isPragmaLine t
 
 isPragmaLine :: Text -> Bool
@@ -221,16 +238,10 @@ haddockBefore ls d = do
   startLn <- Parser.declSigLine d
   haddockAbove ls startLn
 
--- | The contiguous Haddock comment block directly above @startLn@.
+-- | The Haddock comment block sitting above @startLn@, skipping any
+-- blank\/pragma lines between the block and the declaration.
 haddockAbove :: [(Int, Text)] -> Int -> Maybe DocText
-haddockAbove ls startLn =
-  let prior    = reverse (takeWhile (\(k, _) -> k < startLn) ls)
-      stripped = map (Text.stripStart . snd) prior
-      block    = takeWhile isCommentLine stripped
-      hasStart = any isHaddockStarter block
-  in if hasStart && not (null block)
-       then Just (DocText (Text.unlines (reverse block)))
-       else Nothing
+haddockAbove ls startLn = collectHaddockBlock (linesAbove ls startLn)
 
 isCommentLine :: Text -> Bool
 isCommentLine t =
