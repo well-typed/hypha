@@ -16,6 +16,7 @@ module Hypha.Command.Server
   , buildServerConfig
     -- * Internals exposed for testing
   , collectModuleRows
+  , reexportRows
   , briefException
   ) where
 
@@ -599,27 +600,37 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
       let pkgT    = unPackageName (pkgName    pid)
           verT    = unVersion    (pkgVersion pid)
           compKey = componentKey pkgT kind
-      mods <- enumModulesIn srcDirs
-      rowChunks <- mapM (collectMod compKey srcDirs) mods
-      let flatRows = concat rowChunks
-          indexed  = [ Fuzzy.mkIndexedRow p m n s
-                     | (p, m, n, s) <- flatRows
-                     ]
+      mods   <- enumModulesIn srcDirs
+      loaded <- catMaybes <$> mapM (loadModuleSrc srcDirs) mods
+      localChunks <- mapM (\(m, f, s) -> collectModuleRows compKey m f s) loaded
+      let flatLocal = concat localChunks
+          -- Flagship rows: a re-exported symbol (e.g.
+          -- @Data.Map.Strict.insertWith@, defined in
+          -- @Data.Map.Strict.Internal@) is otherwise only searchable
+          -- under its @.Internal@ definition site.  Surface it under the
+          -- module that exposes it, the way Haddock lists it.
+          reexport  = reexportRows compKey flatLocal
+                        [ (m, Locate.parseExports s) | (m, _f, s) <- loaded ]
+          flatRows  = flatLocal ++ reexport
+          indexed   = [ Fuzzy.mkIndexedRow p m n s
+                      | (p, m, n, s) <- flatRows
+                      ]
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
       Cache.writeCachedIndex cache (originFor pid) compKey verT flatRows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
-    -- | Resolve a module file against an explicit list of source roots,
-    -- in priority order, then delegate to 'collectModuleRows'.
-    collectMod compKey srcDirs modPath = do
+    -- | Resolve a module against an explicit list of source roots, in
+    -- priority order, and read its source.  'Nothing' when no root
+    -- contains the module file.
+    loadModuleSrc srcDirs modPath = do
       mFile <- firstExistingModule srcDirs modPath
       case mFile of
-        Nothing -> pure []
+        Nothing -> pure Nothing
         Just f  -> do
           src <- TIO.readFile f
-          collectModuleRows compKey modPath f src
+          pure (Just (modPath, f, src))
 
     firstExistingModule [] _ = pure Nothing
     firstExistingModule (r:rs) modPath = do
@@ -673,6 +684,41 @@ collectModuleRows compKey modPath f src = do
            , not (Text.null nm)
            , keep nm
            ]
+
+-- | Flagship re-export rows for a component.
+--
+-- A module often re-exports symbols it does not itself declare — the
+-- @containers@ public modules (@Data.Map.Strict@, ...) re-export nearly
+-- everything from an @.Internal@ sibling.  'collectModuleRows' only
+-- emits rows for locally-declared symbols, so those re-exports are only
+-- searchable under the @.Internal@ definition site, and a search for
+-- @insertWith@ lands the user on @Data.Map.Strict.Internal@ instead of
+-- the module Haddock documents it under.
+--
+-- Given every local row already collected for the component and each
+-- module's export list, this emits, per module, one row for each name
+-- the module exports but does not declare, resolved to the signature
+-- from wherever the component defines it.  Names the component never
+-- declares (cross-package re-exports) are skipped — we have no
+-- signature for them and the definition lives in another index entry.
+reexportRows
+  :: Text                             -- ^ component key
+  -> [(Text, Text, Text, Text)]       -- ^ local rows: (compKey, module, name, sig)
+  -> [(Text, [Text])]                 -- ^ (module, its export list) for every module
+  -> [(Text, Text, Text, Text)]
+reexportRows compKey local modExports =
+  [ (compKey, modPath, nm, sig)
+  | (modPath, exps) <- modExports
+  , let localNames = Map.findWithDefault Set.empty modPath localByMod
+  , nm  <- Set.toList (Set.fromList exps `Set.difference` localNames)
+  , Just sig <- [Map.lookup nm defs]
+  ]
+  where
+    -- Any component-local definition of a name gives us its signature;
+    -- same-named re-exports (lazy vs strict @insertWith@) share it.
+    defs       = Map.fromList [ (nm, sig) | (_, _, nm, sig) <- local ]
+    localByMod = Map.fromListWith Set.union
+                   [ (m, Set.singleton nm) | (_, m, nm, _) <- local ]
 
 -- | Pick the source roots to scan for a package.  If any of the common
 -- @hs-source-dirs@ subdirectories exist we walk those exclusively;

@@ -14,7 +14,8 @@ import Data.Text.Lazy qualified as LText
 import Lucid (renderText)
 
 import Hypha.Command.Server
-  ( BindAddr (..), BindError (..), briefException, collectModuleRows, parseBind )
+  ( BindAddr (..), BindError (..), briefException, collectModuleRows
+  , parseBind, reexportRows )
 import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
 import Hypha.Server.Ui.Search (highlightTokens)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
@@ -30,6 +31,7 @@ tests :: TestTree
 tests = testGroup "Unit.Server"
   [ testGroup "Server.parseBind" parseBindTests
   , testGroup "Server.collectModuleRows" collectModuleRowsTests
+  , testGroup "Server.reexportRows" reexportRowsTests
   , testGroup "Server.briefException" briefExceptionTests
   , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
   , testGroup "App.mimeFor" mimeForTests
@@ -202,6 +204,37 @@ module Foo where
 foo :: Int
 foo = 1
 |]
+
+reexportRowsTests :: [TestTree]
+reexportRowsTests =
+  [ testCase "a re-exported symbol gets a flagship row under the exposing module" $ do
+      let ck    = "containers-0.7:lib"
+          -- insertWith is declared (with a signature) in the .Internal
+          -- module; helper is an internal-only decl.
+          local = [ (ck, "Data.Map.Strict.Internal", "insertWith", "insertWith :: T")
+                  , (ck, "Data.Map.Strict.Internal", "helper",     "helper :: U")
+                  ]
+          -- Data.Map.Strict re-exports insertWith but not the helper.
+          modExports = [ ("Data.Map.Strict",          ["insertWith"])
+                       , ("Data.Map.Strict.Internal", ["insertWith", "helper"])
+                       ]
+          rows = reexportRows ck local modExports
+      assertBool "flagship insertWith row carries the definition-site signature"
+        ((ck, "Data.Map.Strict", "insertWith", "insertWith :: T") `elem` rows)
+      assertBool "no re-export row minted for a locally-declared name"
+        (not (any (\(_, m, n, _) -> m == "Data.Map.Strict.Internal" && n == "insertWith") rows))
+      assertBool "an unexported internal helper is not surfaced under the flagship"
+        (not (any (\(_, _, n, _) -> n == "helper") rows))
+
+  , testCase "a name the component never declares is skipped (no phantom row)" $ do
+      let ck   = "p-1.0:lib"
+          rows = reexportRows ck
+                   [ (ck, "P.Internal", "known", "known :: X") ]
+                   [ ("P", ["known", "fromAnotherPackage"]) ]
+      -- 'known' resolves; 'fromAnotherPackage' has no component-local
+      -- definition, so it produces no row rather than an empty-sig one.
+      map (\(_, m, n, _) -> (m, n)) rows @?= [("P", "known")]
+  ]
 
 briefExceptionTests :: [TestTree]
 briefExceptionTests =
