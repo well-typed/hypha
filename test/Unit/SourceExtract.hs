@@ -35,14 +35,14 @@ tests = testGroup "Unit.SourceExtract"
         Left e  -> assertFailure (show e)
         Right d -> do
           fmap unDocText (mdiHeader d)
-            @?= Just "-- | Fixture module header.\n--\n-- Second paragraph."
+            @?= Just " Fixture module header.\n\n Second paragraph."
           map deName (mdiEntries d) @?= ["Colour", "run"]
           map deKind (mdiEntries d) @?= [Parser.DkData, Parser.DkFunction]
           case mdiEntries d of
             [colour, run] -> do
               deSignature colour @?= Just "data Colour = Red | Green"
               deSignature run    @?= Just "run :: Int -> Int"
-              fmap unDocText (deHaddock colour) @?= Just "-- | A colour."
+              fmap unDocText (deHaddock colour) @?= Just " A colour."
             es -> assertFailure ("expected two entries, got " <> show (length es))
 
   , testCase "module without header prose yields Nothing" $ do
@@ -66,7 +66,7 @@ tests = testGroup "Unit.SourceExtract"
             ]
       case Extract.extractModuleDoc "Pragmatic.hs" src of
         Left e  -> assertFailure (show e)
-        Right d -> fmap unDocText (mdiHeader d) @?= Just "-- | Real header prose."
+        Right d -> fmap unDocText (mdiHeader d) @?= Just " Real header prose."
 
   , testCase "license comment separated by a blank line is not a header" $ do
       let src = Text.unlines
@@ -96,8 +96,9 @@ tests = testGroup "Unit.SourceExtract"
 
   , testCase "doc block separated from its declaration by a blank line still attaches" $ do
       -- The containers idiom: a @-- |@ block, a blank line, then the
-      -- signature.  GHC attaches the comment across the blank line, so
-      -- extraction must too.
+      -- signature.  GHC attaches the comment across the blank line and
+      -- renders it marker-free, so extraction reports the prose (not a
+      -- blank box).
       let src = Text.unlines
             [ "module M where"
             , ""
@@ -112,7 +113,7 @@ tests = testGroup "Unit.SourceExtract"
         Left e  -> assertFailure (show e)
         Right d -> case mdiEntries d of
           (e : _) -> fmap unDocText (deHaddock e)
-                       @?= Just "-- | Insert with a function.\n--\n-- > insertWith (++) 5 \"x\" m"
+                       @?= Just " Insert with a function.\n\n > insertWith (++) 5 \"x\" m"
           []      -> assertFailure "expected an entry"
 
   , testCase "extractSymbolInfo recovers a doc block sitting above a blank line" $ do
@@ -126,7 +127,24 @@ tests = testGroup "Unit.SourceExtract"
             ]
           info = Extract.extractSymbolInfo src "insertWith"
       fmap unDocText (Extract.siHaddock info)
-        @?= Just "-- | Insert with a function."
+        @?= Just " Insert with a function."
+
+  , testCase "a plain comment between the doc block and the signature is ignored" $ do
+      -- The @insertWithKey@ idiom: the real @-- |@ block, a blank line,
+      -- then a non-doc @-- ...@ implementation note directly above the
+      -- signature.  GHC drops the non-doc comment and keeps the real
+      -- doc; the old line scanner grabbed the note and lost the doc.
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "-- | The real doc."
+            , ""
+            , "-- See Note: some implementation detail"
+            , "insertWithKey :: Int -> Int"
+            , "insertWithKey = id"
+            ]
+          info = Extract.extractSymbolInfo src "insertWithKey"
+      fmap unDocText (Extract.siHaddock info) @?= Just " The real doc."
 
   , testCase "function bodies are never sliced into the signature slot" $ do
       let src = Text.unlines

@@ -19,6 +19,7 @@ module Hypha.Source.Parser
   , ParseError (..)
   , parseDecls
   , parseDeclsIO
+  , parseModuleDoc
   , findDecl
   , declSigText
   ) where
@@ -60,6 +61,13 @@ data Decl = Decl
     -- ^ End line of the definition span (inclusive, 1-based).  For
     -- data\/class declarations this delimits the whole body so callers
     -- can slice the constructor\/method block out of the source.
+  , declDoc        :: !(Maybe Text)
+    -- ^ The Haddock documentation attached to this declaration, as
+    -- rendered by GHC (comment markers already stripped, contiguous
+    -- @-- |@ lines merged, non-doc comments dropped).  Populated from
+    -- the parse tree's 'DocD' nodes, not by line scanning, so blank
+    -- lines / stray comments / CPP between the doc and the declaration
+    -- are handled exactly as Haddock handles them.
   }
   deriving stock (Show, Eq)
 
@@ -99,7 +107,19 @@ parseDecls path source = unsafePerformIO (parseDeclsIO path source)
 -- 'IO' and would prefer not to thread an 'unsafePerformIO' through
 -- their stack.
 parseDeclsIO :: FilePath -> Text -> IO (Either ParseError [Decl])
-parseDeclsIO path source = do
+parseDeclsIO path source = fmap (fmap snd) (parseModuleDocIO path source)
+
+-- | Parse a module and return its Haddock header (the @-- |@ block
+-- above the @module@ keyword, if any) alongside its top-level
+-- declarations.  Both the header and each declaration's doc come from
+-- the parse tree, so this is the single authoritative doc source — no
+-- line scanning anywhere.
+parseModuleDoc :: FilePath -> Text -> Either ParseError (Maybe Text, [Decl])
+parseModuleDoc path source = unsafePerformIO (parseModuleDocIO path source)
+{-# NOINLINE parseModuleDoc #-}
+
+parseModuleDocIO :: FilePath -> Text -> IO (Either ParseError (Maybe Text, [Decl]))
+parseModuleDocIO path source = do
   preprocessed <- if needsCpp source
     then Text.pack <$> Cpphs.runCpphs cpphsOpts path (Text.unpack source)
     else pure source
@@ -110,13 +130,17 @@ parseDeclsIO path source = do
                emptyDiagOpts
                []      -- supported langexts (only used for error messages)
                False   -- safeImports
-               False   -- isHaddock — set False; we attach docs out-of-band
+               True    -- isHaddock — attach doc comments to the parse tree
                False   -- keep raw token stream
                True    -- honour @{-# LINE #-}@ pragmas
       st   = L.initParserState opts buf loc
   pure $ case L.unP P.parseModule st of
-    L.POk _ (L _ hsMod) -> Right (declsFromModule hsMod)
+    L.POk _ (L _ hsMod) -> Right (moduleHeaderDoc hsMod, declsFromModule hsMod)
     L.PFailed _         -> Left (ParseError "parse error")
+
+-- | The module-level Haddock header, as rendered by GHC.
+moduleHeaderDoc :: HsModule GhcPs -> Maybe Text
+moduleHeaderDoc m = docTextOf <$> hsmodHaddockModHeader (hsmodExt m)
 
 -- | Cheap pre-flight check: only invoke cpphs when the source
 -- actually contains CPP directives.  Most Hackage modules don't, and
@@ -217,7 +241,45 @@ declsFromModule m =
   -- returns one record carrying both line numbers (sig + def) rather
   -- than whichever appeared first.  Order of first appearance is
   -- preserved.
-  mergeByName (concatMap declsFromTop (hsmodDecls m))
+  mergeByName (associateDocs (hsmodDecls m))
+
+-- | Walk the top-level nodes in source order, stapling each
+-- @DocCommentNext@ (@-- |@) block onto the declaration that follows it
+-- and each @DocCommentPrev@ (@-- ^@) block onto the declaration that
+-- precedes it.  GHC has already dropped non-doc comments and merged
+-- each contiguous doc block into a single node, so association is a
+-- plain left fold — blank lines, stray comments, and CPP @{-# LINE #-}@
+-- pragmas between a doc and its declaration are invisible here just as
+-- they are to Haddock itself.
+associateDocs :: [LHsDecl GhcPs] -> [Decl]
+associateDocs = go Nothing []
+  where
+    go _       acc []          = reverse acc
+    go pending acc (ld : rest) = case unLoc ld of
+      DocD _ (DocCommentNext d) -> go (pending `appendDoc` Just (docTextOf d)) acc rest
+      DocD _ (DocCommentPrev d) -> go pending (attachPrev (docTextOf d) acc) rest
+      -- Named chunks and section headers are not a declaration's doc.
+      DocD _ _                  -> go pending acc rest
+      -- Any real top-level node consumes the pending @-- |@ block: a
+      -- doc binds to the declaration immediately following it, even one
+      -- we don't emit (e.g. an instance), so the pending doc is cleared
+      -- either way.
+      _ -> let ds = [ dcl { declDoc = pending } | dcl <- declsFromTop ld ]
+           in go Nothing (reverse ds ++ acc) rest
+
+    attachPrev _   []       = []
+    attachPrev txt (d : ds) = d { declDoc = declDoc d `appendDoc` Just txt } : ds
+
+-- | Combine two optional doc blocks, joining with a blank line so a
+-- @-- |@ / @-- ^@ pair on the same binding reads as two paragraphs.
+appendDoc :: Maybe Text -> Maybe Text -> Maybe Text
+appendDoc Nothing    y          = y
+appendDoc x          Nothing    = x
+appendDoc (Just a)   (Just b)   = Just (a <> "\n\n" <> b)
+
+-- | Render a located Haddock doc to plain text via GHC's own renderer.
+docTextOf :: LHsDoc GhcPs -> Text
+docTextOf = Text.pack . renderHsDocString . hsDocString . unLoc
 
 mergeByName :: [Decl] -> [Decl]
 mergeByName = go []
@@ -238,6 +300,7 @@ mergeByName = go []
       , declSigEndLine = declSigEndLine a `orFirst` declSigEndLine b
       , declDefLine    = declDefLine a    `orFirst` declDefLine b
       , declDefEndLine = declDefEndLine a `orFirst` declDefEndLine b
+      , declDoc        = declDoc a        `appendDoc` declDoc b
       }
 
     orFirst (Just x) _ = Just x
@@ -289,6 +352,7 @@ declsFromTop ld = case unLoc ld of
       , declSigEndLine = mE
       , declDefLine    = Nothing
       , declDefEndLine = Nothing
+      , declDoc        = Nothing
       }
     defDecl nm mS mE k = Decl
       { declName       = nm
@@ -298,6 +362,7 @@ declsFromTop ld = case unLoc ld of
       , declSigEndLine = Nothing
       , declDefLine    = mS
       , declDefEndLine = mE
+      , declDoc        = Nothing
       }
 
 locLines :: LHsDecl GhcPs -> (Maybe Int, Maybe Int)

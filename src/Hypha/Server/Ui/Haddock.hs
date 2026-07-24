@@ -1,16 +1,15 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
--- | Render Haddock comment prose to HTML for the server's symbol card.
+-- | Render Haddock prose to HTML for the server's symbol card.
 --
--- The 'Hypha.Source.Extract' step grabs raw comment text — leading
--- @-- |@ / @-- ^@ markers, line-by-line.  We strip those markers, hand
--- the cleaned-up text to 'haddock-library', and walk the resulting
--- 'DocH' AST into Lucid HTML.  No external CSS/JS dependency: the
--- elements we emit (p, code, pre, em, strong, ul, ol, a, h1\x2026h3,
--- table) are styled by the existing components stylesheet.
+-- The 'Hypha.Source.Extract' step hands us the declaration's Haddock
+-- text as GHC rendered it — comment markers already stripped.  We hand
+-- that to 'haddock-library' and walk the resulting 'DocH' AST into
+-- Lucid HTML.  No external CSS/JS dependency: the elements we emit
+-- (p, code, pre, em, strong, ul, ol, a, h1\x2026h3, table) are styled by
+-- the existing components stylesheet.
 module Hypha.Server.Ui.Haddock
   ( renderHaddockHtml
-  , stripCommentMarkers
   ) where
 
 import Data.Text (Text)
@@ -19,9 +18,8 @@ import qualified Documentation.Haddock.Parser as HP
 import qualified Documentation.Haddock.Types  as HT
 import Lucid
 
--- | Parse the raw comment text and render to Lucid HTML.  Empty input
--- emits nothing so the card collapses cleanly when a symbol has no
--- Haddock prose.
+-- | Parse the Haddock text and render to Lucid HTML.  Empty input emits
+-- nothing so the card collapses cleanly when a symbol has no prose.
 renderHaddockHtml :: Text -> Html ()
 renderHaddockHtml raw
   | Text.null cleaned = mempty
@@ -30,31 +28,7 @@ renderHaddockHtml raw
           regular = HP.toRegular (HT._doc meta)
       in fromDocH regular
   where
-    cleaned = Text.strip (stripCommentMarkers raw)
-
--- | Drop the leading @--@/@-- |@/@-- ^@ markers from every line.  The
--- @ ^@ variant marks documentation attached to the /previous/ binding,
--- but for our purposes both should render identically.
-stripCommentMarkers :: Text -> Text
-stripCommentMarkers = Text.unlines . map stripOne . Text.lines
-  where
-    stripOne :: Text -> Text
-    stripOne line =
-      let trimmed = Text.dropWhile (`elem` (" \t" :: String)) line
-      in case Text.stripPrefix "--" trimmed of
-           Just rest -> Text.dropWhile (== ' ') (dropMarker rest)
-           Nothing   -> line
-
-    dropMarker :: Text -> Text
-    dropMarker t =
-      case Text.uncons t of
-        Just (' ', rest) -> case Text.uncons rest of
-          Just ('|', r) -> r
-          Just ('^', r) -> r
-          _             -> Text.cons ' ' rest
-        Just ('|', rest) -> rest
-        Just ('^', rest) -> rest
-        _                -> t
+    cleaned = Text.strip raw
 
 -- | Walk a Haddock 'DocH' AST into Lucid HTML.  We collapse identifier
 -- references to their textual form via 'HP.toRegular' so the identifier

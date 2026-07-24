@@ -44,13 +44,13 @@ tests = testGroup "Golden.Server"
 
     sourceView = ViewFromSource SourceDoc
       { sdInfo = ModuleDocInfo
-          { mdiHeader  = Just (DocText "-- | Fixture module header prose.")
+          { mdiHeader  = Just (DocText "Fixture module header prose.")
           , mdiEntries =
               [ DocEntry
                   { deName      = "Gadget"
                   , deKind      = DkData
                   , deSignature = Just "data Gadget = MkGadget !Int"
-                  , deHaddock   = Just (DocText "-- | A gadget.")
+                  , deHaddock   = Just (DocText "A gadget.")
                   , deSigLine   = Nothing
                   , deDefLine   = Just 12
                   }
@@ -58,7 +58,7 @@ tests = testGroup "Golden.Server"
                   { deName      = "frob"
                   , deKind      = DkFunction
                   , deSignature = Just "frob :: Gadget -> Int"
-                  , deHaddock   = Just (DocText "-- | Frobnicate the gadget.")
+                  , deHaddock   = Just (DocText "Frobnicate the gadget.")
                   , deSigLine   = Just 17
                   , deDefLine   = Just 18
                   }

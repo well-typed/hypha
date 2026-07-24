@@ -1,14 +1,14 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings  #-}
--- | Extract the signature, Haddock prelude, and source-line anchor
--- for a top-level symbol in a Haskell module.  The line-based parser
--- that used to live here has been replaced by "Hypha.Source.Parser"
--- (a @ghc-lib-parser@-backed scanner) for everything that involves
--- identifying the signature and definition lines.  The remaining
--- responsibility of this module — slicing the signature text and
--- the preceding Haddock comment block out of the original source —
--- is still line-based, because Haddock comments are not attached to
--- declarations in the parse tree we produce.
+-- | Extract the signature, Haddock documentation, and source-line
+-- anchor for a top-level symbol in a Haskell module.  Both the
+-- signature /lines/ and the Haddock prose come from
+-- "Hypha.Source.Parser" (a @ghc-lib-parser@-backed parse): the parser
+-- attaches doc comments to their declarations exactly as Haddock does,
+-- so no comment line scanning happens here anymore.  The only
+-- line-based work left is slicing the signature /text/ (and, for
+-- type\/class bodies, the declaration slice) out of the original source
+-- by the line numbers the parser reports.
 module Hypha.Source.Extract
   ( SymbolInfo (..)
   , extractSymbolInfo
@@ -31,6 +31,8 @@ import Hypha.Types.Doc (DocText (..))
 data SymbolInfo = SymbolInfo
   { siSignature :: !(Maybe Text)
   , siHaddock   :: !(Maybe DocText)
+    -- ^ The declaration's Haddock prose as rendered by GHC (comment
+    -- markers stripped, contiguous @-- |@ lines merged).
   , siKind      :: !(Maybe Parser.DeclKind)
     -- ^ Declaration kind when the parser could classify the symbol.
   , siSigLine   :: !(Maybe Int)
@@ -54,12 +56,10 @@ extractSymbolInfo src sym =
        Nothing ->
          SymbolInfo Nothing Nothing Nothing Nothing Nothing
        Just d  ->
-         let mSig = sigText numbered d
-             hd   = haddockBefore numbered d
-             defL = Parser.declDefLine d
+         let defL = Parser.declDefLine d
          in SymbolInfo
-              { siSignature = mSig
-              , siHaddock   = hd
+              { siSignature = sigText numbered d
+              , siHaddock   = DocText <$> Parser.declDoc d
               , siKind      = Just (Parser.declKind d)
               , siSigLine   = Parser.declSigLine d
               , siLine      = case defL of
@@ -73,8 +73,8 @@ extractSymbolInfo src sym =
 -- single parse of the module source.
 data ModuleDocInfo = ModuleDocInfo
   { mdiHeader  :: !(Maybe DocText)
-    -- ^ The module-level @-- |@ comment block above the @module@
-    -- keyword, when present.
+    -- ^ The module-level Haddock header (the @-- |@ block above the
+    -- @module@ keyword), when present.
   , mdiEntries :: ![DocEntry]
     -- ^ One entry per top-level declaration, in source order.
   }
@@ -100,10 +100,10 @@ data DocEntry = DocEntry
 -- module page needs every export.
 extractModuleDoc :: FilePath -> Text -> Either Parser.ParseError ModuleDocInfo
 extractModuleDoc path src = do
-  decls <- Parser.parseDecls path src
+  (header, decls) <- Parser.parseModuleDoc path src
   let numbered = numberedLines src
   pure ModuleDocInfo
-    { mdiHeader  = moduleHeaderBlock numbered
+    { mdiHeader  = DocText <$> header
     , mdiEntries = map (entryFor numbered) decls
     }
   where
@@ -111,16 +111,10 @@ extractModuleDoc path src = do
       { deName      = Parser.declName d
       , deKind      = Parser.declKind d
       , deSignature = signatureFor ls d
-      , deHaddock   = anchorLineOf d >>= haddockAbove ls
+      , deHaddock   = DocText <$> Parser.declDoc d
       , deSigLine   = Parser.declSigLine d
       , deDefLine   = Parser.declDefLine d
       }
-
-    -- The line the decl's Haddock block sits above: the signature when
-    -- there is one, else the first definition line.
-    anchorLineOf d = case Parser.declSigLine d of
-      Just n  -> Just n
-      Nothing -> Parser.declDefLine d
 
     -- Values render their signature; type-ish decls without a @::@
     -- signature render the (clamped) source slice of their body so
@@ -151,60 +145,6 @@ declSlice ls s e =
           suffix  = [ "\x2026" | length slice > declSliceLimit ]
       in Just (Text.stripEnd (Text.unlines (clamped <> suffix)))
 
--- | The module-level Haddock header: the contiguous comment block that
--- ends directly above the @module@ keyword (allowing pragma and blank
--- lines in between), provided it contains a @-- |@ starter.  A comment
--- block separated from the header scan by a blank line boundary within
--- itself (e.g. a licence header higher up) is not collected.
-moduleHeaderBlock :: [(Int, Text)] -> Maybe DocText
-moduleHeaderBlock ls = do
-  modLn <- lookupModuleLine
-  collectHaddockBlock (linesAbove ls modLn)
-  where
-    lookupModuleLine =
-      case [ i | (i, t) <- ls, isModuleLine (Text.stripStart t) ] of
-        (i : _) -> Just i
-        []      -> Nothing
-    isModuleLine t = "module " `Text.isPrefixOf` t || t == "module"
-
--- | The source lines strictly above @anchor@, stripped of leading
--- whitespace and ordered nearest-to-the-anchor first — the shape
--- 'collectHaddockBlock' consumes.
-linesAbove :: [(Int, Text)] -> Int -> [Text]
-linesAbove ls anchor =
-  map (Text.stripStart . snd) (reverse (takeWhile (\(k, _) -> k < anchor) ls))
-
--- | Collect a leading Haddock comment block from source lines ordered
--- nearest-to-the-anchor first (the reversed prefix above a declaration
--- signature or the @module@ keyword).
---
--- Blank and pragma lines between the block and its anchor are skipped
--- before collection.  This matches Haddock itself: a @-- |@ comment
--- attaches to the following declaration regardless of intervening
--- blank lines (whitespace is invisible to the parser), and pragmas
--- conventionally stack directly above a declaration.  A plain
--- @takeWhile isCommentLine@ would halt at the first blank line and so
--- be stricter than Haddock — silently dropping the documentation of
--- any symbol written doc-block / blank-line / signature, a common
--- idiom in @containers@, @text@, and friends.
---
--- Pragma lines are also excluded from the block itself: @{-# ... #-}@
--- satisfies 'isCommentLine' (it starts with @{-@) but is not prose.
--- The block is returned in source order, trailing whitespace trimmed,
--- only when it contains a @-- |@\/@-- ^@ starter.
-collectHaddockBlock :: [Text] -> Maybe DocText
-collectHaddockBlock stripped
-  | not (null block) && any isHaddockStarter block =
-      Just (DocText (Text.stripEnd (Text.unlines (reverse block))))
-  | otherwise = Nothing
-  where
-    block = takeWhile (\t -> isCommentLine t && not (isPragmaLine t))
-                      (dropWhile isSkippable stripped)
-    isSkippable t = Text.null t || isPragmaLine t
-
-isPragmaLine :: Text -> Bool
-isPragmaLine = Text.isPrefixOf "{-#"
-
 -- Internals --------------------------------------------------------
 
 -- | Pair each line with its 1-based index.
@@ -224,30 +164,3 @@ sigText ls d = do
   case slice of
     []    -> Nothing
     parts -> Just (Text.unwords (filter (not . Text.null) (map Text.strip parts)))
-
--- | Grab the contiguous Haddock comment block immediately preceding
--- the signature line, if any.  We accept the same comment shapes the
--- old hand-written parser did (@-- |@, @-- ^@, with @-- $@/@-- @
--- continuation lines).  Pure line-scanning is appropriate here:
--- Haddock comments are formally /not/ attached to the parsed AST we
--- produce (we disable Haddock mode in the parser so it stays cheap),
--- and the position information is what makes the scan precise: we
--- only look at the lines that touch the signature.
-haddockBefore :: [(Int, Text)] -> Parser.Decl -> Maybe DocText
-haddockBefore ls d = do
-  startLn <- Parser.declSigLine d
-  haddockAbove ls startLn
-
--- | The Haddock comment block sitting above @startLn@, skipping any
--- blank\/pragma lines between the block and the declaration.
-haddockAbove :: [(Int, Text)] -> Int -> Maybe DocText
-haddockAbove ls startLn = collectHaddockBlock (linesAbove ls startLn)
-
-isCommentLine :: Text -> Bool
-isCommentLine t =
-  "--" `Text.isPrefixOf` t
-  || "{-" `Text.isPrefixOf` t
-  || "-}" `Text.isPrefixOf` t
-
-isHaddockStarter :: Text -> Bool
-isHaddockStarter t = "-- |" `Text.isPrefixOf` t || "-- ^" `Text.isPrefixOf` t
