@@ -243,8 +243,10 @@ test-suite hypha-tests
     Unit.LookupPrepLocal
     Unit.RepoCache
     Unit.SourceExtensions
+    Unit.SearchIndexBuild
     Unit.SearchIndexCache
     Unit.SearchReexport
+    Util.Fixture
     Util.Row
     Unit.SourceInterface
     Unit.SourceExtract

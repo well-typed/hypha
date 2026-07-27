@@ -7,6 +7,7 @@
 -- cache layer knows about rows, rows know nothing about storage.
 module Hypha.Search.Index
   ( Visibility (..)
+  , ModuleSource (..)
   , visibilityToText
   , visibilityFromText
   , IndexRow (..)
@@ -40,6 +41,24 @@ visibilityFromText = \case
   "exposed"  -> Just Exposed
   "internal" -> Just Internal
   _          -> Nothing
+
+-- | One module's bytes, plus the two facts only the cabal stanza knows:
+-- which name the stanza expected it to have, and whether the stanza
+-- exposes it.
+--
+-- Lives beside the row types rather than with the indexer so
+-- "Hypha.Source.Locate" can take one without importing the builder that
+-- imports it.
+data ModuleSource = ModuleSource
+  { msDeclaredName :: !ModulePath
+    -- ^ The name the cabal stanza (or, failing that, the file path)
+    -- expected.  Used only to detect and report a disagreement — the
+    -- parse tree is the authority on what a module is called.
+  , msPath         :: !FilePath
+  , msVisibility   :: !Visibility
+  , msContent      :: !Text
+  }
+  deriving stock (Show, Eq)
 
 -- | One search-index entry.
 --

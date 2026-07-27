@@ -13,22 +13,23 @@
 -- Lifted out of "Hypha.Command.Server", which owned both the HTTP wiring
 -- and the indexer at 843 lines.
 module Hypha.Search.Indexer
-  ( buildAndCacheIndex
+  ( -- * Building
+    buildAndCacheIndex
   , hydrateFromCache
+    -- * The pure core
+  , ComponentIndex (..)
+  , indexComponentPure
+    -- * Component discovery
   , componentsForUnit
+  , componentModules
   , enumModulesIn
   , chooseSourceRoots
-  , collectModuleRows
-  , reexportRows
   , indexedRowOf
-  , provisionalRow
   ) where
 
-import Control.Exception (SomeException, evaluate, try)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TIO
@@ -40,10 +41,15 @@ import Hypha.Package.Resolver (PackageResolver (..))
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.Index
-  (IndexRow (..), Visibility (Exposed))
+  (IndexRow (..), ModuleSource (..), Visibility (..))
+import Hypha.Search.Reexport (DefinitionSite (..), Resolution (..))
+import Hypha.Search.Reexport qualified as Reexport
+import Hypha.Source.Extensions (LanguageSettings)
+import Hypha.Source.Extensions qualified as Extensions
+import Hypha.Source.Interface (ModuleInterface (..))
+import Hypha.Source.Interface qualified as Interface
 import Hypha.Search.PackageCache (CacheOrigin (..))
 import Hypha.Search.PackageCache qualified as Cache
-import Hypha.Source.Locate qualified as Locate
 import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.BuildPlan
 import Hypha.Types.ComponentName (ComponentKey (..), componentKeyOf)
@@ -162,61 +168,19 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
     indexComponent pid (kind, srcDirs) = do
       let pkgT    = unPackageName (pkgName    pid)
           verT    = unVersion    (pkgVersion pid)
-          compKey = unComponentKey (componentKeyOf (PackageName pkgT) kind)
-      mods   <- enumModulesIn srcDirs
-      loaded <- catMaybes <$> mapM (loadModuleSrc srcDirs) mods
-      localChunks <- mapM (\(m, f, s) -> collectModuleRows compKey m f s) loaded
-      let flatLocal = concat localChunks
-          -- Flagship rows: a re-exported symbol (e.g.
-          -- @Data.Map.Strict.insertWith@, defined in
-          -- @Data.Map.Strict.Internal@) is otherwise only searchable
-          -- under its @.Internal@ definition site.  Surface it under the
-          -- module that exposes it, the way Haddock lists it.
-          reexport  = reexportRows compKey flatLocal
-                        [ (m, Locate.parseExports s) | (m, _f, s) <- loaded ]
-          flatRows  = map provisionalRow (flatLocal ++ reexport)
-          indexed   = map indexedRowOf flatRows
+          compKey = componentKeyOf (PackageName pkgT) kind
+          langs   = languageSettingsFor plan pid kind
+      sources <- componentModules plan pid kind srcDirs
+      let ci       = indexComponentPure compKey langs sources
+          flatRows = ciRows ci
+          indexed  = map indexedRowOf flatRows
+      reportComponentIndex compKey ci
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
-      Cache.writeCachedIndex cache (originFor pid) compKey verT flatRows
+      Cache.writeCachedIndex cache (originFor pid)
+        (unComponentKey compKey) verT flatRows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
-
-    -- | Resolve a module against an explicit list of source roots, in
-    -- priority order, and read its source.  'Nothing' when no root
-    -- contains the module file.
-    loadModuleSrc srcDirs modPath = do
-      mFile <- firstExistingModule srcDirs modPath
-      case mFile of
-        Nothing -> pure Nothing
-        Just f  -> do
-          src <- TIO.readFile f
-          pure (Just (modPath, f, src))
-
-    firstExistingModule [] _ = pure Nothing
-    firstExistingModule (r:rs) modPath = do
-      let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
-      ok <- Dir.doesFileExist candidate
-      if ok then pure (Just candidate) else firstExistingModule rs modPath
-
--- | Adapt a legacy @(component, module, name, sig)@ tuple to an
--- 'IndexRow'.
---
--- Provisional on both new fields: this indexer cannot say where a
--- re-exported symbol is defined (that is exactly the defect
--- "Hypha.Search.Reexport" exists to fix) and does not yet read
--- @other-modules@.  Rows written here are generation-2 rows carrying
--- generation-1 knowledge, and the rewrite two commits from now replaces
--- this function along with the tuple pipeline feeding it.
-provisionalRow :: (Text, Text, Text, Text) -> IndexRow
-provisionalRow (comp, modPath, name, sig) = IndexRow
-  { rowComponent  = ComponentKey comp
-  , rowModule     = ModulePath modPath
-  , rowName       = SymbolName name
-  , rowSignature  = Signature sig
-  , rowDefModule  = ModulePath modPath
-  , rowVisibility = Exposed
-  }
 
 -- | An 'IndexRow' as the in-memory scorer wants it.
 indexedRowOf :: IndexRow -> Fuzzy.IndexedRow
@@ -225,88 +189,6 @@ indexedRowOf r = Fuzzy.mkIndexedRow
   (unModulePath   (rowModule r))
   (unSymbolName   (rowName r))
   (unSignature    (rowSignature r))
-
--- | Extract one cache row per top-level declaration from a single
--- module's source.  Signatures land in the @sig@ column courtesy of
--- "Hypha.Source.Parser", so a tier-1 lookup is self-sufficient and the
--- agent no longer needs a follow-up @hypha symbol@ just to learn the
--- type.
---
--- The export-list filter is best-effort: when the module has an
--- explicit @module M (a, b, ...) where@ header we restrict to those
--- names; otherwise (no header, or 'Locate.parseExports' could not read
--- one) we emit every top-level decl.  Over-inclusion is harmless for
--- the search index — internal names still resolve, and the agent sees
--- exactly the providers it would see today.
---
--- Some packages guard code with build-time-only CPP macros (e.g.
--- @#error "CURRENT_PACKAGE_KEY undefined"@, only ever defined by a
--- real GHC invocation) that "Hypha.Source.Parser" can never satisfy —
--- it has no compiler session to ask.  That is an inherent limit of
--- parsing without compiling, not something a smarter cpphs config can
--- fix.  So this forces the parse eagerly and catches any exception
--- (the CPP failure surfaces as a plain 'error' call deep inside
--- @cpphs@) at the single-module granularity: one unparseable module
--- loses its own rows, but 'buildAndCacheIndex' keeps indexing every
--- other module and package in the plan instead of aborting outright.
-collectModuleRows :: Text -> Text -> FilePath -> Text -> IO [(Text, Text, Text, Text)]
-collectModuleRows compKey modPath f src = do
-  result <- try (evaluate rows)
-  case result of
-    Left (e :: SomeException) -> do
-      hPutStrLn stderr $
-        "warning: index build skipped module " <> Text.unpack modPath
-          <> " (" <> Text.unpack compKey <> "): " <> Text.unpack (briefException e)
-      pure []
-    Right rs -> pure rs
-  where
-    decls    = either (const []) id (Parser.parseDecls f src)
-    exps     = Set.fromList (Locate.parseExports src)
-    keep nm  = Set.null exps || nm `Set.member` exps
-    sigFor d = case Parser.declSigText src d of
-                 Just t  -> t
-                 Nothing -> Text.empty
-    rows = [ (compKey, modPath, nm, sigFor d)
-           | d <- decls
-           , let nm = Parser.declName d
-           , not (Text.null nm)
-           , keep nm
-           ]
-
--- | Flagship re-export rows for a component.
---
--- A module often re-exports symbols it does not itself declare — the
--- @containers@ public modules (@Data.Map.Strict@, ...) re-export nearly
--- everything from an @.Internal@ sibling.  'collectModuleRows' only
--- emits rows for locally-declared symbols, so those re-exports are only
--- searchable under the @.Internal@ definition site, and a search for
--- @insertWith@ lands the user on @Data.Map.Strict.Internal@ instead of
--- the module Haddock documents it under.
---
--- Given every local row already collected for the component and each
--- module's export list, this emits, per module, one row for each name
--- the module exports but does not declare, resolved to the signature
--- from wherever the component defines it.  Names the component never
--- declares (cross-package re-exports) are skipped — we have no
--- signature for them and the definition lives in another index entry.
-reexportRows
-  :: Text                             -- ^ component key
-  -> [(Text, Text, Text, Text)]       -- ^ local rows: (compKey, module, name, sig)
-  -> [(Text, [Text])]                 -- ^ (module, its export list) for every module
-  -> [(Text, Text, Text, Text)]
-reexportRows compKey local modExports =
-  [ (compKey, modPath, nm, sig)
-  | (modPath, exps) <- modExports
-  , let localNames = Map.findWithDefault Set.empty modPath localByMod
-  , nm  <- Set.toList (Set.fromList exps `Set.difference` localNames)
-  , Just sig <- [Map.lookup nm defs]
-  ]
-  where
-    -- Any component-local definition of a name gives us its signature;
-    -- same-named re-exports (lazy vs strict @insertWith@) share it.
-    defs       = Map.fromList [ (nm, sig) | (_, _, nm, sig) <- local ]
-    localByMod = Map.fromListWith Set.union
-                   [ (m, Set.singleton nm) | (_, m, nm, _) <- local ]
 
 -- | Pick the source roots to scan for a package.  If any of the common
 -- @hs-source-dirs@ subdirectories exist we walk those exclusively;
@@ -363,9 +245,170 @@ hsToModule fp =
       dotted   = map (\c -> if c == '/' then '.' else c) stripped
   in dotted
 
--- | First line of an exception's rendering.  A cpphs failure carries a
--- multi-line dump; one line is enough to identify which module lost its
--- rows and why.
-briefException :: SomeException -> Text
-briefException =
-  Text.strip . Text.takeWhile (/= '\n') . Text.pack . show
+-- The pure core ------------------------------------------------------
+
+-- | What indexing one component produced, and what it could not.
+data ComponentIndex = ComponentIndex
+  { ciRows          :: ![IndexRow]
+  , ciParseFailures :: ![(ModulePath, Parser.ParseError)]
+  , ciNameMismatch  :: ![(ModulePath, ModulePath)]
+    -- ^ @(name the stanza expected, name the source declares)@.  Real in
+    -- the wild, and silently trusting either side produces rows nobody
+    -- can reach.
+  }
+  deriving stock (Show, Eq)
+
+-- | Build a component's rows.
+--
+-- Pure, because every judgement in here — what a module is called, which
+-- module defines a symbol, which signature it carries — is a function of
+-- the sources.  Mixing those judgements with file IO is what let the old
+-- indexer paper over a parse failure: it logged the failure, then let the
+-- re-export pass invent rows for the module anyway, resolving their
+-- signatures through a name-keyed map.
+indexComponentPure
+  :: ComponentKey
+  -> LanguageSettings
+  -> [ModuleSource]
+  -> ComponentIndex
+indexComponentPure compKey langs sources = ComponentIndex
+  { ciRows          = rows
+  , ciParseFailures = failures
+  , ciNameMismatch  = mismatches
+  }
+  where
+    parsed =
+      [ (ms, Interface.parseInterface langs (msPath ms) (msContent ms))
+      | ms <- sources
+      ]
+
+    failures   = [ (msDeclaredName ms, e) | (ms, Left e)  <- parsed ]
+    ok         = [ (ms, i)                | (ms, Right i) <- parsed ]
+    mismatches =
+      [ (msDeclaredName ms, miName i)
+      | (ms, i) <- ok
+      , msDeclaredName ms /= miName i
+      ]
+
+    ifaces = map snd ok
+
+    -- Keyed on the name the source declares, which is the same key the
+    -- resolution map uses.
+    visibilityOf = Map.fromList [ (miName i, msVisibility ms) | (ms, i) <- ok ]
+    ifaceOf      = Map.fromList [ (miName i, i)               | (_,  i) <- ok ]
+    contentOf    = Map.fromList [ (miName i, msContent ms)    | (ms, i) <- ok ]
+
+    rows =
+      [ IndexRow
+          { rowComponent  = compKey
+          , rowModule     = presented
+          , rowName       = name
+          , rowSignature  = sig
+          , rowDefModule  = defMod
+          , rowVisibility = Map.findWithDefault Internal presented visibilityOf
+          }
+      | ((presented, name), res) <- Map.toList (Reexport.resolveComponent ifaces)
+      , not (isDefinedOutside (resSite res))
+      , let defMod = Reexport.definitionModule presented (resSite res)
+      , Just defIface <- [Map.lookup defMod ifaceOf]
+        -- The signature is read from the module the resolver landed on.
+        -- Looking it up in a component-wide name map is what published
+        -- Data.IntMap.Lazy.insertWith with Data.Map's signature.
+      , Just decl <- [Parser.findDecl (unSymbolName name) (miDecls defIface)]
+      , let src = Map.findWithDefault "" defMod contentOf
+      , let sig = Signature (maybe "" id (Parser.declSigText src decl))
+      ]
+
+-- | A symbol the component does not define gets no row: we have no
+-- signature for it, and its definition belongs to another index entry.
+isDefinedOutside :: DefinitionSite -> Bool
+isDefinedOutside site = case site of
+  DefinedOutside{} -> True
+  DefinedHere      -> False
+  DefinedIn{}      -> False
+
+-- | Trace what a component's index pass could not do.  Never silent: a
+-- module missing from the index is invisible to search, and the user has
+-- no other way to find out.
+reportComponentIndex :: ComponentKey -> ComponentIndex -> IO ()
+reportComponentIndex compKey ci = do
+  mapM_ reportFailure  (ciParseFailures ci)
+  mapM_ reportMismatch (ciNameMismatch ci)
+  where
+    label = Text.unpack (unComponentKey compKey)
+
+    reportFailure (m, e) = hPutStrLn stderr $
+      "hypha index: " <> label <> " skipped module "
+        <> Text.unpack (unModulePath m) <> ": "
+        <> Text.unpack (Parser.parseErrorMessage e)
+
+    reportMismatch (declared, actual) = hPutStrLn stderr $
+      "hypha index: " <> label <> " expected module "
+        <> Text.unpack (unModulePath declared) <> " but its source declares "
+        <> Text.unpack (unModulePath actual) <> "; using the latter"
+
+-- | The modules of one component, as the cabal stanza lists them.
+--
+-- Enumeration from @exposed-modules@ + @other-modules@ is what keeps a
+-- stray script under a source dir from becoming a module: the filesystem
+-- walk that used to do this turned @examples/race.hs@ into a module called
+-- @race@.  The walk survives only for components whose cabal we could not
+-- parse, and says so when it fires.
+componentModules
+  :: BuildPlan
+  -> PackageId
+  -> Comp.ComponentKind
+  -> [FilePath]
+  -> IO [ModuleSource]
+componentModules plan pid kind srcDirs =
+  case componentInfoFor plan pid kind of
+    Just ci
+      | not (null (Comp.ciExposedModules ci) && null (Comp.ciOtherModules ci)) ->
+          load ([ (m, Exposed)    | m <- Comp.ciExposedModules ci ]
+                  ++ [ (m, Internal) | m <- Comp.ciOtherModules ci ])
+    _ -> do
+      hPutStrLn stderr $
+        "hypha index: " <> Text.unpack (unPackageName (pkgName pid))
+          <> " has no cabal module list; falling back to a source-dir walk"
+      walked <- enumModulesIn srcDirs
+      load [ (m, Exposed) | m <- walked ]
+  where
+    load entries = catMaybes <$> mapM loadOne entries
+
+    loadOne (modPath, vis) = do
+      mFile <- firstExistingModule srcDirs modPath
+      case mFile of
+        Nothing -> pure Nothing
+        Just f  -> do
+          content <- TIO.readFile f
+          pure (Just ModuleSource
+            { msDeclaredName = ModulePath modPath
+            , msPath         = f
+            , msVisibility   = vis
+            , msContent      = content
+            })
+
+    firstExistingModule [] _ = pure Nothing
+    firstExistingModule (r : rs) modPath = do
+      let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
+      ok <- Dir.doesFileExist candidate
+      if ok then pure (Just candidate) else firstExistingModule rs modPath
+
+-- | The parsed cabal component matching a kind, when we have one.
+componentInfoFor
+  :: BuildPlan -> PackageId -> Comp.ComponentKind -> Maybe Comp.ComponentInfo
+componentInfoFor plan pid kind = do
+  pu <- lookupUnit (pkgName pid) plan
+  case [ c | c <- puLibComponents pu, Comp.ciKind c == kind ] of
+    (c : _) -> Just c
+    []      -> Nothing
+
+-- | The language settings a component fixes for its modules.  Without them
+-- a module relying on a stanza-wide extension parses differently for us
+-- than for the compiler.
+languageSettingsFor
+  :: BuildPlan -> PackageId -> Comp.ComponentKind -> LanguageSettings
+languageSettingsFor plan pid kind =
+  case componentInfoFor plan pid kind of
+    Just ci -> Comp.ciLanguageSettings ci
+    Nothing -> Extensions.defaultLanguageSettings

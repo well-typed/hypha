@@ -41,6 +41,7 @@ import qualified Unit.InternalError
 import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
 import qualified Unit.SourceExtensions
+import qualified Unit.SearchIndexBuild
 import qualified Unit.SearchIndexCache
 import qualified Unit.SearchReexport
 import qualified Unit.SourceInterface
@@ -98,6 +99,7 @@ allTests = testGroup "hypha"
   , Unit.LookupPrepLocal.tests
   , Unit.RepoCache.tests
   , Unit.SourceExtensions.tests
+  , Unit.SearchIndexBuild.tests
   , Unit.SearchIndexCache.tests
   , Unit.SearchReexport.tests
   , Unit.SourceInterface.tests

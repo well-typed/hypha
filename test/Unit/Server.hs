@@ -15,7 +15,6 @@ import Lucid (renderText)
 
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
-import Hypha.Search.Indexer (collectModuleRows, reexportRows)
 import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
 import Hypha.Server.Ui.Search (highlightTokens)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
@@ -30,8 +29,6 @@ mkIPv6 = IPv6 . toIPv6
 tests :: TestTree
 tests = testGroup "Unit.Server"
   [ testGroup "Server.parseBind" parseBindTests
-  , testGroup "Server.collectModuleRows" collectModuleRowsTests
-  , testGroup "Server.reexportRows" reexportRowsTests
   , testGroup "Server.briefException" briefExceptionTests
   , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
   , testGroup "App.mimeFor" mimeForTests
@@ -171,69 +168,6 @@ parseBindTests =
 
   , testCase "bare IPv6 without brackets rejected (ambiguous)" $
       parseBind "::1:4287" @?= Left (BindMalformed "::1:4287")
-  ]
-
-collectModuleRowsTests :: [TestTree]
-collectModuleRowsTests =
-  [ testCase "ordinary module yields a row per top-level decl" $ do
-      rows <- collectModuleRows "pkg-1.0:lib" "Foo" "Foo.hs" plainSrc
-      assertBool "expected a row for foo" (any (\(_, _, nm, _) -> nm == "foo") rows)
-
-  , testCase "CPP #error on a build-time-only macro is skipped, not thrown" $ do
-      -- Mirrors OneTuple's Data.Tuple.Solo.TH: a hard #error guarding a
-      -- macro (CURRENT_PACKAGE_KEY) only a real GHC invocation defines.
-      -- hypha's cpphs pass has no compiler session, so this can never
-      -- succeed — the regression is the exception escaping and
-      -- aborting every other package's indexing, not this one module.
-      rows <- collectModuleRows "pkg-1.0:lib" "Foo" "Foo.hs" cppErrorSrc
-      rows @?= []
-  ]
-  where
-    plainSrc = Text.pack [r|module Foo where
-
-foo :: Int
-foo = 1
-|]
-    cppErrorSrc = Text.pack [r|{-# LANGUAGE CPP #-}
-module Foo where
-
-#ifndef CURRENT_PACKAGE_KEY
-#error "CURRENT_PACKAGE_KEY undefined"
-#endif
-
-foo :: Int
-foo = 1
-|]
-
-reexportRowsTests :: [TestTree]
-reexportRowsTests =
-  [ testCase "a re-exported symbol gets a flagship row under the exposing module" $ do
-      let ck    = "containers-0.7:lib"
-          -- insertWith is declared (with a signature) in the .Internal
-          -- module; helper is an internal-only decl.
-          local = [ (ck, "Data.Map.Strict.Internal", "insertWith", "insertWith :: T")
-                  , (ck, "Data.Map.Strict.Internal", "helper",     "helper :: U")
-                  ]
-          -- Data.Map.Strict re-exports insertWith but not the helper.
-          modExports = [ ("Data.Map.Strict",          ["insertWith"])
-                       , ("Data.Map.Strict.Internal", ["insertWith", "helper"])
-                       ]
-          rows = reexportRows ck local modExports
-      assertBool "flagship insertWith row carries the definition-site signature"
-        ((ck, "Data.Map.Strict", "insertWith", "insertWith :: T") `elem` rows)
-      assertBool "no re-export row minted for a locally-declared name"
-        (not (any (\(_, m, n, _) -> m == "Data.Map.Strict.Internal" && n == "insertWith") rows))
-      assertBool "an unexported internal helper is not surfaced under the flagship"
-        (not (any (\(_, _, n, _) -> n == "helper") rows))
-
-  , testCase "a name the component never declares is skipped (no phantom row)" $ do
-      let ck   = "p-1.0:lib"
-          rows = reexportRows ck
-                   [ (ck, "P.Internal", "known", "known :: X") ]
-                   [ ("P", ["known", "fromAnotherPackage"]) ]
-      -- 'known' resolves; 'fromAnotherPackage' has no component-local
-      -- definition, so it produces no row rather than an empty-sig one.
-      map (\(_, m, n, _) -> (m, n)) rows @?= [("P", "known")]
   ]
 
 briefExceptionTests :: [TestTree]
