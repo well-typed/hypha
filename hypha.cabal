@@ -120,6 +120,7 @@ library
     Hypha.Project.Fingerprint
     Hypha.Search.Cache
     Hypha.Search.Index
+    Hypha.Search.Indexer
     Hypha.Search.PackageCache
     Hypha.Search.Fuzzy
     Hypha.Search.Reexport

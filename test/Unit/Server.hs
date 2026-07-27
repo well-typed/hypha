@@ -14,8 +14,8 @@ import Data.Text.Lazy qualified as LText
 import Lucid (renderText)
 
 import Hypha.Command.Server
-  ( BindAddr (..), BindError (..), briefException, collectModuleRows
-  , parseBind, reexportRows )
+  ( BindAddr (..), BindError (..), briefException, parseBind )
+import Hypha.Search.Indexer (collectModuleRows, reexportRows)
 import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
 import Hypha.Server.Ui.Search (highlightTokens)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
