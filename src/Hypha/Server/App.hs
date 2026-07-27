@@ -26,6 +26,7 @@ import qualified Hypha.Server.Ui.Search  as UISearch
 import qualified Hypha.Server.Ui.Doc     as UIDoc
 import qualified Hypha.Server.Ui.Source  as UISrc
 import qualified Hypha.Server.Ui.Tree    as UITree
+import Hypha.Types.PackageId (PackageName (..), Version (..))
 import qualified Hypha.Search.Collapse   as Collapse
 import qualified Hypha.Search.Fuzzy      as Fuzzy
 import           Hypha.Server.Api       (HyphaApi, api)
@@ -158,7 +159,7 @@ pkgPage cfg pkg = do
         p_  [class_ "meta"] $ do
           toHtml ("version " :: Text)
           code_ (toHtml ver)
-        UITree.hackageLink pkgT ver origin
+        UITree.hackageLink (PackageName pkgT) (Version ver) origin
       UITree.originBadgeFull origin
       h2_ "Modules"
       if null mods

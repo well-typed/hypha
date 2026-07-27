@@ -17,6 +17,7 @@ import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
 import Hypha.Search.Collapse (SearchResult (..), SymbolResult (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
 import Hypha.Server.Ui.Search (highlightTokens)
@@ -112,28 +113,35 @@ splitByOriginTests =
 
 hackageLinkTests :: [TestTree]
 hackageLinkTests =
-  [ testCase "hackage-origin package links to the exact pinned version" $ do
-      let html = renderLink "aeson" "2.2.1.0" OriginHackage
-      assertBool "expected the Hackage href"
-        ("href=\"https://hackage.haskell.org/package/aeson-2.2.1.0\"" `Text.isInfixOf` html)
-      assertBool "expected target=_blank"
-        ("target=\"_blank\"" `Text.isInfixOf` html)
-      assertBool "expected rel=noopener"
-        ("rel=\"noopener\"" `Text.isInfixOf` html)
-  , testCase "local package renders nothing" $
-      renderLink "mylib" "0.1.0.0" (OriginLocal "./mylib") @?= ""
-  , testCase "source-repo package renders nothing" $
-      renderLink "foo" "1.0" (OriginSourceRepo Nothing Nothing Nothing) @?= ""
-  , testCase "local tarball package renders nothing" $
-      renderLink "foo" "1.0" (OriginLocalTarball "./foo-1.0.tar.gz") @?= ""
-  , testCase "remote tarball package renders nothing" $
-      renderLink "foo" "1.0" (OriginRemoteTarball "https://example.com/foo-1.0.tar.gz") @?= ""
-  , testCase "distribution package (e.g. base) renders nothing" $
-      renderLink "base" "4.19.0.0" OriginDistribution @?= ""
+  [ testCase "Hackage origin links to the pinned version" $
+      renderLink "aeson" "2.2.1.0" OriginHackage
+        `shouldContain` "https://hackage.haskell.org/package/aeson-2.2.1.0"
+
+  , testCase "distribution (boot) packages link too" $
+      -- containers, base and every other boot library IS published on
+      -- Hackage; withholding the link was the bug.
+      renderLink "containers" "0.7" OriginDistribution
+        `shouldContain` "https://hackage.haskell.org/package/containers-0.7"
+
+  , testCase "local packages get no link" $
+      renderLink "myapp" "0.1.0" (OriginLocal "/src/myapp") @?= ""
+
+  , testCase "source-repository-package gets no link" $
+      renderLink "forked" "1.0" (OriginSourceRepo Nothing Nothing Nothing) @?= ""
+
+  , testCase "local tarball gets no link" $
+      renderLink "tar" "1.0" (OriginLocalTarball "/t.tar.gz") @?= ""
+
+  , testCase "remote tarball gets no link" $
+      renderLink "tar" "1.0" (OriginRemoteTarball "https://x/t.tar.gz") @?= ""
   ]
   where
-    renderLink :: Text.Text -> Text.Text -> PackageOrigin -> Text.Text
-    renderLink pkg ver origin = LText.toStrict (renderText (hackageLink pkg ver origin))
+    renderLink pkg ver origin = LText.toStrict
+      (renderText (hackageLink (PackageName pkg) (Version ver) origin))
+
+    shouldContain hay needle =
+      assertBool (show needle <> " not in " <> show hay) (needle `Text.isInfixOf` hay)
+
 
 highlightTokensTests :: [TestTree]
 highlightTokensTests =

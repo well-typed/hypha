@@ -15,6 +15,7 @@ import qualified Data.Text as Text
 import Lucid
 
 import Hypha.Types.BuildPlan (PackageOrigin (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..))
 
 -- | Full sidebar: a client-side filter box above two collapsible
 -- groups — the project's own packages first, dependencies below.
@@ -103,20 +104,37 @@ originBadgeFull o =
                                               (toHtml (" \x2014 " <> u))
          _                                -> pure ()
 
--- | Right-aligned "view on Hackage" link for the package page header.
--- Only 'OriginHackage' packages get one — a local, source-repo, or
--- tarball package has no matching Hackage listing, so showing the
--- link there would send the user to a 404 (or worse, someone else's
--- same-named package).
-hackageLink :: Text -> Text -> PackageOrigin -> Html ()
-hackageLink pkg ver OriginHackage =
-  a_ [ class_ "hackage-link"
-     , href_ ("https://hackage.haskell.org/package/" <> pkg <> "-" <> ver)
-     , target_ "_blank"
-     , rel_ "noopener"
-     ]
-     "\x2197 Hackage"
-hackageLink _ _ _ = mempty
+-- | Right-aligned \"view on Hackage\" link for the package page header.
+--
+-- Hackage-sourced /and/ distribution packages both get one: @containers@,
+-- @base@ and every other library shipped with GHC is published on Hackage
+-- at the version the plan pins, so withholding the link there was simply
+-- wrong.  A boot library from an unreleased GHC can 404, which is rare and
+-- honest.
+--
+-- Local, source-repo and tarball packages still get nothing: for those the
+-- version does not identify a Hackage listing, and a link would send the
+-- user to a 404 or, worse, to someone else's same-named package.
+--
+-- The match is per-constructor rather than a catch-all, so a new origin
+-- fails to compile here instead of silently losing its link.
+hackageLink :: PackageName -> Version -> PackageOrigin -> Html ()
+hackageLink pkg ver origin = case origin of
+  OriginHackage         -> link
+  OriginDistribution    -> link
+  OriginSourceRepo{}    -> mempty
+  OriginLocal{}         -> mempty
+  OriginLocalTarball{}  -> mempty
+  OriginRemoteTarball{} -> mempty
+  where
+    link =
+      a_ [ class_ "hackage-link"
+         , href_ ("https://hackage.haskell.org/package/"
+                    <> unPackageName pkg <> "-" <> unVersion ver)
+         , target_ "_blank"
+         , rel_ "noopener"
+         ]
+         "\x2197 Hackage"
 
 originDetails :: Maybe Text -> Maybe Text -> Maybe FilePath -> Html ()
 originDetails url ref subdir =
