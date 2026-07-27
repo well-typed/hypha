@@ -5,5 +5,11 @@ allow-newer:
 
 with-compiler: ghc-9.6.7
 
+-- Pin ghc-lib-parser to this exact version of GHC — except 9.6.7.* does not
+-- export GHC.Utils.Error.emptyDiagOpts, which Hypha.Source.Parser needs, so
+-- pin 9.10.3 here. This is what hypha.cabal's `>= 9.10` bound encodes.
+constraints:
+  ghc-lib-parser ==9.10.3.*
+
 tests: True
 test-show-details: streaming
