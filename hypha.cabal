@@ -64,6 +64,7 @@ library
     Hypha.BuildEnv.Mock
     Hypha.BuildEnv.Compose
     Hypha.BuildEnv.Nix
+    Hypha.Encoding
     Hypha.Error
     Hypha.Exit
     Hypha.Output.Outcome
@@ -199,6 +200,7 @@ test-suite hypha-tests
   main-is:          Main.hs
   other-modules:
     Golden.Cli
+    Golden.Encoding
     Golden.Package
     Golden.Server
     Golden.Lookup
@@ -264,8 +266,8 @@ test-suite hypha-tests
     , vector
     , process
 
-  -- Make the freshly-built 'hypha' executable available on $PATH for
-  -- the end-to-end Golden.Cli tests.  Without this, an end-to-end
-  -- test would either see a stale system binary or have to dig
-  -- through dist-newstyle by itself.
-  build-tool-depends: hypha:hypha
+  -- Make the freshly-built executables available on $PATH for the
+  -- end-to-end Golden.Cli and Golden.Encoding tests.  Without this, an
+  -- end-to-end test would either see a stale system binary or have to
+  -- dig through dist-newstyle by itself.
+  build-tool-depends: hypha:hypha, hypha:hypha-mcp

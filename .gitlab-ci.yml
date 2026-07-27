@@ -20,13 +20,12 @@ variables:
   # Keep cabal's data dir inside the project so GitLab cache can reach it
   CABAL_DIR: "$CI_PROJECT_DIR/.cabal"
   # The slim Debian images leave LANG unset, which makes GHC's runtime pick the
-  # ASCII "C" locale for every Handle. Two things then break:
-  #   * happy(1) cannot decode ghc-lib-parser's compiler/GHC/Parser.y, which
-  #     contains U+2237 from GHC 9.12's `EpUniToken "::" "∷"` — the build dies
-  #     with `hGetContents: invalid argument (cannot decode byte sequence
-  #     starting from 226)`.
-  #   * hypha itself cannot encode non-ASCII Haddock text on stdout.
-  # Neither is a code bug, so pin a UTF-8 locale rather than debugging it again.
+  # ASCII "C" locale for every Handle. happy(1) then cannot decode
+  # ghc-lib-parser's compiler/GHC/Parser.y, which contains U+2237 from GHC
+  # 9.12's `EpUniToken "::" "∷"`, and the build dies with `hGetContents:
+  # invalid argument (cannot decode byte sequence starting from 226)`.
+  # That is a build-time problem only — hypha itself pins UTF-8 at startup
+  # (see Hypha.Encoding) — but pin the locale rather than debug it again.
   LANG: "C.UTF-8"
 
 # Shared template — each concrete job picks an image + project file

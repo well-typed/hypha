@@ -47,22 +47,23 @@ hypha symbol async/Control.Concurrent.Async/concurrently
 
 ## Troubleshooting
 
-**Set a UTF-8 locale.** hypha and its build both handle non-ASCII text, and GHC
-derives every `Handle`'s encoding from the locale. Under `C`/`POSIX` — the
-default in bare containers, where `LANG` is unset — you will hit one of:
+**Set a UTF-8 locale to *build* hypha.** GHC derives every `Handle`'s encoding
+from the locale, so under `C`/`POSIX` — the default in bare containers, where
+`LANG` is unset — `happy` cannot read `ghc-lib-parser`'s grammar:
 
 ```
 happy: compiler/GHC/Parser.y: hGetContents: invalid argument (cannot decode byte sequence starting from 226)
-hypha: <stdout>: commitBuffer: invalid argument (cannot encode character '\8212')
 ```
 
-The first is `happy` failing to read `ghc-lib-parser`'s grammar, which contains
-a `∷` (U+2237) in the GHC 9.12 series; the second is hypha failing to write an
-em-dash. Both are fixed by giving the process a UTF-8 locale:
+Byte 226 is the first byte of the `∷` (U+2237) in the GHC 9.12 series'
+`Parser.y`. Fix it by giving the build a UTF-8 locale:
 
 ```bash
 export LANG=C.UTF-8
 ```
+
+*Running* hypha needs no such thing: both binaries pin UTF-8 on their handles
+at startup, whatever the locale.
 
 ## 📖 Documentation
 
