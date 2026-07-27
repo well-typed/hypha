@@ -17,27 +17,34 @@ module Hypha.Source.Parser
   ( Decl (..)
   , DeclKind (..)
   , ParseError (..)
+  , parseErrorMessage
   , parseDecls
+  , parseDeclsWith
   , parseDeclsIO
   , parseModuleDoc
+  , parseModuleDocWith
+  , parseModuleWith
+  , parseModuleDocIO
   , findDecl
   , declSigText
+  , renderRdrName
   ) where
 
 import Data.Maybe (listToMaybe)
 import Data.Text qualified as Text
 import Data.Text (Text)
-import GHC.Data.EnumSet qualified as EnumSet
 import GHC.Data.FastString (mkFastString)
 import GHC.Data.StringBuffer qualified as SB
 import GHC.Hs
-import GHC.LanguageExtensions qualified as LangExt
 import GHC.Parser.Lexer qualified as L
 import GHC.Parser qualified as P
 import GHC.Types.Name.Occurrence qualified as Occ
 import GHC.Types.Name.Reader (RdrName, rdrNameOcc)
+import GHC.Data.Bag qualified as Bag
+import GHC.Types.Error (errMsgSpan, getMessages)
 import GHC.Types.SrcLoc
-import GHC.Utils.Error (emptyDiagOpts)
+
+import Hypha.Source.Extensions qualified as Extensions
 import Language.Preprocessor.Cpphs qualified as Cpphs
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -86,8 +93,26 @@ data DeclKind
   deriving stock (Show, Eq)
 
 -- | Carrier for any parser failure surfaced from @ghc-lib-parser@.
-newtype ParseError = ParseError { parseErrorMessage :: Text }
+--
+-- The message is GHC's own rendered diagnostic.  It used to be the
+-- literal string @\"parse error\"@, which is what the server's module
+-- page showed the user — a report that named neither the problem nor its
+-- location.  'peUnknownExtensions' and 'peDiagnostics' carry the pragma
+-- names GHC's flag table rejected and its complaints about the pragma
+-- block: both are plausible causes of the failure, so neither is
+-- dropped.
+data ParseError = ParseError
+  { peMessage           :: !Text
+  , peLine              :: !(Maybe Int)
+  , peUnknownExtensions :: ![Extensions.UnknownExtension]
+  , peDiagnostics       :: ![Text]
+  }
   deriving stock (Show, Eq)
+
+-- | The rendered diagnostic.  Kept as a function so existing callers
+-- that only want something printable need not know the record.
+parseErrorMessage :: ParseError -> Text
+parseErrorMessage = peMessage
 
 -- | Parse @source@ as a Haskell module and return its top-level
 -- declarations.  @path@ is used only as the source-span file name.
@@ -100,14 +125,22 @@ newtype ParseError = ParseError { parseErrorMessage :: Text }
 -- the @IO@ is artefactual.  We pin the purity at the boundary with
 -- 'unsafePerformIO' rather than push @IO@ through every caller.
 parseDecls :: FilePath -> Text -> Either ParseError [Decl]
-parseDecls path source = unsafePerformIO (parseDeclsIO path source)
-{-# NOINLINE parseDecls #-}
+parseDecls = parseDeclsWith Extensions.defaultLanguageSettings
+
+-- | 'parseDecls' with the component's cabal-declared language settings,
+-- for callers that know which component the module belongs to.
+parseDeclsWith
+  :: Extensions.LanguageSettings -> FilePath -> Text -> Either ParseError [Decl]
+parseDeclsWith ls path source = unsafePerformIO (parseDeclsIO ls path source)
+{-# NOINLINE parseDeclsWith #-}
 
 -- | 'IO' variant of 'parseDecls' for callers that already live in
 -- 'IO' and would prefer not to thread an 'unsafePerformIO' through
 -- their stack.
-parseDeclsIO :: FilePath -> Text -> IO (Either ParseError [Decl])
-parseDeclsIO path source = fmap (fmap snd) (parseModuleDocIO path source)
+parseDeclsIO
+  :: Extensions.LanguageSettings -> FilePath -> Text -> IO (Either ParseError [Decl])
+parseDeclsIO ls path source =
+  fmap (fmap (\(_, _, ds) -> ds)) (parseModuleIO ls path source)
 
 -- | Parse a module and return its Haddock header (the @-- |@ block
 -- above the @module@ keyword, if any) alongside its top-level
@@ -115,28 +148,73 @@ parseDeclsIO path source = fmap (fmap snd) (parseModuleDocIO path source)
 -- the parse tree, so this is the single authoritative doc source — no
 -- line scanning anywhere.
 parseModuleDoc :: FilePath -> Text -> Either ParseError (Maybe Text, [Decl])
-parseModuleDoc path source = unsafePerformIO (parseModuleDocIO path source)
-{-# NOINLINE parseModuleDoc #-}
+parseModuleDoc = parseModuleDocWith Extensions.defaultLanguageSettings
 
-parseModuleDocIO :: FilePath -> Text -> IO (Either ParseError (Maybe Text, [Decl]))
-parseModuleDocIO path source = do
+-- | 'parseModuleDoc' under a component's language settings.
+parseModuleDocWith
+  :: Extensions.LanguageSettings -> FilePath -> Text
+  -> Either ParseError (Maybe Text, [Decl])
+parseModuleDocWith ls path source =
+  fmap (\(_, hdr, ds) -> (hdr, ds)) (parseModuleWith ls path source)
+
+-- | Parse a module and hand back the whole parse tree alongside the
+-- header doc and declarations.  "Hypha.Source.Interface" needs the tree
+-- itself (module name, export list, imports); everything else takes the
+-- narrower views above.
+parseModuleWith
+  :: Extensions.LanguageSettings -> FilePath -> Text
+  -> Either ParseError (HsModule GhcPs, Maybe Text, [Decl])
+parseModuleWith ls path source = unsafePerformIO (parseModuleIO ls path source)
+{-# NOINLINE parseModuleWith #-}
+
+-- | Backwards-compatible 'IO' entry point for the doc views.
+parseModuleDocIO
+  :: Extensions.LanguageSettings -> FilePath -> Text
+  -> IO (Either ParseError (Maybe Text, [Decl]))
+parseModuleDocIO ls path source =
+  fmap (fmap (\(_, hdr, ds) -> (hdr, ds))) (parseModuleIO ls path source)
+
+parseModuleIO
+  :: Extensions.LanguageSettings -> FilePath -> Text
+  -> IO (Either ParseError (HsModule GhcPs, Maybe Text, [Decl]))
+parseModuleIO ls path source = do
   preprocessed <- if needsCpp source
     then Text.pack <$> Cpphs.runCpphs cpphsOpts path (Text.unpack source)
     else pure source
-  let buf  = SB.stringToStringBuffer (Text.unpack preprocessed)
+  -- The module states its own requirements; read them rather than
+  -- guessing at a whitelist (see "Hypha.Source.Extensions").  Pragmas
+  -- are read from the *preprocessed* text so a pragma inside a live
+  -- @#if@ branch counts.
+  scan <- Extensions.scanPragmas path preprocessed
+  let (exts, unknown) =
+        Extensions.resolveExtensions ls (Extensions.psExtensionNames scan)
+      buf  = SB.stringToStringBuffer (Text.unpack preprocessed)
       loc  = mkRealSrcLoc (mkFastString path) 1 1
-      opts = L.mkParserOpts
-               enabledExtensions
-               emptyDiagOpts
-               []      -- supported langexts (only used for error messages)
-               False   -- safeImports
-               True    -- isHaddock — attach doc comments to the parse tree
-               False   -- keep raw token stream
-               True    -- honour @{-# LINE #-}@ pragmas
-      st   = L.initParserState opts buf loc
+      st   = L.initParserState (Extensions.parserOptsFor exts) buf loc
   pure $ case L.unP P.parseModule st of
-    L.POk _ (L _ hsMod) -> Right (moduleHeaderDoc hsMod, declsFromModule hsMod)
-    L.PFailed _         -> Left (ParseError "parse error")
+    L.POk _ (L _ hsMod) ->
+      Right (hsMod, moduleHeaderDoc hsMod, declsFromModule hsMod)
+    L.PFailed st' -> Left (parseFailure unknown (Extensions.psDiagnostics scan) st')
+
+-- | Turn a failed parser state into our typed error, keeping GHC's own
+-- diagnostic and the line it points at.
+parseFailure
+  :: [Extensions.UnknownExtension] -> [Text] -> L.PState -> ParseError
+parseFailure unknown diags st =
+  let msgs   = L.getPsErrorMessages st
+      firstD = listToMaybe (Bag.bagToList (getMessages msgs))
+  in ParseError
+       { peMessage = case Extensions.renderDiagnostics msgs of
+           (m : _) -> m
+           []      -> "parse error"
+       , peLine = do
+           d <- firstD
+           case errMsgSpan d of
+             RealSrcSpan s _ -> Just (srcSpanStartLine s)
+             _               -> Nothing
+       , peUnknownExtensions = unknown
+       , peDiagnostics       = diags
+       }
 
 -- | The module-level Haddock header, as rendered by GHC.
 moduleHeaderDoc :: HsModule GhcPs -> Maybe Text
@@ -206,33 +284,6 @@ declSigText source d = do
 
 -- Internals --------------------------------------------------------
 
--- | A generous bouquet of language extensions so we accept the long
--- tail of real-world Haskell without first parsing each file's
--- @LANGUAGE@ pragmas.  Most extensions only enable /semantics/ the
--- parser already accepts; the ones below are the ones with a real
--- /syntactic/ impact.
-enabledExtensions :: EnumSet.EnumSet LangExt.Extension
-enabledExtensions = EnumSet.fromList
-  [ LangExt.BangPatterns
-  , LangExt.DataKinds
-  , LangExt.ExistentialQuantification
-  , LangExt.FlexibleContexts
-  , LangExt.FlexibleInstances
-  , LangExt.GADTs
-  , LangExt.KindSignatures
-  , LangExt.LambdaCase
-  , LangExt.MultiParamTypeClasses
-  , LangExt.PatternSynonyms
-  , LangExt.PolyKinds
-  , LangExt.RankNTypes
-  , LangExt.RecordWildCards
-  , LangExt.ScopedTypeVariables
-  , LangExt.StandaloneDeriving
-  , LangExt.TupleSections
-  , LangExt.TypeApplications
-  , LangExt.TypeFamilies
-  , LangExt.TypeOperators
-  ]
 
 declsFromModule :: HsModule GhcPs -> [Decl]
 declsFromModule m =
@@ -372,3 +423,9 @@ locLines ld = case locA (getLoc ld) of
 
 rdrText :: RdrName -> Text
 rdrText = Text.pack . Occ.occNameString . rdrNameOcc
+
+-- | Public alias for 'rdrText'.  "Hypha.Source.Interface" renders export
+-- and import list entries and must spell names exactly as the decls do,
+-- so it borrows this rather than growing a second implementation.
+renderRdrName :: RdrName -> Text
+renderRdrName = rdrText
