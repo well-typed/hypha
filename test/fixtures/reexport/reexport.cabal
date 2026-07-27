@@ -1,0 +1,15 @@
+cabal-version: 2.4
+name:          reexport
+version:       0.1.0
+synopsis:      Fixture component for hypha's index and re-export tests
+
+library
+  hs-source-dirs:     src
+  exposed-modules:    Fixture.Wrapper
+                    , Fixture.Strict
+                    , Fixture.Other
+                    , Fixture.Internal
+  other-modules:      Fixture.StrictInternal
+                    , Fixture.Declared
+  default-language:   GHC2021
+  build-depends:      base
