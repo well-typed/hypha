@@ -81,13 +81,20 @@ below follows from those three.
    (`sortByPrefix`) compares a *dotted* module prefix against *slashed*
    file paths, so it stops discriminating after the first path segment.
 
-8. **Snippet text and line number can come from different files.**
-   For `Data.Map.Internal/balanceL` the reported line 1746 is
-   `balanceL x l r = case r of` in `Data/Set/Internal.hs` (the swept
-   file), while the rendered snippet is line 1746 of
-   `Data/Map/Internal.hs` — a Haddock comment. `SourceLocation` already
-   carries `slPath`; the snippet path is resolved a second time
-   independently, so the two can disagree.
+8. **The symbol card labels a definition with a path-derived module
+   name, and detects "not defined here" by an empty signature.**
+   `Command/Server.hs:258-266`: when the module the user asked for
+   yields no signature, the card re-extracts from
+   `locateSymbolDefinitionInDir`'s file and relabels the card with
+   `modulePathFromFile parentDir …` — item 3's path-derived naming, now
+   on the user-visible label. And the trigger is
+   `Extract.siSignature info0 == Nothing`, which conflates "this module
+   re-exports the symbol", "the symbol has no type signature" and "the
+   module failed to parse" into one branch.
+
+   (`hypha source` itself is sound here: `Command/Source.hs:98` reads
+   the snippet from `slPath`, so text and line always agree. Its only
+   defect is item 7's wrong file.)
 
 9. **Stale rows are never invalidated.** Every bug above has been
    writing rows into `~/.cache/hypha/hypha.db` for weeks, and nothing
@@ -266,7 +273,7 @@ to parse, per package, and `hypha doctor` reports the total. Baseline
 before, measurement after. §7 is designed below and implemented only if
 that number is non-zero.
 
-## §2 Locate layer — no silent sweeps, no mismatched pairs
+## §2 Locate layer — no silent sweeps, no invented labels
 
 ### 2.1 Distinguish failure from absence
 
@@ -303,13 +310,35 @@ hand-rolled `sortBy`; sibling preference is computed on `ModulePath`
 segments (`Data.Map.Internal` vs `Data.Set.Internal` share one segment,
 not four characters).
 
-### 2.3 One location, one file
+### 2.3 The symbol card reports what it resolved
 
-`Command/Source` and the server's symbol card take the snippet from
-`slPath` of the `SourceLocation` they were handed. The second,
-independent file resolution is removed, so a line number can no longer
-be paired with a different file's text — the mismatch becomes
-unrepresentable rather than merely fixed.
+The card stops deriving a module label from a file path and stops using
+"no signature" as a proxy for "defined elsewhere". Both come from the
+`LocatedDefinition` it already has:
+
+```haskell
+data SymbolCardData = SymbolCardData
+  { scdSignature  :: !(Maybe Signature)   -- ^ was: "" for absent
+  , scdHaddock    :: !(Maybe DocText)     -- ^ was: "" for absent
+  , scdModule     :: !ModulePath          -- ^ definition site, from §3.2
+  , scdRequested  :: !ModulePath          -- ^ what the URL asked for
+  , scdProvenance :: !Provenance
+  , scdLine       :: !(Maybe SrcLine)
+  , scdKind       :: !(Maybe DeclKind)
+  }
+```
+
+`scdModule` is a resolved `ModulePath`, never `modulePathFromFile`;
+`modulePathFromFile` loses its last caller and is deleted. Keeping
+`scdRequested` alongside it is what lets the card say "re-exported by
+`Data.Map.Strict`, defined in `Data.Map.Strict.Internal`" instead of
+silently swapping one for the other. The empty-string sentinels become
+`Maybe`, so "no signature in the source" and "we could not read the
+source" stop sharing a representation.
+
+`Command/Source` needs no change here: it already slices from
+`slPath`, so its text and line always agree. §2.2 is what fixes the
+file it slices from.
 
 ## §3 Index layer — module identity and definition sites
 
