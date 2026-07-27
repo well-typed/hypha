@@ -26,6 +26,10 @@ import Distribution.PackageDescription qualified as PD
 import Distribution.Pretty (pretty)
 import Distribution.Types.UnqualComponentName qualified as UC
 import Distribution.Utils.Path qualified as UP
+import Language.Haskell.Extension qualified as Cabal
+import GHC.Driver.Session qualified as GHCLang
+import Hypha.Source.Extensions
+  ( LanguageSettings (..), UnknownExtension, extensionFromFlagName )
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>), takeExtension)
 import Text.PrettyPrint (render)
@@ -48,6 +52,21 @@ data ComponentInfo = ComponentInfo
     -- stanza omits @hs-source-dirs@ (cabal default).
   , ciExposedModules :: ![Text]
     -- ^ The textual rendition of modules exposed by this library
+  , ciOtherModules :: ![Text]
+    -- ^ @other-modules@: present in the component, absent from its
+    -- public surface.  The indexer needs them (their symbols are still
+    -- searchable and still define re-exports) and search ranks them
+    -- below the exposed ones.
+  , ciLanguageSettings :: !LanguageSettings
+    -- ^ @default-language@ + @default-extensions@, resolved to the form
+    -- "Hypha.Source.Parser" wants.  Without these, a module that relies
+    -- on a stanza-wide extension parses differently for us than for the
+    -- compiler.
+  , ciUnknownExtensions :: ![UnknownExtension]
+    -- ^ @default-extensions@ entries GHC's flag table did not recognise.
+    -- Carried rather than dropped: an unrecognised extension is a
+    -- plausible cause of a downstream parse failure, and the indexer
+    -- reports these alongside the failures they might explain.
   }
   deriving stock (Show, Eq)
 
@@ -99,11 +118,62 @@ parseLibComponents cabalPath pkgRoot = do
           dirs = if null raw
                    then [pkgRoot]
                    else map (pkgRoot </>) raw
+          (on, off, unknown) = splitExtensions (PD.defaultExtensions bi)
       in ComponentInfo {
            ciKind         = kind
          , ciHsSourceDirs = dirs
-         , ciExposedModules = map (T.pack . render . pretty) $ PD.exposedModules lib
+         , ciExposedModules = map renderModule (PD.exposedModules lib)
+         , ciOtherModules   = map renderModule (PD.otherModules bi)
+         , ciLanguageSettings = LanguageSettings
+             { lsLanguage   = ghcLanguageOf =<< PD.defaultLanguage bi
+             , lsDefaultOn  = on
+             , lsDefaultOff = off
+             }
+         , ciUnknownExtensions = unknown
          }
+
+    renderModule = T.pack . render . pretty
+
+    -- cabal models an extension as (name, enabled), and the name it
+    -- carries can itself be negated (@NoImplicitPrelude@), so the two
+    -- polarities compose by XNOR rather than conjunction: cabal's
+    -- @DisableExtension ImplicitPrelude@ and an @EnableExtension
+    -- (UnknownExtension \"NoImplicitPrelude\")@ must reach the same answer.
+    splitExtensions exts =
+      let resolved =
+            [ (x, cabalOn == flagOn)
+            | e <- exts
+            , let (nm, cabalOn) = cabalExtensionName e
+            , Right pairs <- [extensionFromFlagName nm]
+            , (x, flagOn) <- pairs
+            ]
+          unknown =
+            [ u
+            | e <- exts
+            , let (nm, _) = cabalExtensionName e
+            , Left u <- [extensionFromFlagName nm]
+            ]
+      in ( [ x | (x, True)  <- resolved ]
+         , [ x | (x, False) <- resolved ]
+         , unknown
+         )
+
+    cabalExtensionName e = case e of
+      Cabal.EnableExtension  k  -> (T.pack (show k), True)
+      Cabal.DisableExtension k  -> (T.pack (show k), False)
+      Cabal.UnknownExtension nm -> (T.pack nm, True)
+
+-- | Translate cabal's @default-language@ into the parser's language
+-- selector.  Cabal admits @UnknownLanguage@ for forward compatibility;
+-- an unrecognised value means \"no opinion\", which leaves the GHC2021
+-- floor in charge rather than inventing a language.
+ghcLanguageOf :: Cabal.Language -> Maybe GHCLang.Language
+ghcLanguageOf lang = case lang of
+  Cabal.Haskell98         -> Just GHCLang.Haskell98
+  Cabal.Haskell2010       -> Just GHCLang.Haskell2010
+  Cabal.GHC2021           -> Just GHCLang.GHC2021
+  Cabal.GHC2024           -> Just GHCLang.GHC2024
+  Cabal.UnknownLanguage _ -> Nothing
 
 -- | Get /ALL/ the exposed modules from a package source directory. This returns
 -- the list of all the modules for all the stanzas.

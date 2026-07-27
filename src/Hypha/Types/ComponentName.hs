@@ -16,6 +16,9 @@ module Hypha.Types.ComponentName
   ( ComponentName (..)
   , parseComponentName
   , renderComponentName
+  , ComponentKey (..)
+  , componentKeyOf
+  , parseComponentKey
   ) where
 
 import Data.Text (Text)
@@ -63,3 +66,38 @@ renderComponentName :: ComponentName -> Text
 renderComponentName (ComponentName (PackageName p) MainLib)    = p
 renderComponentName (ComponentName (PackageName p) (SubLib s)) = p <> ":" <> s
 renderComponentName (ComponentName (PackageName p) (Exe    s)) = p <> ":exe:" <> s
+
+-- | The rendered component reference, as it appears in the @pkg@ column
+-- of the search cache and in @\/pkg\/…@ URLs.
+--
+-- A newtype because the encoding matters: @containers@,
+-- @hypha:hypha-internal@ and @hypha:exe:hypha-mcp@ are three shapes of
+-- one thing, and code that takes a bare 'Text' here cannot say whether
+-- it holds a key, a package name, or a module path.
+newtype ComponentKey = ComponentKey { unComponentKey :: Text }
+  deriving stock (Show, Eq, Ord)
+
+-- | Build the key for a package's component.
+componentKeyOf :: PackageName -> ComponentKind -> ComponentKey
+componentKeyOf pkg kind = ComponentKey (renderComponentName (ComponentName pkg kind))
+
+-- | Strict inverse of 'componentKeyOf'.
+--
+-- Distinct from 'parseComponentName', which is deliberately lenient
+-- because it reads user-supplied URLs and must always produce something.
+-- This one validates: an empty segment or a segment count the encoding
+-- cannot produce yields 'Nothing' rather than a component reference
+-- nobody meant.
+--
+-- Note a sub-library may legitimately be called @exe@: two segments are
+-- always a sub-library, and only a three-segment key with @exe@ in the
+-- middle is an executable, so @pkg:exe@ and @pkg:exe:name@ stay
+-- distinguishable.
+parseComponentKey :: Text -> Maybe (Text, ComponentKind)
+parseComponentKey raw = case Text.splitOn ":" raw of
+  [pkg]              | nonEmpty [pkg]       -> Just (pkg, MainLib)
+  [pkg, sub]         | nonEmpty [pkg, sub]  -> Just (pkg, SubLib sub)
+  [pkg, "exe", name] | nonEmpty [pkg, name] -> Just (pkg, Exe name)
+  _                                         -> Nothing
+  where
+    nonEmpty = all (not . Text.null)

@@ -4,6 +4,7 @@ module Hypha.Types.SymbolPath
   ( SymbolPath (..)
   , ModulePath (..)
   , SymbolName (..)
+  , Signature (..)
   , ParseError (..)
   , parseSymbolPath
   , renderSymbolPath
@@ -20,6 +21,15 @@ newtype ModulePath = ModulePath { unModulePath :: Text }
 
 newtype SymbolName = SymbolName { unSymbolName :: Text }
   deriving stock (Show, Eq, Ord)
+
+-- | A rendered Haskell type signature (@insertWith :: Ord k => …@).
+--
+-- The search index stores these and the UI renders them; between those
+-- two points nothing should be able to mistake one for a module path or
+-- a symbol name, which is what a bare 'Text' invited.
+newtype Signature = Signature { unSignature :: Text }
+  deriving stock (Show, Eq, Ord)
+
 
 data SymbolPath = SymbolPath
   { spPackage :: !PackageName
