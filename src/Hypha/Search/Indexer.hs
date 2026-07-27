@@ -24,7 +24,6 @@ module Hypha.Search.Indexer
   , componentModules
   , enumModulesIn
   , chooseSourceRoots
-  , indexedRowOf
   ) where
 
 import Data.IORef qualified as IORef
@@ -107,13 +106,13 @@ hydrateFromCache plan cache pids ref = go [] pids
           hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
           if and hits
             then do
-              mapM_ (loadKey verT) keys
+              mapM_ (loadKey pid verT) keys
               go missing rest
             else go (pid : missing) rest
 
-    loadKey verT k = do
+    loadKey pid verT k = do
       rows <- Cache.readCachedIndex cache k verT
-      let indexed = map indexedRowOf rows
+      let indexed = scorerRows (pkgName pid) (pkgVersion pid) rows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
@@ -173,7 +172,7 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
       sources <- componentModules plan pid kind srcDirs
       let ci       = indexComponentPure compKey langs sources
           flatRows = ciRows ci
-          indexed  = map indexedRowOf flatRows
+          indexed  = scorerRows (pkgName pid) (pkgVersion pid) flatRows
       reportComponentIndex compKey ci
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
@@ -181,14 +180,6 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
         (unComponentKey compKey) verT flatRows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
-
--- | An 'IndexRow' as the in-memory scorer wants it.
-indexedRowOf :: IndexRow -> Fuzzy.IndexedRow
-indexedRowOf r = Fuzzy.mkIndexedRow
-  (unComponentKey (rowComponent r))
-  (unModulePath   (rowModule r))
-  (unSymbolName   (rowName r))
-  (unSignature    (rowSignature r))
 
 -- | Pick the source roots to scan for a package.  If any of the common
 -- @hs-source-dirs@ subdirectories exist we walk those exclusively;
@@ -412,3 +403,13 @@ languageSettingsFor plan pid kind =
   case componentInfoFor plan pid kind of
     Just ci -> Comp.ciLanguageSettings ci
     Nothing -> Extensions.defaultLanguageSettings
+
+-- | Everything a package's rows contribute to the in-memory scorer: one
+-- row per symbol, plus the package and module rows they imply.
+--
+-- Both the build path and the hydrate-from-cache path go through here, so
+-- a warm cache and a fresh index cannot disagree about which entities are
+-- searchable.
+scorerRows :: PackageName -> Version -> [IndexRow] -> [Fuzzy.IndexedRow]
+scorerRows pkg ver rows =
+  Fuzzy.entityRows pkg ver rows ++ map Fuzzy.mkSymbolRow rows

@@ -28,10 +28,8 @@ import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Control.Monad.Trans.Maybe (MaybeT (..), hoistMaybe, runMaybeT)
 import Data.ByteString.Lazy qualified as LBS
 import Data.IORef qualified as IORef
-import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe
-import Data.Ord (Down (..))
 import Data.String qualified as String
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TIO
@@ -43,6 +41,7 @@ import Hypha.Haddock.Generate (ensureHaddockFor)
 import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
+import Hypha.Search.Collapse qualified as Collapse
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Search.PackageCache qualified as Cache
 import Hypha.Server.App qualified as App
@@ -223,13 +222,10 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
           then pure []
           else do
             idx <- IORef.readIORef indexRef
-            let scored =
-                  [ (s, Fuzzy.displayRow row)
-                  | row <- idx
-                  , Just s <- [Fuzzy.scoreRow tokens row]
-                  ]
-                ranked = map snd (sortOn (Down . fst) scored)
-            pure (take 50 ranked)
+            -- Collapse before truncating: taking the top 50 rows first
+            -- would spend the budget on several presentations of the same
+            -- definition and drop distinct symbols to make room.
+            pure (take 50 (Collapse.collapseRows (Collapse.rankRows tokens idx)))
     , App.scSymbolLookup = \pkgT modT symT -> do
         mDirs <- resolveComponentDirs plan resolver pkgT
         case mDirs of

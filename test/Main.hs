@@ -17,6 +17,7 @@ import qualified Property.LookupOutcomeShape
 import qualified Property.HackageCache
 import qualified Property.HaddockRewrite
 import qualified Property.OutputJson
+import qualified Property.SearchRanking
 import qualified Property.SymbolPath
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
@@ -41,6 +42,7 @@ import qualified Unit.InternalError
 import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
 import qualified Unit.SourceExtensions
+import qualified Unit.SearchCollapse
 import qualified Unit.SearchIndexBuild
 import qualified Unit.SearchIndexCache
 import qualified Unit.SearchReexport
@@ -73,6 +75,7 @@ allTests = testGroup "hypha"
   , Property.LookupCascade.tests
   , Property.LookupOutcomeShape.tests
   , Property.HaddockRewrite.tests
+  , Property.SearchRanking.tests
   , Property.SymbolPath.tests
   , Property.HackageCache.tests
   , Property.OutputJson.tests
@@ -99,6 +102,7 @@ allTests = testGroup "hypha"
   , Unit.LookupPrepLocal.tests
   , Unit.RepoCache.tests
   , Unit.SourceExtensions.tests
+  , Unit.SearchCollapse.tests
   , Unit.SearchIndexBuild.tests
   , Unit.SearchIndexCache.tests
   , Unit.SearchReexport.tests

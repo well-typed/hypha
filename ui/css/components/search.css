@@ -108,6 +108,23 @@
   margin-bottom: 0.15rem;
 }
 .results li .name         { font-family: var(--mono); font-weight: 600; }
+/* Collapse never hides a presentation: the count links the definition
+   site, so an .Internal module folded into its wrapper stays one click
+   away. */
+.results li .alt-count {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.35rem;
+  margin-left: 0.4rem;
+  text-decoration: none;
+}
+.results li .alt-count:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .results li .sig          {
   color: var(--muted);
   font-family: var(--mono);

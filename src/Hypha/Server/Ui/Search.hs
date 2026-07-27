@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.Ui.Search
   ( searchInput
@@ -13,6 +14,12 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Lucid
 import Lucid.Base (makeAttributes)
+
+import Hypha.Search.Collapse
+  ( SearchResult (..), SymbolResult (..), definitionHref, resultHref )
+import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 
 -- | Search input + empty results container. HTMX swaps content into
 -- @#results@ as the user types.
@@ -60,22 +67,53 @@ searchInput = do
     ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | Render search results as an unordered list.
--- Each row carries (package, module path, symbol name, signature);
--- the query tokens drive @\<mark\>@ highlighting on the symbol name.
--- An empty hit list still produces a visible "No matches." row — use
--- 'emptyResults' for the truly-empty case (no query in flight).
-resultsFragment :: [Text] -> [(Text, Text, Text, Text)] -> Html ()
-resultsFragment tokens rows = ul_ [class_ "results", id_ "results"] $
-  if null rows
+--
+-- The three result kinds render differently because they /are/ different:
+-- a package row shows its pinned version, a module row its component, and
+-- a symbol row its signature plus, when other presentations of the same
+-- definition were folded in, a @+N@ affordance linking the definition
+-- site.  An empty hit list still produces a visible \"No matches.\" row —
+-- use 'emptyResults' for the truly-empty case (no query in flight).
+resultsFragment :: [Text] -> [SearchResult] -> Html ()
+resultsFragment tokens results = ul_ [class_ "results", id_ "results"] $
+  if null results
     then li_ [class_ "empty"] "No matches."
-    else mapM_ row rows
+    else mapM_ entry results
   where
-    row :: (Text, Text, Text, Text) -> Html ()
-    row (pkg, modPath, name, sig) = li_ $ do
-      a_ [href_ ("/pkg/" <> pkg <> "/" <> modPath <> "/" <> name)] $ do
-        span_ [class_ "name"]   (highlightTokens tokens name)
-        span_ [class_ "sig"]    (toHtml sig)
-        span_ [class_ "pkgmod"] (toHtml (pkg <> " \183 " <> modPath))
+    entry :: SearchResult -> Html ()
+    entry r = li_ $ do
+      a_ [href_ (resultHref r)] (body r)
+      case r of
+        ResultSymbol s | srAlternates s > 0 -> alternates s
+        _                                   -> mempty
+
+    body :: SearchResult -> Html ()
+    body = \case
+      ResultPackage pkg ver -> do
+        span_ [class_ "name"] (highlightTokens tokens (unPackageName pkg))
+        span_ [class_ "sig"]  (toHtml ("package" :: Text))
+        span_ [class_ "pkgmod"] (toHtml (unVersion ver))
+      ResultModule comp modPath _ -> do
+        span_ [class_ "name"] (highlightTokens tokens (unModulePath modPath))
+        span_ [class_ "sig"]  (toHtml ("module" :: Text))
+        span_ [class_ "pkgmod"] (toHtml (unComponentKey comp))
+      ResultSymbol s -> do
+        span_ [class_ "name"] (highlightTokens tokens (unSymbolName (srName s)))
+        span_ [class_ "sig"]  (toHtml (unSignature (srSignature s)))
+        span_ [class_ "pkgmod"]
+          (toHtml (unComponentKey (srComponent s) <> " \183 "
+                     <> unModulePath (srModule s)))
+
+    -- Nothing is hidden by collapse: the count links the definition site.
+    alternates :: SymbolResult -> Html ()
+    alternates s =
+      a_ [ class_ "alt-count"
+         , href_ (definitionHref s)
+         , title_ ("also exposed by " <> Text.pack (show (srAlternates s))
+                     <> " other module(s); defined in "
+                     <> unModulePath (srDefModule s))
+         ]
+         (toHtml ("+" <> Text.pack (show (srAlternates s))))
 
 -- | Wrap the first case-insensitive occurrence of every token in
 -- @\<mark\>@.  Matches are claimed left-to-right and never overlap or

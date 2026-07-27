@@ -15,6 +15,9 @@ import Lucid (renderText)
 
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
+import Hypha.Search.Collapse (SearchResult (..), SymbolResult (..))
+import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
 import Hypha.Server.Ui.Search (highlightTokens)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
@@ -78,8 +81,22 @@ scopeSearchRowsTests =
       scopeSearchRows (Just "nope") rows @?= []
   ]
   where
-    aesonRow      = ("aeson", "Data.Aeson", "encode", "Value -> ByteString")
-    containersRow = ("containers", "Data.Map", "lookup", "k -> Map k v -> Maybe v")
+    aesonRow = ResultSymbol SymbolResult
+      { srComponent  = ComponentKey "aeson"
+      , srModule     = ModulePath "Data.Aeson"
+      , srName       = SymbolName "encode"
+      , srSignature  = Signature "Value -> ByteString"
+      , srDefModule  = ModulePath "Data.Aeson.Encoding"
+      , srAlternates = 0
+      }
+    containersRow = ResultSymbol SymbolResult
+      { srComponent  = ComponentKey "containers"
+      , srModule     = ModulePath "Data.Map"
+      , srName       = SymbolName "lookup"
+      , srSignature  = Signature "k -> Map k v -> Maybe v"
+      , srDefModule  = ModulePath "Data.Map.Internal"
+      , srAlternates = 0
+      }
     rows = [aesonRow, containersRow]
 
 splitByOriginTests :: [TestTree]

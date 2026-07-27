@@ -26,6 +26,7 @@ import qualified Hypha.Server.Ui.Search  as UISearch
 import qualified Hypha.Server.Ui.Doc     as UIDoc
 import qualified Hypha.Server.Ui.Source  as UISrc
 import qualified Hypha.Server.Ui.Tree    as UITree
+import qualified Hypha.Search.Collapse   as Collapse
 import qualified Hypha.Search.Fuzzy      as Fuzzy
 import           Hypha.Server.Api       (HyphaApi, api)
 import           Hypha.Server.ModuleDoc (ModuleDocView, SymbolCardData (..))
@@ -49,8 +50,8 @@ data ServerConfig = ServerConfig
       -- ^ @(indexed, total)@ snapshot of the background indexer.  Drives
       -- the topbar progress bar.  Both are @0@ when nothing needed
       -- building (warm cache hit on every package).
-  , scHumanSearch  :: !(Text -> IO [(Text, Text, Text, Text)])
-      -- ^ Given a query string, return (package, module, name, signature)
+  , scHumanSearch  :: !(Text -> IO [Collapse.SearchResult])
+      -- ^ Given a query string, return the ranked, collapsed results.
   , scSymbolLookup :: !(Text -> Text -> Text -> IO (Maybe SymbolCardData))
       -- ^ pkg → mod → sym → everything the symbol card renders.
   , scHaddockFile  :: !(Text -> [Text] -> IO (Maybe (FilePath, BL.ByteString)))
@@ -256,10 +257,11 @@ mimeFor fp = case Text.toLower ext of
 -- (sent once the scope chip has just been cleared, since the hidden
 -- input's now-empty value is still included in the htmx request) mean
 -- "no scope" — every row passes through unfiltered.
-scopeSearchRows :: Maybe String -> [(Text, Text, Text, Text)] -> [(Text, Text, Text, Text)]
+scopeSearchRows :: Maybe String -> [Collapse.SearchResult] -> [Collapse.SearchResult]
 scopeSearchRows mp rows = case mp of
-  Just p | not (null p) -> filter (\(pkg, _, _, _) -> pkg == Text.pack p) rows
-  _                      -> rows
+  Just p | not (null p) ->
+    filter ((== Text.pack p) . Collapse.resultComponent) rows
+  _ -> rows
 
 -- | Source code view with skylighting-rendered Haskell + optional
 -- @?line=N@ scroll target.
