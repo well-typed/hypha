@@ -12,6 +12,7 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import Hypha.Search.PackageCache
   ( CacheOrigin (..), haveCachedIndex, openPackageCacheAt, readCachedIndex
   , writeCachedIndex )
+import Util.Row (row)
 
 tests :: TestTree
 tests = testGroup "Unit.PackageCache"
@@ -22,8 +23,8 @@ tests = testGroup "Unit.PackageCache"
         c <- openPackageCacheAt globalDb (Just projectDb)
         let pkg = "aeson"
             ver = "2.2.3.0"
-            globalRow  = [(pkg, "Data.Aeson",  "fromJSON", "STORE")]
-            projectRow = [(pkg, "Data.Aeson",  "toJSON",   "FORK")]
+            globalRow  = [row pkg "Data.Aeson" "fromJSON" "STORE"]
+            projectRow = [row pkg "Data.Aeson" "toJSON"   "FORK"]
         writeCachedIndex c OriginGlobal  pkg ver globalRow
         writeCachedIndex c OriginProject pkg ver projectRow
         rows <- readCachedIndex c pkg ver
@@ -36,7 +37,7 @@ tests = testGroup "Unit.PackageCache"
         c <- openPackageCacheAt globalDb (Just projectDb)
         let pkg = "containers"
             ver = "0.6.7"
-            globalRow = [(pkg, "Data.Map.Strict", "fromList", "")]
+            globalRow = [row pkg "Data.Map.Strict" "fromList" ""]
         writeCachedIndex c OriginGlobal pkg ver globalRow
         present <- haveCachedIndex c pkg ver
         present @?= True
@@ -49,8 +50,8 @@ tests = testGroup "Unit.PackageCache"
         c <- openPackageCacheAt globalDb Nothing
         let pkg = "text"
             ver = "2.1"
-            row = [(pkg, "Data.Text", "pack", "")]
-        writeCachedIndex c OriginProject pkg ver row
+            rows0 = [row pkg "Data.Text" "pack" ""]
+        writeCachedIndex c OriginProject pkg ver rows0
         rows <- readCachedIndex c pkg ver
-        sort rows @?= sort row
+        sort rows @?= sort rows0
   ]

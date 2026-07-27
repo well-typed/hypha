@@ -119,6 +119,7 @@ library
     Hypha.Hoogle.Remote
     Hypha.Project.Fingerprint
     Hypha.Search.Cache
+    Hypha.Search.Index
     Hypha.Search.PackageCache
     Hypha.Search.Fuzzy
     Hypha.Search.Reexport
@@ -241,7 +242,9 @@ test-suite hypha-tests
     Unit.LookupPrepLocal
     Unit.RepoCache
     Unit.SourceExtensions
+    Unit.SearchIndexCache
     Unit.SearchReexport
+    Util.Row
     Unit.SourceInterface
     Unit.SourceExtract
     Unit.SourceParser
@@ -254,6 +257,7 @@ test-suite hypha-tests
     , directory
     , filepath
     , ghc-lib-parser
+    , sqlite-simple
     , hypha
     , iproute
     , lucid2

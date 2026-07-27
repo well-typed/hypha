@@ -46,6 +46,7 @@ import Hypha.Haddock.Generate (ensureHaddockFor)
 import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
+import Hypha.Search.Index qualified as Index
 import Hypha.Search.PackageCache (CacheOrigin (..))
 import Hypha.Search.PackageCache qualified as Cache
 import Hypha.Server.App qualified as App
@@ -60,6 +61,7 @@ import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.BuildPlan
 import Hypha.Types.ComponentName
 import Hypha.Types.Doc (DocText (..))
+import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import Hypha.Types.PackageId
 import Network.Wai.Handler.Warp ( defaultSettings, runSettings, setHost, setPort )
 import System.Directory qualified as Dir
@@ -543,8 +545,7 @@ hydrateFromCache plan cache pids ref = go [] pids
 
     loadKey verT k = do
       rows <- Cache.readCachedIndex cache k verT
-      let indexed =
-            [ Fuzzy.mkIndexedRow p m n s | (p, m, n, s) <- rows ]
+      let indexed = map indexedRowOf rows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
 
@@ -611,10 +612,8 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
           -- module that exposes it, the way Haddock lists it.
           reexport  = reexportRows compKey flatLocal
                         [ (m, Locate.parseExports s) | (m, _f, s) <- loaded ]
-          flatRows  = flatLocal ++ reexport
-          indexed   = [ Fuzzy.mkIndexedRow p m n s
-                      | (p, m, n, s) <- flatRows
-                      ]
+          flatRows  = map provisionalRow (flatLocal ++ reexport)
+          indexed   = map indexedRowOf flatRows
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
       Cache.writeCachedIndex cache (originFor pid) compKey verT flatRows
@@ -637,6 +636,33 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
       let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
       ok <- Dir.doesFileExist candidate
       if ok then pure (Just candidate) else firstExistingModule rs modPath
+
+-- | Adapt a legacy @(component, module, name, sig)@ tuple to an
+-- 'IndexRow'.
+--
+-- Provisional on both new fields: this indexer cannot say where a
+-- re-exported symbol is defined (that is exactly the defect
+-- "Hypha.Search.Reexport" exists to fix) and does not yet read
+-- @other-modules@.  Rows written here are generation-2 rows carrying
+-- generation-1 knowledge, and the rewrite two commits from now replaces
+-- this function along with the tuple pipeline feeding it.
+provisionalRow :: (Text, Text, Text, Text) -> Index.IndexRow
+provisionalRow (comp, modPath, name, sig) = Index.IndexRow
+  { Index.rowComponent  = ComponentKey comp
+  , Index.rowModule     = ModulePath modPath
+  , Index.rowName       = SymbolName name
+  , Index.rowSignature  = Signature sig
+  , Index.rowDefModule  = ModulePath modPath
+  , Index.rowVisibility = Index.Exposed
+  }
+
+-- | An 'IndexRow' as the in-memory scorer wants it.
+indexedRowOf :: Index.IndexRow -> Fuzzy.IndexedRow
+indexedRowOf r = Fuzzy.mkIndexedRow
+  (unComponentKey (Index.rowComponent r))
+  (unModulePath   (Index.rowModule r))
+  (unSymbolName   (Index.rowName r))
+  (unSignature    (Index.rowSignature r))
 
 -- | Extract one cache row per top-level declaration from a single
 -- module's source.  Signatures land in the @sig@ column courtesy of

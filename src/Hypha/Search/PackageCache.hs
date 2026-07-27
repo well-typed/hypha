@@ -37,6 +37,7 @@ import Hypha.Search.Cache
   ( IndexCache, defaultCachePath, haveIndex, lookupRowsByName
   , openIndexCache, readBlob, readFingerprint, readIndex
   , writeBlob, writeFingerprint, writeIndex )
+import Hypha.Search.Index (IndexRow (..))
 import Hypha.Types.BuildPlan (ProjectRoot (..))
 
 -- | Tells writers which DB to target.  Reads do not take an origin —
@@ -96,7 +97,7 @@ readCachedIndex
   :: HyphaPackageCache
   -> Text                              -- ^ package name
   -> Text                              -- ^ package version
-  -> IO [(Text, Text, Text, Text)]
+  -> IO [IndexRow]
 readCachedIndex c pkg ver =
   case hpcProject c of
     Just p -> do
@@ -114,7 +115,7 @@ readCachedIndex c pkg ver =
 lookupByName
   :: HyphaPackageCache
   -> Text
-  -> IO [(Text, Text, Text, Text)]
+  -> IO [IndexRow]
 lookupByName c rawQuery = do
   let (mMod, name) = splitQualified rawQuery
   projectRows <- case hpcProject c of
@@ -134,12 +135,9 @@ splitQualified raw =
 
 -- | Project rows take precedence per @(pkg, mod, name)@; global rows
 -- fill in any triples the project does not cover.
-mergeShadow
-  :: [(Text, Text, Text, Text)]
-  -> [(Text, Text, Text, Text)]
-  -> [(Text, Text, Text, Text)]
+mergeShadow :: [IndexRow] -> [IndexRow] -> [IndexRow]
 mergeShadow project global =
-  let key (p, m, n, _) = (p, m, n)
+  let key r = (rowComponent r, rowModule r, rowName r)
       projectKeys = Set.fromList (map key project)
   in project ++ filter (\r -> not (key r `Set.member` projectKeys)) global
 
@@ -151,7 +149,7 @@ writeCachedIndex
   -> CacheOrigin
   -> Text
   -> Text
-  -> [(Text, Text, Text, Text)]
+  -> [IndexRow]
   -> IO ()
 writeCachedIndex c origin pkg ver rows =
   writeIndex (selectWrite c origin) pkg ver rows
