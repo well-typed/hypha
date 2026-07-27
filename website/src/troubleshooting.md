@@ -1,5 +1,43 @@
 # Troubleshooting
 
+## Non-UTF-8 locale
+
+GHC derives every `Handle`'s encoding from the process locale. Under `C` or
+`POSIX` — the default in bare containers, where `LANG` is simply unset — that
+encoding is ASCII, and any non-ASCII character becomes a hard `IOError`. Two
+distinct symptoms come from this one cause.
+
+**Building hypha fails in `ghc-lib-parser`:**
+
+```
+happy: compiler/GHC/Parser.y: hGetContents: invalid argument (cannot decode byte sequence starting from 226)
+```
+
+`happy` cannot *decode* the grammar. Byte 226 is `0xE2`, the first byte of
+`∷` (U+2237), which appears in the GHC 9.12 series' `Parser.y` via
+`EpUniToken "::" "∷"`. Nothing is wrong with the download — the file is valid
+UTF-8 that an ASCII decoder refuses to read.
+
+**Running hypha fails on output:**
+
+```
+hypha: <stdout>: commitBuffer: invalid argument (cannot encode character '\8212')
+```
+
+hypha cannot *encode* an em-dash (`—`, U+2014) on the way out. Haddock prose is
+full of such characters, so this is not limited to `--help`.
+
+**Fix.** Give the process a UTF-8 locale:
+
+```bash
+export LANG=C.UTF-8
+```
+
+`C.UTF-8` is available in every modern glibc image and needs no `locale-gen`.
+Prefer setting `LANG` over `LC_ALL`, so you don't clobber your other locale
+categories. hypha's own CI and its Nix devshell both set it for exactly this
+reason.
+
 ## Running under Claude Code's sandbox
 
 Claude Code runs `Bash` commands inside a filesystem sandbox that may hide
