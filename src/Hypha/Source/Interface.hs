@@ -1,4 +1,5 @@
-{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingStrategies  #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
 -- | The parse-derived view of a single module: what it is called, what it
@@ -23,10 +24,12 @@ module Hypha.Source.Interface
   , ExportItem (..)
   , ImportItem (..)
   , parseInterface
+  , parseInterfaceIO
   , interfaceExportedNames
   , declaredNames
   ) where
 
+import Control.Exception (SomeException, displayException, evaluate, try)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -93,6 +96,41 @@ parseInterface ls path src = do
     , miDecls     = decls
     , miHeaderDoc = header
     }
+
+-- | 'parseInterface' with the impurity @cpphs@ smuggles in caught.
+--
+-- Some packages guard code with build-time-only CPP macros — @#error
+-- \"CURRENT_PACKAGE_KEY undefined\"@ is the canonical one — that only a
+-- real GHC invocation defines.  @cpphs@ reports that by calling 'error'
+-- from pure code, so the failure escapes any @Either@: unhandled, one such
+-- module aborted an entire index pass after five packages.
+--
+-- Forcing the parse inside 'try' turns it back into the typed failure the
+-- rest of the pipeline already reports, so one module loses its rows and
+-- every other module and package keeps its own.
+parseInterfaceIO
+  :: Extensions.LanguageSettings
+  -> FilePath
+  -> Text
+  -> IO (Either Parser.ParseError ModuleInterface)
+parseInterfaceIO ls path src = do
+  outcome <- try (evaluate forced)
+  pure $ case outcome of
+    Right r                   -> r
+    Left (e :: SomeException) -> Left Parser.ParseError
+      { Parser.peMessage           = firstLine (Text.pack (displayException e))
+      , Parser.peLine              = Nothing
+      , Parser.peUnknownExtensions = []
+      , Parser.peDiagnostics       = []
+      }
+  where
+    -- Demanding the outer constructor is enough: cpphs runs ahead of the
+    -- parser, so that is where it throws.
+    forced = case parseInterface ls path src of
+      Left e  -> Left e
+      Right i -> Right i
+
+    firstLine = Text.strip . Text.takeWhile (/= '\n')
 
 -- | A module with no @module … where@ header is an implicit @Main@ —
 -- what GHC assumes, and what a bare script under a source dir is.

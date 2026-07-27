@@ -19,6 +19,7 @@ module Hypha.Search.Indexer
     -- * The pure core
   , ComponentIndex (..)
   , indexComponentPure
+  , indexParsedComponent
     -- * Component discovery
   , componentsForUnit
   , componentModules
@@ -172,7 +173,8 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
           compKey = componentKeyOf (PackageName pkgT) kind
           langs   = languageSettingsFor plan pid kind
       sources <- componentModules plan pid kind srcDirs
-      let ci       = indexComponentPure compKey langs sources
+      parsed   <- mapM (parseGuarded langs) sources
+      let ci       = indexParsedComponent compKey parsed
           flatRows = ciRows ci
           indexed  = scorerRows (pkgName pid) (pkgVersion pid) flatRows
       reportComponentIndex compKey ci
@@ -264,17 +266,26 @@ indexComponentPure
   -> LanguageSettings
   -> [ModuleSource]
   -> ComponentIndex
-indexComponentPure compKey langs sources = ComponentIndex
+indexComponentPure compKey langs sources = indexParsedComponent compKey
+  [ (ms, Interface.parseInterface langs (msPath ms) (msContent ms))
+  | ms <- sources
+  ]
+
+-- | The core, over parse results the caller obtained.
+--
+-- Parsing is the caller's job because it is where the exceptions are: see
+-- 'Interface.parseInterfaceIO'.  Everything from here on is a function of
+-- the sources.
+indexParsedComponent
+  :: ComponentKey
+  -> [(ModuleSource, Either Parser.ParseError ModuleInterface)]
+  -> ComponentIndex
+indexParsedComponent compKey parsed = ComponentIndex
   { ciRows          = rows
   , ciParseFailures = failures
   , ciNameMismatch  = mismatches
   }
   where
-    parsed =
-      [ (ms, Interface.parseInterface langs (msPath ms) (msContent ms))
-      | ms <- sources
-      ]
-
     failures   = [ (msDeclaredName ms, e) | (ms, Left e)  <- parsed ]
     ok         = [ (ms, i)                | (ms, Right i) <- parsed ]
     mismatches =
@@ -444,3 +455,13 @@ languageSettingsFor plan pid kind =
 scorerRows :: PackageName -> Version -> [IndexRow] -> [Fuzzy.IndexedRow]
 scorerRows pkg ver rows =
   Fuzzy.entityRows pkg ver rows ++ map Fuzzy.mkSymbolRow rows
+
+-- | Parse one module, catching the exception cpphs raises for macros only
+-- a real compiler defines.  One module loses its rows; the pass continues.
+parseGuarded
+  :: LanguageSettings
+  -> ModuleSource
+  -> IO (ModuleSource, Either Parser.ParseError ModuleInterface)
+parseGuarded langs ms = do
+  r <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
+  pure (ms, r)

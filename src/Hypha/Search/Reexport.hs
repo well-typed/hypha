@@ -27,11 +27,13 @@ module Hypha.Search.Reexport
   , sharedSegments
   ) where
 
+import Data.Foldable qualified as Foldable
 import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as Text
 
@@ -75,65 +77,106 @@ definitionModule asking = \case
   DefinedOutside m -> m
 
 -- | Resolve every @(module, exported name)@ pair in a component.
+--
+-- Computed as a fixpoint from the declarations outwards rather than by
+-- recursing from each name inwards.  The inward version was correct and
+-- unusable: with no memoisation it re-derived the same sub-resolution once
+-- per candidate per name, which on a real package (hundreds of modules,
+-- most with unrestricted imports) burned minutes of CPU without producing
+-- a row.  Bottom-up costs one pass per link in the longest re-export
+-- chain, and chains are short.
+--
+-- Termination is structural: a round that resolves nothing stops the loop,
+-- so a pair of modules re-exporting each other simply never resolves and
+-- falls through to 'DefinedOutside'.  No visited set, no depth limit.
 resolveComponent :: [ModuleInterface] -> Map (ModulePath, SymbolName) Resolution
-resolveComponent ifaces = Map.fromList
-  [ ((miName i, n), resolve Set.empty i n)
-  | i <- ifaces
-  , n <- expandedExportNames ifaces (miName i)
-  ]
+resolveComponent ifaces = fixpoint seeded
   where
     byName :: Map ModulePath ModuleInterface
     byName = Map.fromList [ (miName i, i) | i <- ifaces ]
 
-    declares i n = n `elem` Interface.declaredNames i
+    -- Every pair we owe an answer for.
+    wanted =
+      [ (i, n) | i <- ifaces, n <- expandedExportNames ifaces (miName i) ]
 
-    -- @visiting@ is the set of modules already on the resolution stack.
-    -- A candidate already on the stack is dropped rather than followed,
-    -- so a pair of modules re-exporting each other terminates with
-    -- 'DefinedOutside' instead of recursing forever.
-    resolve visiting i n
-      | declares i n = Resolution DefinedHere Unambiguous
-      | otherwise =
-          let visiting'         = Set.insert (miName i) visiting
-              (preferred, open) = candidates i n
-              ranked = case viable visiting' n preferred of
-                []  -> rank i (viable visiting' n open)
-                ps  -> rank i ps
-          in case ranked of
-               (winner : rejected) -> Resolution
-                 (throughTo visiting' winner n)
-                 (maybe Unambiguous ResolvedAmongst (NE.nonEmpty rejected))
-               [] -> Resolution (outsideFor i n) Unambiguous
+    declaredSet :: Map ModulePath (Set SymbolName)
+    declaredSet =
+      Map.fromList [ (miName i, Set.fromList (Interface.declaredNames i)) | i <- ifaces ]
+
+    declaresIn m n = case Map.lookup m declaredSet of
+      Just ns -> n `Set.member` ns
+      Nothing -> False
+
+    -- Round zero: everything a module declares itself.
+    seeded = Map.fromList
+      [ ((miName i, n), Resolution DefinedHere Unambiguous)
+      | (i, n) <- wanted
+      , declaresIn (miName i) n
+      ]
+
+    fixpoint acc =
+      let acc' = Foldable.foldl' step acc wanted
+      in if Map.size acc' == Map.size acc then finish acc else fixpoint acc'
+
+    step acc (i, n)
+      | Map.member (miName i, n) acc = acc
+      | otherwise = case rankedCandidates acc i n of
+          []                  -> acc
+          (winner : rejected) -> Map.insert (miName i, n)
+            (Resolution (throughTo acc winner n)
+                        (maybe Unambiguous ResolvedAmongst (NE.nonEmpty rejected)))
+            acc
+
+    -- A candidate qualifies once we know it can supply the name: it
+    -- declares it, or an earlier round resolved it there.
+    rankedCandidates acc i n =
+      let (preferred, open) = candidates i n
+      in case viable acc n preferred of
+           [] -> rank i (viable acc n open)
+           ps -> rank i ps
+
+    viable acc n ms =
+      [ m
+      | m <- ms
+      , Map.member m byName
+      , declaresIn m n || resolvedInside (Map.lookup (m, n) acc)
+      ]
+
+    resolvedInside r = case r of
+      Just (Resolution DefinedHere _)  -> True
+      Just (Resolution (DefinedIn _) _) -> True
+      _                                 -> False
 
     -- Follow the chain to the module that actually declares the name.
     -- Stopping at the first hop names a module that only passes the symbol
     -- along: @Data.Map@ re-exports @Data.Map.Lazy@, which re-exports
     -- @Data.Map.Internal@, and only the last of those has a declaration to
     -- read a signature or a source line from.
-    throughTo visiting winner n = case Map.lookup winner byName of
-      Nothing -> DefinedIn winner
-      Just target
-        | declares target n -> DefinedIn winner
-        | otherwise -> case resSite (resolve visiting target n) of
-            DefinedIn m      -> DefinedIn m
-            DefinedHere      -> DefinedIn winner
-            DefinedOutside m -> DefinedOutside m
+    throughTo acc winner n
+      | declaresIn winner n = DefinedIn winner
+      | otherwise = case Map.lookup (winner, n) acc of
+          Just (Resolution (DefinedIn m) _) -> DefinedIn m
+          _                                 -> DefinedIn winner
 
-    viable visiting n ms =
-      [ m
-      | m <- ms
-      , not (m `Set.member` visiting)
-      , Just target <- [Map.lookup m byName]
-      , supplies visiting target n
-      ]
+    -- Nothing inside the component supplies it: name the first import that
+    -- plausibly does, so the module page can still list the symbol and say
+    -- where it came from.  A module with no such import resolves to itself,
+    -- which keeps this total without an 'error' — and since
+    -- 'DefinedOutside' rows are never indexed, that value cannot reach a
+    -- search result.
+    finish acc = Foldable.foldl' addOutside acc wanted
+      where
+        addOutside m (i, n)
+          | Map.member (miName i, n) m = m
+          | otherwise = Map.insert (miName i, n)
+              (Resolution (outsideFor i n) Unambiguous) m
 
-    -- A candidate supplies the name if it declares it, or can itself
-    -- resolve it to a declaration inside the component.
-    supplies visiting target n =
-      declares target n
-        || case resSite (resolve visiting target n) of
-             DefinedIn _ -> True
-             _           -> False
+    outsideFor i n = case [ iiModule ii
+                          | ii <- miImports i
+                          , explicitlyLists ii n || openImport ii n
+                          ] of
+      (m : _) -> DefinedOutside m
+      []      -> DefinedOutside (miName i)
 
     -- An explicit import list is a statement about where a name comes
     -- from; an unrestricted import is not.  So explicit candidates are
@@ -158,19 +201,6 @@ resolveComponent ifaces = Map.fromList
     -- depends on the order modules were handed to us.
     rank i =
       sortOn (\m -> (negate (sharedSegments (miName i) m), unModulePath m))
-
-    -- Nothing inside the component supplies it: name the first import
-    -- that plausibly does, so the module page can still list the symbol
-    -- and say where it came from.  A module with no such import resolves
-    -- to itself, which keeps the function total without an 'error' — and
-    -- since 'DefinedOutside' rows are never indexed, that value cannot
-    -- reach a search result.
-    outsideFor i n = case [ iiModule ii
-                          | ii <- miImports i
-                          , explicitlyLists ii n || openImport ii n
-                          ] of
-      (m : _) -> DefinedOutside m
-      []      -> DefinedOutside (miName i)
 
 -- | Every name a module exports, with the @module M@ re-export form
 -- expanded against the rest of the component.

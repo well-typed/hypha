@@ -326,9 +326,7 @@ locateDefinitionInComponent
   -> SymbolName
   -> IO (Maybe LocatedDefinition)
 locateDefinitionInComponent langs sources asking sym = do
-  let parsed = [ (ms, Interface.parseInterface langs (msPath ms) (msContent ms))
-               | ms <- sources
-               ]
+  parsed <- mapM parseOne sources
   mapM_ reportParseFailure [ (ms, e) | (ms, Left e) <- parsed ]
   let ifaces     = [ i | (_, Right i) <- parsed ]
       resolution = Reexport.resolveComponent ifaces
@@ -355,6 +353,13 @@ locateDefinitionInComponent langs sources asking sym = do
               , ldProvenance = Resolved (resSite res)
               })
   where
+    -- Guarded: cpphs signals an undefined build-time macro by calling
+    -- 'error' from pure code, and an unhandled one here would 500 the
+    -- symbol card.
+    parseOne ms = do
+      r <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
+      pure (ms, r)
+
     reportParseFailure (ms, e) = hPutStrLn stderr $
       "hypha: " <> msPath ms <> " could not be parsed: "
         <> Text.unpack (Parser.parseErrorMessage e)
