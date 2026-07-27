@@ -22,6 +22,7 @@ module Hypha.Search.Reexport
   , Ambiguity (..)
   , Resolution (..)
   , resolveComponent
+  , expandedExportNames
   , definitionModule
   , sharedSegments
   ) where
@@ -78,24 +79,11 @@ resolveComponent :: [ModuleInterface] -> Map (ModulePath, SymbolName) Resolution
 resolveComponent ifaces = Map.fromList
   [ ((miName i, n), resolve Set.empty i n)
   | i <- ifaces
-  , n <- exportedNames i
+  , n <- expandedExportNames ifaces (miName i)
   ]
   where
     byName :: Map ModulePath ModuleInterface
     byName = Map.fromList [ (miName i, i) | i <- ifaces ]
-
-    -- Everything the module's export list offers, the @module M@ form
-    -- expanded one level (the recursion below walks longer chains).
-    exportedNames i =
-      Interface.interfaceExportedNames i ++ moduleFormNames i
-
-    moduleFormNames i =
-      [ n
-      | Just items <- [miExports i]
-      , ExportModule m <- items
-      , Just target <- [Map.lookup m byName]
-      , n <- Interface.interfaceExportedNames target
-      ]
 
     declares i n = n `elem` Interface.declaredNames i
 
@@ -169,6 +157,28 @@ resolveComponent ifaces = Map.fromList
                           ] of
       (m : _) -> DefinedOutside m
       []      -> DefinedOutside (miName i)
+
+-- | Every name a module exports, with the @module M@ re-export form
+-- expanded against the rest of the component.
+--
+-- Shared with the module-page pass, because a page that iterated the raw
+-- export list would silently omit exactly the names a wrapper exists to
+-- re-export: @module Data.Map.Strict.Internal@ contributes no names of its
+-- own until it is expanded.
+expandedExportNames :: [ModuleInterface] -> ModulePath -> [SymbolName]
+expandedExportNames ifaces asking = case Map.lookup asking byName of
+  Nothing -> []
+  Just i  -> Interface.interfaceExportedNames i ++ moduleFormNames i
+  where
+    byName = Map.fromList [ (miName i, i) | i <- ifaces ]
+
+    moduleFormNames i =
+      [ n
+      | Just items <- [miExports i]
+      , ExportModule m <- items
+      , Just target <- [Map.lookup m byName]
+      , n <- Interface.interfaceExportedNames target
+      ]
 
 -- | How many leading dot-separated segments two module paths share.
 --

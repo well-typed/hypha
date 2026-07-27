@@ -15,13 +15,23 @@ module Hypha.Source.Extract
     -- * Batch module extraction
   , ModuleDocInfo (..)
   , DocEntry (..)
+  , EntryOrigin (..)
   , extractModuleDoc
+  , resolveModuleEntries
   ) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as Text
 import Data.Text (Text)
+
+import Hypha.Search.Index (ModuleSource (..))
+import Hypha.Search.Reexport qualified as Reexport
+import Hypha.Source.Extensions qualified as Extensions
+import Hypha.Source.Interface (ModuleInterface (..))
+import Hypha.Source.Interface qualified as Interface
 import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.Doc (DocText (..))
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 
 -- | Information extracted from a source file for a single symbol.
 -- The shape predates the parser rewrite; downstream consumers
@@ -81,6 +91,16 @@ data ModuleDocInfo = ModuleDocInfo
   deriving stock (Show, Eq)
 
 -- | A single top-level declaration, ready for rendering.
+-- | Where a module-page entry came from.
+--
+-- A wrapper module's page is almost entirely re-exports, and saying which
+-- module actually defines each entry is the difference between a useful
+-- page and a list of names.
+data EntryOrigin
+  = EntryLocal
+  | EntryReexport !ModulePath
+  deriving stock (Show, Eq)
+
 data DocEntry = DocEntry
   { deName      :: !Text
   , deKind      :: !Parser.DeclKind
@@ -91,6 +111,8 @@ data DocEntry = DocEntry
   , deHaddock   :: !(Maybe DocText)
   , deSigLine   :: !(Maybe Int)
   , deDefLine   :: !(Maybe Int)
+  , deOrigin    :: !EntryOrigin
+    -- ^ Local declaration, or the module this entry is re-exported from.
   }
   deriving stock (Show, Eq)
 
@@ -107,27 +129,81 @@ extractModuleDoc path src = do
     , mdiEntries = map (entryFor numbered) decls
     }
   where
-    entryFor ls d = DocEntry
-      { deName      = Parser.declName d
-      , deKind      = Parser.declKind d
-      , deSignature = signatureFor ls d
-      , deHaddock   = DocText <$> Parser.declDoc d
-      , deSigLine   = Parser.declSigLine d
-      , deDefLine   = Parser.declDefLine d
-      }
+    entryFor ls d = docEntryFrom ls d EntryLocal
 
-    -- Values render their signature; type-ish decls without a @::@
-    -- signature render the (clamped) source slice of their body so
-    -- constructors, fields, and methods stay visible.  Function bodies
-    -- are never sliced — they are implementation, not interface.
-    signatureFor ls d = case sigText ls d of
+-- | Build one entry from a declaration and its module's numbered lines.
+--
+-- Exported so the resolved module-page pass builds entries identically to
+-- the local one: a re-exported entry must render the same way as if it had
+-- been declared where it is shown.
+docEntryFrom :: [(Int, Text)] -> Parser.Decl -> EntryOrigin -> DocEntry
+docEntryFrom ls d origin = DocEntry
+  { deName      = Parser.declName d
+  , deKind      = Parser.declKind d
+  , deSignature = signatureFor ls d
+  , deHaddock   = DocText <$> Parser.declDoc d
+  , deSigLine   = Parser.declSigLine d
+  , deDefLine   = Parser.declDefLine d
+  , deOrigin    = origin
+  }
+  where
+    signatureFor lns decl = case sigText lns decl of
       Just t  -> Just t
       Nothing
-        | Parser.declKind d == Parser.DkFunction -> Nothing
+        | Parser.declKind decl == Parser.DkFunction -> Nothing
         | otherwise -> do
-            s <- Parser.declDefLine d
-            e <- Parser.declDefEndLine d
-            declSlice ls s e
+            st <- Parser.declDefLine decl
+            e  <- Parser.declDefEndLine decl
+            declSlice lns st e
+
+-- | Every entry a module's page should show, re-exports included.
+--
+-- 'extractModuleDoc' reports only locally declared declarations, so a pure
+-- re-export module produced nothing: @Data.Map.Strict@ had an empty \"On
+-- this page\" rail because it declares almost nothing.  Resolving its
+-- exports to their definitions means the wrapper shows what Haddock shows,
+-- each entry tagged with where the code actually lives.
+resolveModuleEntries
+  :: Extensions.LanguageSettings
+  -> [ModuleSource]
+  -> ModulePath
+  -> Either Parser.ParseError ModuleDocInfo
+resolveModuleEntries langs sources asking = do
+  ifaces <- traverse parseOne sources
+  let byName     = Map.fromList [ (miName i, i) | i <- ifaces ]
+      linesOf    = Map.fromList
+        [ (miName i, numberedLines (msContent ms))
+        | (ms, i) <- zip sources ifaces
+        ]
+      resolution = Reexport.resolveComponent ifaces
+  asked <- maybe (Left (missingModule asking)) Right (Map.lookup asking byName)
+  pure ModuleDocInfo
+    { mdiHeader  = DocText <$> miHeaderDoc asked
+    , mdiEntries =
+        [ docEntryFrom ls decl origin
+        | name <- Reexport.expandedExportNames ifaces asking
+        , Just res <- [Map.lookup (asking, name) resolution]
+        , let defMod = Reexport.definitionModule asking (Reexport.resSite res)
+        , Just defIface <- [Map.lookup defMod byName]
+        , Just decl <- [Parser.findDecl (unSymbolName name) (miDecls defIface)]
+        , let ls = Map.findWithDefault [] defMod linesOf
+        , let origin = if defMod == asking then EntryLocal else EntryReexport defMod
+        ]
+    }
+  where
+    parseOne ms = Interface.parseInterface langs (msPath ms) (msContent ms)
+
+-- | A URL can name a module the component does not have.  That is a
+-- reportable absence, not a programmer error, so it travels as a
+-- 'Parser.ParseError' rather than an exception.
+missingModule :: ModulePath -> Parser.ParseError
+missingModule m = Parser.ParseError
+  { Parser.peMessage =
+      "module " <> unModulePath m <> " is not part of this component"
+  , Parser.peLine              = Nothing
+  , Parser.peUnknownExtensions = []
+  , Parser.peDiagnostics       = []
+  }
 
 -- | Maximum number of source lines a type\/class body slice may carry
 -- before it is clamped with a trailing ellipsis.

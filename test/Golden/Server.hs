@@ -13,7 +13,7 @@ import Test.Tasty.Golden (goldenVsString)
 import Hypha.Server.ModuleDoc
 import Hypha.Server.Ui.Layout (shellPage)
 import Hypha.Server.Ui.ModuleDoc (modulePage)
-import Hypha.Source.Extract (DocEntry (..), ModuleDocInfo (..))
+import Hypha.Source.Extract (DocEntry (..), EntryOrigin (..), ModuleDocInfo (..))
 import Hypha.Source.Parser (DeclKind (..))
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 import Hypha.Types.Doc (DocText (..))
@@ -53,6 +53,7 @@ tests = testGroup "Golden.Server"
                   , deHaddock   = Just (DocText "A gadget.")
                   , deSigLine   = Nothing
                   , deDefLine   = Just 12
+                  , deOrigin    = EntryLocal
                   }
               , DocEntry
                   { deName      = "frob"
@@ -61,6 +62,7 @@ tests = testGroup "Golden.Server"
                   , deHaddock   = Just (DocText "Frobnicate the gadget.")
                   , deSigLine   = Just 17
                   , deDefLine   = Just 18
+                  , deOrigin    = EntryLocal
                   }
               ]
           }

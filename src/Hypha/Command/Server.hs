@@ -42,6 +42,8 @@ import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.Collapse qualified as Collapse
+import Hypha.Search.Index qualified as Index
+import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Search.PackageCache qualified as Cache
 import Hypha.Server.App qualified as App
@@ -56,6 +58,7 @@ import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.BuildPlan
 import Hypha.Types.ComponentName
 import Hypha.Types.Doc (DocText (..))
+import Hypha.Types.SymbolPath (ModulePath (..))
 import Hypha.Types.PackageId
 import Network.Wai.Handler.Warp ( defaultSettings, runSettings, setHost, setPort )
 import System.Directory qualified as Dir
@@ -376,17 +379,23 @@ moduleDocFor cacheRoot plan env resolver pkgT modT = do
       r <- runExceptT $ do
         (_, dirs) <- liftMaybeReason "package source could not be resolved"
                        (resolveComponentDirs plan resolver pkgT)
-        f   <- liftMaybeReason
-                 ("module " <> modT <> " has no source file in the package")
-                 (Locate.findModuleFileIn dirs modT)
-        src <- lift (TIO.readFile f)
-        case Extract.extractModuleDoc f src of
-          Left perr -> throwE
-            ( "module source could not be parsed: "
-                <> Parser.parseErrorMessage perr
-            , Locate.parseExports src
-            )
-          Right info -> pure (filterByExports src info)
+        -- The whole component, not just this module: a wrapper's entries
+        -- live in the modules it re-exports from, and resolving them is
+        -- what fills the \"On this page\" rail for @Data.Map.Strict@.
+        sources <- lift (componentSourcesFor plan resolver pkgT dirs)
+        let langs = componentLanguageSettings plan pkgT
+        case Extract.resolveModuleEntries langs sources (ModulePath modT) of
+          Left perr -> do
+            f <- liftMaybeReason
+                   ("module " <> modT <> " has no source file in the package")
+                   (Locate.findModuleFileIn dirs modT)
+            src <- lift (TIO.readFile f)
+            throwE
+              ( "module docs could not be resolved: "
+                  <> Parser.parseErrorMessage perr
+              , Locate.parseExports src
+              )
+          Right info -> pure info
       case r of
         Right info -> pure (ViewFromSource (SourceDoc info mPv))
         Left (reason, names) -> do
@@ -400,22 +409,6 @@ moduleDocFor cacheRoot plan env resolver pkgT modT = do
       :: Text -> IO (Maybe a) -> ExceptT (Text, [Text]) IO a
     liftMaybeReason reason act =
       ExceptT (maybe (Left (reason, [])) Right <$> act)
-
-    -- Restrict and order entries by the explicit export list when one
-    -- parses.  A filter that would empty the page (pure re-export
-    -- modules) keeps the full entry list instead — over-inclusion is
-    -- harmless, an empty doc page is not.
-    filterByExports :: Text -> Extract.ModuleDocInfo -> Extract.ModuleDocInfo
-    filterByExports src info =
-      case Locate.parseExports src of
-        []   -> info
-        exps ->
-          let byName = Map.fromList
-                [ (Extract.deName e, e) | e <- Extract.mdiEntries info ]
-              ordered = mapMaybe (`Map.lookup` byName) exps
-          in case ordered of
-               [] -> info
-               _  -> info { Extract.mdiEntries = ordered }
 
 -- | Resolve a composite component name (e.g. @hypha:lib-foo@) into the
 -- parent package's source dir + the component's source-root list.  The
@@ -521,3 +514,38 @@ parsePkgVer raw =
       in Just (PackageId (PackageName name) (Version ver))
     _ -> Nothing
 
+-- | Every module of the component a page belongs to, ready for
+-- resolution.
+--
+-- One implementation shared with the indexer: the module page and the
+-- index must agree about which modules a component has, or a symbol
+-- searchable under one module can fail to appear on that module's page.
+componentSourcesFor
+  :: BuildPlan
+  -> PackageResolver IO
+  -> Text                 -- ^ component name from the URL
+  -> [FilePath]           -- ^ its source dirs
+  -> IO [Index.ModuleSource]
+componentSourcesFor plan resolver rawName dirs = do
+  let cn = parseComponentName rawName
+  ePid <- resolvePkg resolver (cnPackage cn)
+  case ePid of
+    Left err -> do
+      hPutStrLn stderr $
+        "hypha server: cannot resolve " <> Text.unpack rawName
+          <> " for module docs: " <> show err
+      pure []
+    Right rp -> Indexer.componentModules plan (rpPkgId rp) (cnKind cn) dirs
+
+-- | The language settings the component fixes for its modules, so the
+-- module page parses them the way the indexer did.
+componentLanguageSettings :: BuildPlan -> Text -> Extensions.LanguageSettings
+componentLanguageSettings plan rawName =
+  let cn = parseComponentName rawName
+  in case lookupUnit (cnPackage cn) plan of
+       Just pu ->
+         case [ Comp.ciLanguageSettings c
+              | c <- puLibComponents pu, Comp.ciKind c == cnKind cn ] of
+           (ls : _) -> ls
+           []       -> Extensions.defaultLanguageSettings
+       Nothing -> Extensions.defaultLanguageSettings

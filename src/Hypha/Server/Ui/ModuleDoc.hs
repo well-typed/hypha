@@ -16,7 +16,9 @@ import Lucid
 
 import qualified Hypha.Server.Ui.Haddock as Haddock
 import           Hypha.Server.ModuleDoc
-import           Hypha.Source.Extract (DocEntry (..), ModuleDocInfo (..))
+import           Hypha.Types.SymbolPath (ModulePath (..))
+import           Hypha.Source.Extract
+                   (DocEntry (..), EntryOrigin (..), ModuleDocInfo (..))
 import           Hypha.Source.Parser (DeclKind (..))
 import           Hypha.Types.Doc (DocText (..))
 
@@ -110,6 +112,7 @@ entrySection pkgT modT e =
          ]
          "#"
       srcLink
+      reexportNote
     maybe mempty
           (\sig -> pre_ [class_ "signature"] (code_ (toHtml sig)))
           (deSignature e)
@@ -117,11 +120,31 @@ entrySection pkgT modT e =
       Nothing          -> mempty
       Just (DocText t) -> div_ [class_ "haddock"] (Haddock.renderHaddockHtml t)
   where
+    -- A wrapper module's entries are documented here but defined
+    -- elsewhere.  Saying so, with a link, is the difference between a
+    -- page the reader can trust and one that quietly implies the code
+    -- lives here.
+    reexportNote = case deOrigin e of
+      EntryLocal            -> mempty
+      EntryReexport defMod  ->
+        a_ [ class_ "decl-origin"
+           , href_ ("/pkg/" <> pkgT <> "/" <> unModulePath defMod
+                      <> "/" <> deName e)
+           , title_ "Defined in another module of this package"
+           ]
+           (toHtml ("from " <> unModulePath defMod))
+
+    -- The source link follows the definition, because that is where the
+    -- lines this entry reports actually are.
+    srcModule = case deOrigin e of
+      EntryLocal           -> modT
+      EntryReexport defMod -> unModulePath defMod
+
     srcLink = case anchorLine of
       Nothing -> mempty
       Just n  ->
         a_ [ class_ "decl-src"
-           , href_ ("/source/" <> pkgT <> "/" <> modT
+           , href_ ("/source/" <> pkgT <> "/" <> srcModule
                      <> "?line=" <> tshow n <> "#L" <> tshow n)
            , title_ "Jump to source"
            ]

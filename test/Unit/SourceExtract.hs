@@ -6,13 +6,21 @@ module Unit.SourceExtract (tests) where
 
 import qualified Data.Text as Text
 
+import Data.List (sort)
+
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 import qualified Hypha.Source.Extract as Extract
-import           Hypha.Source.Extract (DocEntry (..), ModuleDocInfo (..))
+import           Hypha.Source.Extract
+                   ( DocEntry (..), EntryOrigin (..), ModuleDocInfo (..)
+                   , resolveModuleEntries )
+import           Hypha.Source.Extensions (defaultLanguageSettings)
 import qualified Hypha.Source.Parser  as Parser
+import           Hypha.Source.Parser  (parseErrorMessage)
 import           Hypha.Types.Doc      (DocText (..))
+import           Hypha.Types.SymbolPath (ModulePath (..))
+import           Util.Fixture (fixtureSources)
 
 tests :: TestTree
 tests = testGroup "Unit.SourceExtract"
@@ -155,6 +163,48 @@ tests = testGroup "Unit.SourceExtract"
       case Extract.extractModuleDoc "M.hs" src of
         Left e  -> assertFailure (show e)
         Right d -> (deSignature =<< safeHead (mdiEntries d)) @?= Nothing
+
+  , testCase "a wrapper module's entries include its re-exports" $ do
+      -- Data.Map.Strict's page was empty because entries came only from
+      -- local declarations, and that module declares almost nothing.
+      srcs <- fixtureSources
+      case resolveModuleEntries defaultLanguageSettings srcs
+             (ModulePath "Fixture.Wrapper") of
+        Left e     -> assertFailure (show e)
+        Right info -> do
+          sort (map deName (mdiEntries info))
+            @?= ["Bag", "insertBag", "otherOnly", "sizeBag"]
+          [ deOrigin e | e <- mdiEntries info, deName e == "insertBag" ]
+            @?= [EntryReexport (ModulePath "Fixture.Internal")]
+          [ deOrigin e | e <- mdiEntries info, deName e == "otherOnly" ]
+            @?= [EntryReexport (ModulePath "Fixture.Other")]
+
+  , testCase "a re-exported entry carries the definition's haddock" $ do
+      srcs <- fixtureSources
+      case resolveModuleEntries defaultLanguageSettings srcs
+             (ModulePath "Fixture.Wrapper") of
+        Left e     -> assertFailure (show e)
+        Right info ->
+          assertBool "insertBag has documentation"
+            (or [ deHaddock e /= Nothing
+                | e <- mdiEntries info, deName e == "insertBag" ])
+
+  , testCase "a definition module's entries are all local" $ do
+      srcs <- fixtureSources
+      case resolveModuleEntries defaultLanguageSettings srcs
+             (ModulePath "Fixture.Internal") of
+        Left e     -> assertFailure (show e)
+        Right info ->
+          assertBool "all local"
+            (all ((== EntryLocal) . deOrigin) (mdiEntries info))
+
+  , testCase "a module the component does not have is a reportable absence" $ do
+      srcs <- fixtureSources
+      case resolveModuleEntries defaultLanguageSettings srcs
+             (ModulePath "Fixture.Nope") of
+        Right _ -> assertFailure "expected an error for an unknown module"
+        Left e  -> assertBool "names the module"
+          ("Fixture.Nope" `Text.isInfixOf` parseErrorMessage e)
   ]
   where
     safeHead []      = Nothing
