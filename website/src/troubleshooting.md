@@ -4,8 +4,8 @@
 
 GHC derives every `Handle`'s encoding from the process locale. Under `C` or
 `POSIX` — the default in bare containers, where `LANG` is simply unset — that
-encoding is ASCII, and any non-ASCII character becomes a hard `IOError`. Two
-distinct symptoms come from this one cause.
+encoding is ASCII, and any non-ASCII character becomes a hard `IOError`. This
+bites when *building* hypha; hypha itself is immune (see below).
 
 **Building hypha fails in `ghc-lib-parser`:**
 
@@ -18,16 +18,7 @@ happy: compiler/GHC/Parser.y: hGetContents: invalid argument (cannot decode byte
 `EpUniToken "::" "∷"`. Nothing is wrong with the download — the file is valid
 UTF-8 that an ASCII decoder refuses to read.
 
-**Running hypha fails on output:**
-
-```
-hypha: <stdout>: commitBuffer: invalid argument (cannot encode character '\8212')
-```
-
-hypha cannot *encode* an em-dash (`—`, U+2014) on the way out. Haddock prose is
-full of such characters, so this is not limited to `--help`.
-
-**Fix.** Give the process a UTF-8 locale:
+**Fix.** Give the *build* a UTF-8 locale:
 
 ```bash
 export LANG=C.UTF-8
@@ -37,6 +28,21 @@ export LANG=C.UTF-8
 Prefer setting `LANG` over `LC_ALL`, so you don't clobber your other locale
 categories. hypha's own CI and its Nix devshell both set it for exactly this
 reason.
+
+**Running hypha needs no locale setup.** Up to 0.2.0 it inherited the same
+problem and died on its own output:
+
+```
+hypha: <stdout>: commitBuffer: invalid argument (cannot encode character '\8212')
+```
+
+Since then both binaries pin UTF-8 on their handles, on the filesystem
+encoding, and on every handle they open, before printing anything
+([issue #9](https://gitlab.well-typed.com/well-typed/hypha/-/issues/9)). The
+locale was never the right authority: Haskell sources, `.cabal` files, JSON and
+Haddock HTML are all UTF-8 by their own specs. The one thing that now fails
+loudly instead of quietly producing mojibake is a genuinely Latin-1 `.hs` or
+`.cabal` file.
 
 ## Running under Claude Code's sandbox
 

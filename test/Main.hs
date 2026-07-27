@@ -1,7 +1,9 @@
 module Main (main) where
 
-import Test.Tasty (defaultMain, testGroup)
+import Test.Tasty (TestTree, defaultMain, testGroup)
+
 import qualified Golden.Cli
+import qualified Golden.Encoding
 import qualified Golden.Human
 import qualified Golden.Lookup
 import qualified Golden.Package
@@ -41,9 +43,20 @@ import qualified Unit.RepoCache
 import qualified Unit.SourceExtract
 import qualified Unit.SourceParser
 
+import Hypha.Encoding (setUtf8Encoding)
+
 main :: IO ()
-main = defaultMain (testGroup "hypha"
+main = do
+  -- Same pin as the binaries: the pipes we read child output from
+  -- inherit the locale encoding otherwise, which would make these
+  -- tests fail for the very reason they exist (issue #9).
+  setUtf8Encoding
+  defaultMain allTests
+
+allTests :: TestTree
+allTests = testGroup "hypha"
   [ Golden.Cli.tests
+  , Golden.Encoding.tests
   , Golden.Human.tests
   , Golden.Lookup.tests
   , Golden.Package.tests
@@ -82,4 +95,4 @@ main = defaultMain (testGroup "hypha"
   , Unit.RepoCache.tests
   , Unit.SourceExtract.tests
   , Unit.SourceParser.tests
-  ])
+  ]
