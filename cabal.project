@@ -1,1 +1,9 @@
-cabal.ghc-9.10.3.project
+-- Default local build configuration: GHC 9.10.3.
+--
+-- A real file, not a symlink: Windows checkouts turn git symlinks into regular
+-- files containing the target path. The freeze is imported explicitly because
+-- cabal would otherwise look for cabal.project.freeze, which we don't ship.
+--
+-- Other compilers: cabal build all --project-file=cabal.ghc-9.12.4.project
+import: cabal.ghc-9.10.3.project
+import: cabal.ghc-9.10.3.project.freeze

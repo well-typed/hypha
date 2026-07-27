@@ -1,13 +1,7 @@
-packages: .
-
-allow-newer:
-  haddock-library:base
+import: cabal.project.common
 
 with-compiler: ghc-9.12.4
 
 -- Pin ghc-lib-parser to this exact version of GHC (no 9.12.4 parser exists yet).
 constraints:
   ghc-lib-parser ==9.12.*
-
-tests: True
-test-show-details: streaming

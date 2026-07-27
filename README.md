@@ -45,6 +45,20 @@ cd your-cabal-project && cabal build --dry-run   # writes plan.json
 hypha symbol async/Control.Concurrent.Async/concurrently
 ```
 
+## Development
+
+`cabal build` uses GHC 9.10.3, which the default `cabal.project` points at. The
+other supported compilers have their own project file, each with a committed
+freeze that cabal picks up automatically:
+
+```bash
+cabal build all --project-file=cabal.ghc-9.6.7.project
+cabal build all --project-file=cabal.ghc-9.12.4.project
+```
+
+Needs `cabal >= 3.4`: the project files are wired with `import:` rather than
+symlinks, so a Windows checkout works unchanged.
+
 ## Troubleshooting
 
 **Set a UTF-8 locale to *build* hypha.** GHC derives every `Handle`'s encoding

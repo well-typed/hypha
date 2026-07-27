@@ -1,11 +1,13 @@
 # GitLab CI for hypha — 3 GHC versions, build + test
 #
 # Each GHC version gets its own cabal project file + freeze file:
-#   cabal.ghc-<ver>.project       (with-compiler + packages + tests)
-#   cabal.ghc-<ver>.project.freeze (pinned dependency versions)
+#   cabal.ghc-<ver>.project        (imports cabal.project.common, adds
+#                                   with-compiler + the ghc-lib-parser pin)
+#   cabal.ghc-<ver>.project.freeze (pinned versions; cabal finds it as
+#                                   "<project-file>.freeze")
 #
-# The default cabal.project → cabal.ghc-9.10.3.project (symlink) for
-# local development. CI picks the right project file per job.
+# The default cabal.project imports the 9.10.3 pair for local development.
+# CI picks the right project file per job.
 #
 # Docker images: official haskell:* from Docker Hub.
 #   9.6.7  → slim (alias for slim-bullseye)

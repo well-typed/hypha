@@ -12,6 +12,10 @@ result-*
 .ghc.environment.*
 cabal.project.local
 cabal.project.local~
+# Written by a bare `cabal freeze`. Its pins stack on the per-GHC freeze that
+# cabal.project imports and break the solver once the two diverge. Pin with
+# `cabal freeze --project-file=cabal.ghc-<ver>.project` instead.
+cabal.project.freeze
 .HTF/
 .cache/
 tags

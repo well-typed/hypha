@@ -1,0 +1,9 @@
+-- Settings shared by every cabal.ghc-<ver>.project. Import it, don't build it:
+-- it has no with-compiler.
+packages: .
+
+allow-newer:
+  haddock-library:base
+
+tests: True
+test-show-details: streaming
