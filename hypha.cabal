@@ -121,6 +121,7 @@ library
     Hypha.Search.Cache
     Hypha.Search.PackageCache
     Hypha.Search.Fuzzy
+    Hypha.Source.Extensions
     Hypha.Source.Extract
     Hypha.Source.Locate
     Hypha.Source.Parser
@@ -237,6 +238,7 @@ test-suite hypha-tests
     Unit.InternalError
     Unit.LookupPrepLocal
     Unit.RepoCache
+    Unit.SourceExtensions
     Unit.SourceExtract
     Unit.SourceParser
   build-depends:
@@ -247,6 +249,7 @@ test-suite hypha-tests
     , containers
     , directory
     , filepath
+    , ghc-lib-parser
     , hypha
     , iproute
     , lucid2

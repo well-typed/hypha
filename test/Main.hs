@@ -40,6 +40,7 @@ import qualified Unit.HaddockExtract
 import qualified Unit.InternalError
 import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
+import qualified Unit.SourceExtensions
 import qualified Unit.SourceExtract
 import qualified Unit.SourceParser
 
@@ -93,6 +94,7 @@ allTests = testGroup "hypha"
   , Unit.InternalError.tests
   , Unit.LookupPrepLocal.tests
   , Unit.RepoCache.tests
+  , Unit.SourceExtensions.tests
   , Unit.SourceExtract.tests
   , Unit.SourceParser.tests
   ]
