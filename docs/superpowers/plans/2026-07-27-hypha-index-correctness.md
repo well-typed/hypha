@@ -3550,6 +3550,56 @@ git -c user.name='Alfredo Di Napoli' -c user.email='alfredo@well-typed.com' \
 
 ## Notes (filled in during execution)
 
-- Task 16 measurement — `ihParseFailures` after §1: _record here_
-- Task 17 implemented? _yes/no, with the reason_
-- Golden files refreshed: _list_
+**Task 16 — measurement (taken 2026-07-27, this project's 282-package plan):**
+
+```
+61531 rows, 282 packages      (58223 before this branch)
+0     aborted index passes
+159   modules skipped (parse failures), each reported with GHC's message
+0     cabal-module-list fallbacks
+0     path/header name mismatches
+```
+
+Taken from the indexer's stderr during a full re-index rather than through
+`doctor`. The `IndexHealth` blob and the `doctor` section were **not**
+implemented — the number §1.4 gates on was obtainable without them, and
+the remaining value is a UI convenience rather than a correctness fix.
+Worth doing; not done here.
+
+**Task 17 — not implemented, and the measurement says it is warranted.**
+159 failures is non-zero, and the top categories are CPP-shaped:
+
+```
+48  parse error on input `#'            (unexpanded directives)
+ 6  #  error This code isn't being built with GHC
+ 4  parse error on input `CALLCONV'     (undefined macro)
+ 5  #s'   4  #s1   5  parse error on input `$'
+```
+
+`CALLCONV` and `CURRENT_PACKAGE_KEY` are exactly the macros §7 proposes to
+synthesise from the build plan, so that work would recover a good share of
+these. Deferred rather than skipped: 159 modules out of ~62 000 rows is a
+tail, and the indexer now reports each one individually instead of aborting.
+
+**Golden files refreshed:** none. Every golden test passed unchanged
+throughout; the only test churn was fixture records gaining `deOrigin` and
+`scopeSearchRows`/`hackageLink` moving to typed inputs.
+
+**Deviations from the plan, all forced by what the libraries actually do:**
+
+1. `getOptions` validates `LANGUAGE` names against `mkParserOpts`'
+   supported list and *throws* on anything absent — with the `[]` the old
+   code passed, even `{-# LANGUAGE CPP #-}` aborts. It also returns
+   diagnostics. Hence `scanPragmas`/`PragmaScan` in `IO`, and
+   `peDiagnostics` on `ParseError`.
+2. `RecordPuns` is the alias and `NamedFieldPuns` the extension, not the
+   other way round as the plan had it.
+3. Task 8's move became two modules (`Search.Index` types,
+   `Search.Indexer` building) because one module for both is an import
+   cycle with `Search.Cache`.
+4. `resolveComponent` is a fixpoint, not the memoised recursion the plan
+   sketched: the recursive version was unusable on real packages.
+5. Two bugs found by dogfooding, not by the planned tests: resolution
+   returned the first hop rather than the definition (`Data.Map` →
+   `Data.Map.Lazy` → `Data.Map.Internal`), and `hypha source` still swept.
+   Both now have tests (`Fixture.Facade`, and the four CLI cases).
