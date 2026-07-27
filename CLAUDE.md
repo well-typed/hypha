@@ -12,6 +12,32 @@
     * `docs/superpowers/plans/2026-05-18-hypha-plan-a-cli-alpha.md`
     * `docs/superpowers/plans/2026-05-18-hypha-plan-b-server.md`
 
+## Building Against Multiple GHCs
+
+Each supported compiler has its own project file at the repo root:
+
+| File | Purpose |
+|------|---------|
+| `cabal.project.common` | Shared settings. Imported, never built — it has no `with-compiler`. |
+| `cabal.ghc-<ver>.project` | Imports the common file, adds `with-compiler` + the `ghc-lib-parser` pin. |
+| `cabal.ghc-<ver>.project.freeze` | Committed pins. Cabal finds each as `<project-file>.freeze`. |
+| `cabal.project` | The local default: imports the GHC 9.10.3 pair. |
+
+```bash
+cabal build all                                          # default: GHC 9.10.3
+cabal build all --project-file=cabal.ghc-9.12.4.project  # any other GHC
+cabal freeze   --project-file=cabal.ghc-9.12.4.project   # regenerate its pins
+```
+
+Needs `cabal >= 3.4` for `import:`. Bare `cabal freeze` writes the gitignored
+`cabal.project.freeze`, whose pins stack on the imported ones and break the
+solver once the two diverge — always pass `--project-file`.
+
+**Never commit a symlink.** Windows checkouts turn them into regular files
+containing the target path, which is how `cabal.project` came to contain the
+literal text `cabal.ghc-9.10.3.project` and broke every Windows build (issue
+#10). Use cabal `import:` for project files, a real stub for prose.
+
 ## Multi-Agent Workflow
 
 Up to 3 agents can work concurrently, each in its own git worktree:
