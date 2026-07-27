@@ -22,6 +22,8 @@ module Hypha.Search.Indexer
     -- * Component discovery
   , componentsForUnit
   , componentModules
+  , packageSources
+  , loadModuleSources
   , enumModulesIn
   , chooseSourceRoots
   ) where
@@ -364,8 +366,16 @@ componentModules plan pid kind srcDirs =
       walked <- enumModulesIn srcDirs
       load [ (m, Exposed) | m <- walked ]
   where
-    load entries = catMaybes <$> mapM loadOne entries
+    load = loadModuleSources srcDirs
 
+-- | Read each named module from the first source dir that has it.
+--
+-- Modules the stanza names but whose file we cannot find are dropped: a
+-- @.hsc@ or @.chs@ source we do not preprocess is a real case, and it is
+-- the module's rows we lose, not the component's.
+loadModuleSources :: [FilePath] -> [(Text, Visibility)] -> IO [ModuleSource]
+loadModuleSources srcDirs = fmap catMaybes . mapM loadOne
+  where
     loadOne (modPath, vis) = do
       mFile <- firstExistingModule srcDirs modPath
       case mFile of
@@ -384,6 +394,27 @@ componentModules plan pid kind srcDirs =
       let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
       ok <- Dir.doesFileExist candidate
       if ok then pure (Just candidate) else firstExistingModule rs modPath
+
+-- | Every library component of a package, read straight from its cabal
+-- file without a build plan.
+--
+-- The CLI's @hypha source@ has a package directory and no plan, but still
+-- needs the component's module list to resolve a re-export: without it the
+-- only option is the package-wide sweep, which is a guess.
+packageSources :: FilePath -> IO [(Comp.ComponentInfo, [ModuleSource])]
+packageSources pkgRoot = do
+  mCabal <- Comp.findCabalFile pkgRoot
+  case mCabal of
+    Nothing    -> pure []
+    Just cabal -> do
+      comps <- Comp.parseLibComponents cabal pkgRoot
+      mapM withSources comps
+  where
+    withSources ci = do
+      srcs <- loadModuleSources (Comp.ciHsSourceDirs ci)
+        ([ (m, Exposed)  | m <- Comp.ciExposedModules ci ]
+           ++ [ (m, Internal) | m <- Comp.ciOtherModules ci ])
+      pure (ci, srcs)
 
 -- | The parsed cabal component matching a kind, when we have one.
 componentInfoFor

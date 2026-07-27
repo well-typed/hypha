@@ -16,6 +16,11 @@ import Lucid (renderText)
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
 import Hypha.Search.Collapse (SearchResult (..), SymbolResult (..))
+import Hypha.Search.Reexport (DefinitionSite (..))
+import Hypha.Server.ModuleDoc (SymbolCardData (..))
+import Hypha.Server.Ui.Doc (symbolCard)
+import Hypha.Source.Locate (Provenance (..))
+import Hypha.Source.Parser (DeclKind (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
@@ -39,6 +44,7 @@ tests = testGroup "Unit.Server"
   , testGroup "App.scopeSearchRows" scopeSearchRowsTests
   , testGroup "Tree.splitByOrigin" splitByOriginTests
   , testGroup "Tree.hackageLink" hackageLinkTests
+  , testGroup "Doc.symbolCard" symbolCardTests
   , testGroup "Search.highlightTokens" highlightTokensTests
   ]
 
@@ -231,3 +237,66 @@ line3|] :: ()))
         Left e  -> briefException e @?= "divide by zero"
         Right _ -> assertFailure "division by zero must throw"
   ]
+
+symbolCardTests :: [TestTree]
+symbolCardTests =
+  [ testCase "a re-exported symbol names both modules" $ do
+      let html = renderCard SymbolCardData
+            { scdSignature  = Just "insertWith :: Ord k => k -> a"
+            , scdHaddock    = Nothing
+            , scdModule     = "Data.Map.Strict.Internal"
+            , scdRequested  = "Data.Map.Strict"
+            , scdProvenance = Resolved (DefinedIn (ModulePath "Data.Map.Strict.Internal"))
+            , scdLine       = Just 552
+            , scdKind       = Just DkFunction
+            }
+      assertBool "mentions the presentation module"
+        ("Data.Map.Strict" `Text.isInfixOf` html)
+      assertBool "mentions the definition module"
+        ("Data.Map.Strict.Internal" `Text.isInfixOf` html)
+      assertBool "says it is a re-export"
+        ("Re-exported by" `Text.isInfixOf` html)
+
+  , testCase "a locally defined symbol does not claim a re-export" $ do
+      let html = renderCard SymbolCardData
+            { scdSignature  = Just "insertWith :: Ord k => k -> a"
+            , scdHaddock    = Nothing
+            , scdModule     = "Data.Map.Internal"
+            , scdRequested  = "Data.Map.Internal"
+            , scdProvenance = Resolved DefinedHere
+            , scdLine       = Just 552
+            , scdKind       = Just DkFunction
+            }
+      assertBool "no re-export line"
+        (not ("Re-exported by" `Text.isInfixOf` html))
+
+  , testCase "a missing signature says so instead of rendering blank" $ do
+      let html = renderCard SymbolCardData
+            { scdSignature  = Nothing
+            , scdHaddock    = Nothing
+            , scdModule     = "Data.Map.Internal"
+            , scdRequested  = "Data.Map.Internal"
+            , scdProvenance = Resolved DefinedHere
+            , scdLine       = Nothing
+            , scdKind       = Nothing
+            }
+      assertBool "explains the absence"
+        ("no signature" `Text.isInfixOf` Text.toLower html)
+
+  , testCase "a swept location is labelled as a guess" $ do
+      -- Before this, a swept location rendered identically to a resolved
+      -- one -- which is how Data/Set/Internal.hs came to look like fact.
+      let html = renderCard SymbolCardData
+            { scdSignature  = Just "balanceL :: a"
+            , scdHaddock    = Nothing
+            , scdModule     = "Data.Set.Internal"
+            , scdRequested  = "Data.Map.Internal"
+            , scdProvenance = GuessedBySweep "package cabal could not be parsed"
+            , scdLine       = Just 1746
+            , scdKind       = Just DkFunction
+            }
+      assertBool "surfaces the uncertainty"
+        ("best guess" `Text.isInfixOf` Text.toLower html)
+  ]
+  where
+    renderCard = LText.toStrict . renderText . symbolCard "insertWith" "containers"

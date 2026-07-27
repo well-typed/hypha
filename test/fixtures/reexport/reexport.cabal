@@ -6,6 +6,7 @@ synopsis:      Fixture component for hypha's index and re-export tests
 library
   hs-source-dirs:     src
   exposed-modules:    Fixture.Wrapper
+                    , Fixture.Facade
                     , Fixture.Strict
                     , Fixture.Other
                     , Fixture.Internal

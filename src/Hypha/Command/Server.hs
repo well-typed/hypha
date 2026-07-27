@@ -29,7 +29,6 @@ import Control.Monad.Trans.Maybe (MaybeT (..), hoistMaybe, runMaybeT)
 import Data.ByteString.Lazy qualified as LBS
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
-import Data.Maybe
 import Data.String qualified as String
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TIO
@@ -58,7 +57,7 @@ import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.BuildPlan
 import Hypha.Types.ComponentName
 import Hypha.Types.Doc (DocText (..))
-import Hypha.Types.SymbolPath (ModulePath (..))
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 import Hypha.Types.PackageId
 import Network.Wai.Handler.Warp ( defaultSettings, runSettings, setHost, setPort )
 import System.Directory qualified as Dir
@@ -232,46 +231,37 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
     , App.scSymbolLookup = \pkgT modT symT -> do
         mDirs <- resolveComponentDirs plan resolver pkgT
         case mDirs of
-          Nothing                -> pure Nothing
-          Just (parentDir, dirs) -> do
-            mFile <- Locate.findModuleFileIn dirs modT
-            case mFile of
+          Nothing         -> pure Nothing
+          Just (_, dirs)  -> do
+            -- Ask the resolver where the symbol is defined rather than
+            -- inferring it from an empty signature.  The old heuristic
+            -- conflated three different situations -- the module
+            -- re-exports the symbol, the symbol has no type signature,
+            -- the module failed to parse -- into one branch, and then
+            -- relabelled the card with a module name derived from a file
+            -- path.
+            sources <- componentSourcesFor plan resolver pkgT dirs
+            let langs = componentLanguageSettings plan pkgT
+            mLd <- Locate.locateDefinitionInComponent langs sources
+                     (ModulePath modT) (SymbolName symT)
+            case mLd of
               Nothing -> pure Nothing
-              Just f  -> do
-                src <- TIO.readFile f
-                let info0 = Extract.extractSymbolInfo src symT
-                -- Re-exports define the symbol elsewhere in the same
-                -- package; locateSymbolDefinitionInDir sweeps the
-                -- tree ranked by module-path prefix.  When the
-                -- module we landed on doesn't actually contain the
-                -- binding (sig/haddock came back empty), re-extract
-                -- from the file that does so the symbol card isn't
-                -- a blank cream box.  We prefer the signature line
-                -- as the source anchor whenever it is available: it
-                -- sits above any CPP @#ifdef@ branches, so it is
-                -- the most faithful target for symbols whose body
-                -- is fanned out across platform-specific branches.
-                mLoc <- Locate.locateSymbolDefinitionInDir parentDir modT symT
-                (info, resolvedMod, lineOverride) <-
-                  case (Extract.siSignature info0, mLoc) of
-                    (Nothing, Just loc) | Locate.slPath loc /= f -> do
-                      src' <- TIO.readFile (Locate.slPath loc)
-                      let info' = Extract.extractSymbolInfo src' symT
-                          modT' = modulePathFromFile parentDir (Locate.slPath loc)
-                      pure (info', modT', Just (Locate.slLine loc))
-                    _ -> pure (info0, modT, Nothing)
-                let sig = fromMaybe "" (Extract.siSignature info)
-                    hd  = maybe "" unDocText (Extract.siHaddock  info)
-                    mLine = case (Extract.siSigLine info, Extract.siLine info, lineOverride) of
-                      (Just n, _, _)        -> Just n
-                      (Nothing, Just n, _)  -> Just n
-                      (Nothing, Nothing, l) -> l
+              Just ld -> do
+                src <- TIO.readFile (Locate.slPath (Locate.ldLocation ld))
+                let info = Extract.extractSymbolInfo src symT
+                    mLine = case (Extract.siSigLine info, Extract.siLine info) of
+                      (Just n, _)       -> Just n
+                      (Nothing, Just n) -> Just n
+                      (Nothing, Nothing) ->
+                        Just (Locate.slLine (Locate.ldLocation ld))
                 pure (Just SymbolCardData
-                  { scdSignature = sig
-                  , scdHaddock   = hd
-                  , scdModule    = resolvedMod
-                  , scdLine      = mLine
-                  , scdKind      = Extract.siKind info
+                  { scdSignature  = Extract.siSignature info
+                  , scdHaddock    = unDocText <$> Extract.siHaddock info
+                  , scdModule     = unModulePath (Locate.ldModule ld)
+                  , scdRequested  = modT
+                  , scdProvenance = Locate.ldProvenance ld
+                  , scdLine       = mLine
+                  , scdKind       = Extract.siKind info
                   })
     , App.scHaddockFile  = \pkgVer segments -> runMaybeT $ do
         -- Resolve through the full chain (hypha cache → local dist-dir
@@ -473,32 +463,6 @@ componentNames plan pid =
          [ tag (componentKey pkgT (Comp.ciKind c)) | c <- puLibComponents pu ]
        _ -> [tag pkgT]
 
--- | Recover a module path from an absolute file path resolved inside a
--- package source tree.  Strips the package root, common @hs-source-dirs@
--- prefixes ("src", "library", "lib") and the @.hs@ suffix.
-modulePathFromFile :: FilePath -> FilePath -> Text
-modulePathFromFile root path =
-  let rel0  = case Text.stripPrefix (Text.pack root) (Text.pack path) of
-                Just r  -> Text.dropWhile (== '/') r
-                Nothing -> Text.pack path
-      rel   = stripDirPrefix rel0
-      withoutHs = case Text.stripSuffix ".hs" rel of
-                    Just r  -> r
-                    Nothing -> rel
-  in Text.replace "/" "." withoutHs
-  where
-    stripDirPrefix t = case dropPrefix "src/" t of
-      Just r  -> r
-      Nothing -> case dropPrefix "library/" t of
-        Just r  -> r
-        Nothing -> case dropPrefix "lib/" t of
-          Just r  -> r
-          Nothing -> t
-    dropPrefix p = Text.stripPrefix (Text.pack p)
-
-
--- | Project name (best-effort).  Uses the first local package, or a
--- placeholder when none are present.
 projectName :: BuildPlan -> Text
 projectName plan =
   case filter puIsLocal (Map.elems (bpUnits plan)) of

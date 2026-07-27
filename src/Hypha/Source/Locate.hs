@@ -4,15 +4,21 @@ module Hypha.Source.Locate
   ( listExportedSymbols
   , locateSymbolDefinition
   , locateSymbolDefinitionInDir
+  , locateDefinitionInComponent
+  , LocatedDefinition (..)
+  , Provenance (..)
   , findModuleFile
   , findModuleFileIn
   , SourceLocation (..)
     -- * Testing
   , parseExports
   , modulePathToFile
+  , scanFile
   ) where
 
 import Control.Monad (filterM)
+import Data.List (sortOn)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TIO
@@ -20,8 +26,15 @@ import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type     (BuildEnv (..))
+import Hypha.Search.Index      (ModuleSource (..))
+import Hypha.Search.Reexport   (DefinitionSite (..), Resolution (..))
+import qualified Hypha.Search.Reexport as Reexport
+import qualified Hypha.Source.Extensions as Extensions
+import qualified Hypha.Source.Interface as Interface
 import qualified Hypha.Source.Parser as Parser
 import Hypha.Types.PackageId   (PackageId (..))
+import Hypha.Types.SymbolPath  (ModulePath (..), SymbolName (..))
+import System.IO (hPutStrLn, stderr)
 
 -- | Location of a symbol definition in a source file.
 data SourceLocation = SourceLocation
@@ -265,10 +278,86 @@ locateSymbolDefinitionInDir d modPath sym = do
   case mFile of
     Nothing -> findInTree d modPath sym
     Just f  -> do
-      mLoc <- scanFile sym f
-      case mLoc of
-        Just loc -> pure (Just loc)
-        Nothing  -> findInTree d modPath sym
+      scanned <- scanFileE sym f
+      case scanned of
+        Left e -> do
+          -- Not \"not here\": we could not read the module at all.  Say so,
+          -- then sweep, so a wrong answer is at least an explained one.
+          hPutStrLn stderr $
+            "hypha: " <> f <> " could not be parsed: "
+              <> Text.unpack (Parser.parseErrorMessage e)
+          findInTree d modPath sym
+        Right (Just loc) -> pure (Just loc)
+        Right Nothing    -> findInTree d modPath sym
+
+-- | 'scanFileE' with the symbol name typed, for callers outside this
+-- module.
+scanFile
+  :: SymbolName -> FilePath -> IO (Either Parser.ParseError (Maybe SourceLocation))
+scanFile = scanFileE . unSymbolName
+
+-- | Where a symbol is declared, and how confident we are about it.
+data LocatedDefinition = LocatedDefinition
+  { ldLocation   :: !SourceLocation
+  , ldModule     :: !ModulePath
+  , ldProvenance :: !Provenance
+  }
+  deriving stock (Show, Eq)
+
+-- | The @GuessedBySweep@ arm exists so a fallback can never be mistaken
+-- for a resolution.  Its predecessor returned the same 'SourceLocation'
+-- either way, which is how a swept file came to be presented as fact.
+data Provenance
+  = Resolved !DefinitionSite
+  | GuessedBySweep !Text          -- ^ why resolution was unavailable
+  deriving stock (Show, Eq)
+
+-- | Locate a symbol given every module of its component.
+--
+-- Resolution, not sweeping: with the component in hand there is nothing to
+-- guess.  A symbol the asking module re-exports is followed to its
+-- definition; a symbol nothing in the component declares is reported
+-- absent rather than approximated by the first same-named binding
+-- elsewhere in the package.
+locateDefinitionInComponent
+  :: Extensions.LanguageSettings
+  -> [ModuleSource]
+  -> ModulePath
+  -> SymbolName
+  -> IO (Maybe LocatedDefinition)
+locateDefinitionInComponent langs sources asking sym = do
+  let parsed = [ (ms, Interface.parseInterface langs (msPath ms) (msContent ms))
+               | ms <- sources
+               ]
+  mapM_ reportParseFailure [ (ms, e) | (ms, Left e) <- parsed ]
+  let ifaces     = [ i | (_, Right i) <- parsed ]
+      resolution = Reexport.resolveComponent ifaces
+  case Map.lookup (asking, sym) resolution of
+    Nothing -> do
+      hPutStrLn stderr $
+        "hypha: " <> Text.unpack (unModulePath asking) <> " does not export "
+          <> Text.unpack (unSymbolName sym)
+      pure Nothing
+    Just res -> do
+      let target = Reexport.definitionModule asking (resSite res)
+      case [ ms | (ms, Right i) <- parsed, Interface.miName i == target ] of
+        [] -> pure Nothing   -- DefinedOutside: another index entry's symbol
+        (ms : _) -> do
+          scanned <- scanFileE (unSymbolName sym) (msPath ms)
+          case scanned of
+            Left e -> do
+              reportParseFailure (ms, e)
+              pure Nothing
+            Right Nothing    -> pure Nothing
+            Right (Just loc) -> pure (Just LocatedDefinition
+              { ldLocation   = loc
+              , ldModule     = target
+              , ldProvenance = Resolved (resSite res)
+              })
+  where
+    reportParseFailure (ms, e) = hPutStrLn stderr $
+      "hypha: " <> msPath ms <> " could not be parsed: "
+        <> Text.unpack (Parser.parseErrorMessage e)
 
 -- | Walk every @.hs@ file under @root@ (skipping build/test dirs) and
 -- return the first hit whose top-level binding or type signature matches
@@ -278,54 +367,36 @@ locateSymbolDefinitionInDir d modPath sym = do
 findInTree :: FilePath -> Text -> Text -> IO (Maybe SourceLocation)
 findInTree root modPath sym = do
   hsFiles <- enumerateHs root 6
-  let prefix  = Text.unpack (Text.replace "." "/" (modulePrefix modPath))
-      ranked  = sortByPrefix prefix hsFiles
-  go ranked
+  go (rankBySharedSuffix modPath hsFiles)
   where
     go []     = pure Nothing
     go (f:fs) = do
-      m <- scanFile sym f
-      case m of
-        Just loc -> pure (Just loc)
-        Nothing  -> go fs
+      scanned <- scanFileE sym f
+      case scanned of
+        Right (Just loc) -> pure (Just loc)
+        _                -> go fs
 
--- | Drop the last dotted segment of a module path so re-exports prefer
--- siblings before unrelated trees: e.g. @Data.Map.Strict@ → @Data.Map@,
--- which scores @Data/Map/Internal.hs@ above @Data/IntMap/Internal.hs@.
-modulePrefix :: Text -> Text
-modulePrefix m = case Text.breakOnEnd "." m of
-  (p, _) | not (Text.null p) -> Text.dropEnd 1 p
-  _                          -> m
-
--- | Sort file paths by how many leading characters they share with the
--- supplied prefix (descending).  Stable on ties.
-sortByPrefix :: String -> [FilePath] -> [FilePath]
-sortByPrefix prefix = map snd . sortBy (\(a,_) (b,_) -> compare b a) . map score
+-- | Rank candidate files by how much of the module's path they share,
+-- counted in /segments/ from the end.
+--
+-- @Data.Map.Internal@ shares three trailing segments with
+-- @…\/src\/Data\/Map\/Internal.hs@ and one with @…\/src\/Data\/Set\/Internal.hs@.
+-- The predecessor counted shared leading /characters/ between a dotted
+-- module prefix and a slashed path, which stopped discriminating after the
+-- first segment and let the sweep answer @Data.Map.Internal.balanceL@ with
+-- @Data\/Set\/Internal.hs@.
+rankBySharedSuffix :: Text -> [FilePath] -> [FilePath]
+rankBySharedSuffix modPath = sortOn (negate . shared)
   where
-    score fp = (matchLen prefix fp, fp)
-    matchLen :: String -> FilePath -> Int
-    matchLen p fp =
-      let canonical = dropToPrefix p fp
-      in commonLen p canonical
-    -- Trim the path so it begins at the first occurrence of the prefix's
-    -- leading char; otherwise leading "src/" wrecks the comparison.
-    dropToPrefix :: String -> FilePath -> FilePath
-    dropToPrefix []      fp = fp
-    dropToPrefix (c : _) fp = dropWhile (/= c) fp
-    commonLen :: String -> String -> Int
-    commonLen []     _      = 0
-    commonLen _      []     = 0
-    commonLen (a:as) (b:bs)
-      | a == b    = 1 + commonLen as bs
-      | otherwise = 0
+    wanted = reverse (Text.splitOn "." modPath)
 
-sortBy :: (a -> a -> Ordering) -> [a] -> [a]
-sortBy cmp = foldr insert []
-  where
-    insert x []     = [x]
-    insert x (y:ys) = case cmp x y of
-      GT -> y : insert x ys
-      _  -> x : y : ys
+    shared fp =
+      let segs = reverse (Text.splitOn "/" (Text.pack (dropDotHs fp)))
+      in length (takeWhile id (zipWith (==) wanted segs))
+
+    dropDotHs fp = case Text.stripSuffix ".hs" (Text.pack fp) of
+      Just t  -> Text.unpack t
+      Nothing -> fp
 
 -- | Bounded recursive enumeration of every @.hs@ file under @root@.
 -- Skips hidden directories and conventional non-library trees so the
@@ -366,12 +437,21 @@ enumerateHs dir depth = do
 -- line-grep missed all resolve correctly.  Definition line wins over
 -- signature line when both are present (matches the historical
 -- semantics: callers prefer the binding body for source snippets).
-scanFile :: Text -> FilePath -> IO (Maybe SourceLocation)
-scanFile sym f = do
+-- | Parse-tree lookup of one symbol in one file.
+--
+-- The three outcomes are distinct on purpose.  @Left@ means the module
+-- could not be read; @Right Nothing@ means it was read and does not
+-- declare the symbol; @Right (Just loc)@ means it does.  Collapsing the
+-- first two into @Nothing@ — which is what this function used to do —
+-- turns \"unreadable module\" into \"look somewhere else\", and somewhere
+-- else is the wrong answer: it is how @Data.Map.Internal.balanceL@ came to
+-- report @Data\/Set\/Internal.hs@.
+scanFileE :: Text -> FilePath -> IO (Either Parser.ParseError (Maybe SourceLocation))
+scanFileE sym f = do
   src <- TIO.readFile f
   pure $ case Parser.parseDecls f src of
-    Left _      -> Nothing
-    Right decls -> do
+    Left e      -> Left e
+    Right decls -> Right $ do
       d <- Parser.findDecl sym decls
       ln <- case Parser.declDefLine d of
               Just l  -> Just l

@@ -28,6 +28,7 @@ import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 component :: IO [ModuleInterface]
 component = mapM load
   [ "test/fixtures/reexport/src/Fixture/Internal.hs"
+  , "test/fixtures/reexport/src/Fixture/Facade.hs"
   , "test/fixtures/reexport/src/Fixture/Wrapper.hs"
   , "test/fixtures/reexport/src/Fixture/Strict.hs"
   , "test/fixtures/reexport/src/Fixture/StrictInternal.hs"
@@ -76,6 +77,15 @@ tests = testGroup "Unit.SearchReexport"
       s2 <- siteOf r (ModulePath "Fixture.Strict",  SymbolName "insertBag")
       s1 @?= DefinedIn (ModulePath "Fixture.Internal")
       s2 @?= DefinedIn (ModulePath "Fixture.StrictInternal")
+
+  , testCase "a two-hop chain resolves to the definition, not the first hop" $ do
+      -- Fixture.Facade re-exports Fixture.Wrapper's insertBag, which
+      -- Fixture.Wrapper re-exports from Fixture.Internal.  Stopping at the
+      -- first hop names a module with no declaration to read, which is how
+      -- @hypha source containers/Data.Map/insertWith@ came back empty.
+      r <- resolveComponent <$> component
+      s <- siteOf r (ModulePath "Fixture.Facade", SymbolName "insertBag")
+      s @?= DefinedIn (ModulePath "Fixture.Internal")
 
   , testCase "module re-export form contributes the target's exports" $ do
       r <- resolveComponent <$> component

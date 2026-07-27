@@ -24,7 +24,14 @@ import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
-import Hypha.Source.Locate ( SourceLocation (..), findModuleFile, locateSymbolDefinitionInDir )
+import Hypha.Project.Components qualified as Comp
+import Hypha.Search.Index (ModuleSource (..))
+import Hypha.Search.Indexer qualified as Indexer
+import Hypha.Source.Locate
+  ( LocatedDefinition (..), SourceLocation (..), findModuleFile
+  , locateDefinitionInComponent, locateSymbolDefinitionInDir )
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
+import System.IO (hPutStrLn, stderr)
 import Hypha.Types.BuildPlan (BuildPlan (..))
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
@@ -110,10 +117,36 @@ sourceFromDirE pid srcDir modPath mSym = do
 
 -- | When a symbol is provided, locate its definition inside the module;
 -- otherwise pin to line 1 of the resolved module file.
+--
+-- With a parsable cabal file we resolve the symbol through the component's
+-- exports, which is the only way to answer correctly for a re-export: the
+-- module the user named does not declare the symbol, and the
+-- package-wide sweep that used to fill that gap picks whichever
+-- same-named binding it enumerates first — @Data.Map.Strict.insertWith@
+-- came back as @Data\/IntMap\/Internal.hs@.  The sweep survives only for
+-- packages whose cabal we cannot read, and says so.
 locateSourceLoc
   :: FilePath -> FilePath -> Text -> Maybe Text -> IO (Maybe SourceLocation)
-locateSourceLoc filePath _      _       Nothing    = pure (Just (SourceLocation filePath 1))
-locateSourceLoc _        srcDir modPath (Just sym) = locateSymbolDefinitionInDir srcDir modPath sym
+locateSourceLoc filePath _ _ Nothing = pure (Just (SourceLocation filePath 1))
+locateSourceLoc _ srcDir modPath (Just sym) = do
+  comps <- Indexer.packageSources srcDir
+  let matching =
+        [ (Comp.ciLanguageSettings ci, sources)
+        | (ci, sources) <- comps
+        , any ((== ModulePath modPath) . msDeclaredName) sources
+        ]
+  case matching of
+    ((langs, sources) : _) -> do
+      mLd <- locateDefinitionInComponent langs sources
+               (ModulePath modPath) (SymbolName sym)
+      case mLd of
+        Just ld -> pure (Just (ldLocation ld))
+        Nothing -> pure Nothing
+    [] -> do
+      hPutStrLn stderr $
+        "hypha: no cabal component of " <> srcDir <> " lists "
+          <> Text.unpack modPath <> "; falling back to a package scan"
+      locateSymbolDefinitionInDir srcDir modPath sym
 
 -- | Lift a 'Maybe' into 'ExceptT' with a typed error on 'Nothing'.
 liftMaybe :: Monad m => HyphaError -> Maybe a -> ExceptT HyphaError m a

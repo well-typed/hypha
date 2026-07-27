@@ -31,6 +31,7 @@ sourcesFor = mapM $ \(fp, declared, vis) -> do
 fixtureSources :: IO [ModuleSource]
 fixtureSources = sourcesFor
   [ ("test/fixtures/reexport/src/Fixture/Internal.hs",       "Fixture.Internal",       Exposed)
+  , ("test/fixtures/reexport/src/Fixture/Facade.hs",         "Fixture.Facade",         Exposed)
   , ("test/fixtures/reexport/src/Fixture/Wrapper.hs",        "Fixture.Wrapper",        Exposed)
   , ("test/fixtures/reexport/src/Fixture/Strict.hs",         "Fixture.Strict",         Exposed)
   , ("test/fixtures/reexport/src/Fixture/StrictInternal.hs", "Fixture.StrictInternal", Internal)

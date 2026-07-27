@@ -101,9 +101,23 @@ resolveComponent ifaces = Map.fromList
                 ps  -> rank i ps
           in case ranked of
                (winner : rejected) -> Resolution
-                 (DefinedIn winner)
+                 (throughTo visiting' winner n)
                  (maybe Unambiguous ResolvedAmongst (NE.nonEmpty rejected))
                [] -> Resolution (outsideFor i n) Unambiguous
+
+    -- Follow the chain to the module that actually declares the name.
+    -- Stopping at the first hop names a module that only passes the symbol
+    -- along: @Data.Map@ re-exports @Data.Map.Lazy@, which re-exports
+    -- @Data.Map.Internal@, and only the last of those has a declaration to
+    -- read a signature or a source line from.
+    throughTo visiting winner n = case Map.lookup winner byName of
+      Nothing -> DefinedIn winner
+      Just target
+        | declares target n -> DefinedIn winner
+        | otherwise -> case resSite (resolve visiting target n) of
+            DefinedIn m      -> DefinedIn m
+            DefinedHere      -> DefinedIn winner
+            DefinedOutside m -> DefinedOutside m
 
     viable visiting n ms =
       [ m

@@ -56,7 +56,7 @@ tests = testGroup "Unit.SearchIndexBuild"
   , testCase "a re-exported symbol gets a row on the wrapper too" $ do
       ci <- fixture
       let mods = sort (map (unModulePath . rowModule) (rowsFor ci "insertBag"))
-      mods @?= [ "Fixture.Internal", "Fixture.Strict"
+      mods @?= [ "Fixture.Facade", "Fixture.Internal", "Fixture.Strict"
                , "Fixture.StrictInternal", "Fixture.Wrapper" ]
 
   , testCase "each row's definition module is the real one" $ do
@@ -65,6 +65,8 @@ tests = testGroup "Unit.SearchIndexBuild"
             [ rowDefModule r
             | r <- rowsFor ci "insertBag", rowModule r == ModulePath m ]
       defOf "Fixture.Wrapper"        @?= [ModulePath "Fixture.Internal"]
+      -- Two hops from the definition, and still the definition.
+      defOf "Fixture.Facade"         @?= [ModulePath "Fixture.Internal"]
       defOf "Fixture.Strict"         @?= [ModulePath "Fixture.StrictInternal"]
       defOf "Fixture.Internal"       @?= [ModulePath "Fixture.Internal"]
       defOf "Fixture.StrictInternal" @?= [ModulePath "Fixture.StrictInternal"]
