@@ -245,10 +245,14 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
             -- the module failed to parse -- into one branch, and then
             -- relabelled the card with a module name derived from a file
             -- path.
-            sources <- componentSourcesFor plan resolver pkgT dirs
-            let langs = componentLanguageSettings plan pkgT
-            mLd <- Locate.locateDefinitionInComponent langs sources
-                     (ModulePath modT) (SymbolName symT)
+            sources  <- componentSourcesFor plan resolver pkgT dirs
+            imported <- importedSourcesFor plan resolver pkgT sources
+                          (ModulePath modT)
+            let langs   = componentLanguageSettings plan pkgT
+                cn      = parseComponentName pkgT
+                compKey = componentKeyOf (cnPackage cn) (cnKind cn)
+            mLd <- Locate.locateDefinitionInComponent langs compKey sources
+                     imported (ModulePath modT) (SymbolName symT)
             case mLd of
               Nothing -> pure Nothing
               Just ld -> do
@@ -263,6 +267,7 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
                   { scdSignature  = Extract.siSignature info
                   , scdHaddock    = unDocText <$> Extract.siHaddock info
                   , scdModule     = unModulePath (Locate.ldModule ld)
+                  , scdComponent  = unComponentKey (Locate.ldComponent ld)
                   , scdRequested  = modT
                   , scdProvenance = Locate.ldProvenance ld
                   , scdLine       = mLine

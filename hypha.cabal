@@ -257,6 +257,7 @@ test-suite hypha-tests
     Util.Row
     Unit.SourceInterface
     Unit.SourceExtract
+    Unit.SourceLocate
     Unit.SourceParser
   build-depends:
     , aeson

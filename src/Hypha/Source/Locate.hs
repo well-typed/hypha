@@ -18,6 +18,7 @@ module Hypha.Source.Locate
 
 import Control.Monad (filterM)
 import Data.List (sortOn)
+import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -32,6 +33,7 @@ import qualified Hypha.Search.Reexport as Reexport
 import qualified Hypha.Source.Extensions as Extensions
 import qualified Hypha.Source.Interface as Interface
 import qualified Hypha.Source.Parser as Parser
+import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId   (PackageId (..))
 import Hypha.Types.SymbolPath  (ModulePath (..), SymbolName (..))
 import System.IO (hPutStrLn, stderr)
@@ -300,6 +302,10 @@ scanFile = scanFileE . unSymbolName
 data LocatedDefinition = LocatedDefinition
   { ldLocation   :: !SourceLocation
   , ldModule     :: !ModulePath
+  , ldComponent  :: !ComponentKey
+    -- ^ Which component the definition is in.  A re-export can cross a
+    -- package boundary, and a card reporting only the module would send the
+    -- reader to a module the page's package does not have.
   , ldProvenance :: !Provenance
   }
   deriving stock (Show, Eq)
@@ -312,20 +318,28 @@ data Provenance
   | GuessedBySweep !Text          -- ^ why resolution was unavailable
   deriving stock (Show, Eq)
 
--- | Locate a symbol given every module of its component.
+-- | Locate a symbol given every module of its component, plus the modules
+-- of other components its exports resolve into.
 --
 -- Resolution, not sweeping: with the component in hand there is nothing to
 -- guess.  A symbol the asking module re-exports is followed to its
--- definition; a symbol nothing in the component declares is reported
--- absent rather than approximated by the first same-named binding
+-- definition — including into a dependency, when the caller supplied that
+-- module's source — and a symbol whose definition we cannot reach is
+-- reported absent rather than approximated by the first same-named binding
 -- elsewhere in the package.
+--
+-- The component key is a parameter because the result has to name the
+-- component the definition is in, and deriving that from a module path is
+-- exactly the guess this module exists to remove.
 locateDefinitionInComponent
   :: Extensions.LanguageSettings
+  -> ComponentKey                                  -- ^ the asking component
   -> [ModuleSource]
+  -> Map ModulePath (ComponentKey, ModuleSource)   -- ^ imported modules
   -> ModulePath
   -> SymbolName
   -> IO (Maybe LocatedDefinition)
-locateDefinitionInComponent langs sources asking sym = do
+locateDefinitionInComponent langs ownComponent sources imported asking sym = do
   parsed <- mapM parseOne sources
   mapM_ reportParseFailure [ (ms, e) | (ms, Left e) <- parsed ]
   let ifaces     = [ i | (_, Right i) <- parsed ]
@@ -336,23 +350,36 @@ locateDefinitionInComponent langs sources asking sym = do
         "hypha: " <> Text.unpack (unModulePath asking) <> " does not export "
           <> Text.unpack (unSymbolName sym)
       pure Nothing
-    Just res -> do
-      let target = Reexport.definitionModule asking (resSite res)
-      case [ ms | (ms, Right i) <- parsed, Interface.miName i == target ] of
-        [] -> pure Nothing   -- DefinedOutside: another index entry's symbol
-        (ms : _) -> do
-          scanned <- scanFileE (unSymbolName sym) (msPath ms)
-          case scanned of
-            Left e -> do
-              reportParseFailure (ms, e)
-              pure Nothing
-            Right Nothing    -> pure Nothing
-            Right (Just loc) -> pure (Just LocatedDefinition
-              { ldLocation   = loc
-              , ldModule     = target
-              , ldProvenance = Resolved (resSite res)
-              })
+    Just res -> case resSite res of
+      DefinedOutside m | m /= asking -> case Map.lookup m imported of
+        Nothing -> do
+          hPutStrLn stderr $
+            "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
+              <> Text.unpack (unSymbolName sym) <> " from "
+              <> Text.unpack (unModulePath m)
+              <> ", whose source was not supplied"
+          pure Nothing
+        Just (comp, ms) -> scanned comp m (resSite res) ms
+      site -> do
+        let target = Reexport.definitionModule asking site
+        case [ ms | (ms, Right i) <- parsed, Interface.miName i == target ] of
+          []       -> pure Nothing
+          (ms : _) -> scanned ownComponent target site ms
   where
+    scanned comp target site ms = do
+      r <- scanFileE (unSymbolName sym) (msPath ms)
+      case r of
+        Left e -> do
+          reportParseFailure (ms, e)
+          pure Nothing
+        Right Nothing    -> pure Nothing
+        Right (Just loc) -> pure (Just LocatedDefinition
+          { ldLocation   = loc
+          , ldModule     = target
+          , ldComponent  = comp
+          , ldProvenance = Resolved site
+          })
+
     -- Guarded: cpphs signals an undefined build-time macro by calling
     -- 'error' from pure code, and an unhandled one here would 500 the
     -- symbol card.

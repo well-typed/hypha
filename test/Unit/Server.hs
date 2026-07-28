@@ -248,6 +248,7 @@ symbolCardTests =
             { scdSignature  = Just "insertWith :: Ord k => k -> a"
             , scdHaddock    = Nothing
             , scdModule     = "Data.Map.Strict.Internal"
+            , scdComponent  = "containers"
             , scdRequested  = "Data.Map.Strict"
             , scdProvenance = Resolved (DefinedIn (ModulePath "Data.Map.Strict.Internal"))
             , scdLine       = Just 552
@@ -265,6 +266,7 @@ symbolCardTests =
             { scdSignature  = Just "insertWith :: Ord k => k -> a"
             , scdHaddock    = Nothing
             , scdModule     = "Data.Map.Internal"
+            , scdComponent  = "containers"
             , scdRequested  = "Data.Map.Internal"
             , scdProvenance = Resolved DefinedHere
             , scdLine       = Just 552
@@ -278,6 +280,7 @@ symbolCardTests =
             { scdSignature  = Nothing
             , scdHaddock    = Nothing
             , scdModule     = "Data.Map.Internal"
+            , scdComponent  = "containers"
             , scdRequested  = "Data.Map.Internal"
             , scdProvenance = Resolved DefinedHere
             , scdLine       = Nothing
@@ -293,6 +296,7 @@ symbolCardTests =
             { scdSignature  = Just "balanceL :: a"
             , scdHaddock    = Nothing
             , scdModule     = "Data.Set.Internal"
+            , scdComponent  = "containers"
             , scdRequested  = "Data.Map.Internal"
             , scdProvenance = GuessedBySweep "package cabal could not be parsed"
             , scdLine       = Just 1746
@@ -300,6 +304,32 @@ symbolCardTests =
             }
       assertBool "surfaces the uncertainty"
         ("best guess" `Text.isInfixOf` Text.toLower html)
+
+  , testCase "a cross-package definition names and links the owning package" $ do
+      -- base's Data.Traversable documents mapAccumL; ghc-internal declares
+      -- it.  Every link to the definition has to leave base, or it points
+      -- at a module base does not have.
+      let html = renderCard SymbolCardData
+            { scdSignature  = Just "mapAccumL :: a"
+            , scdHaddock    = Nothing
+            , scdModule     = "GHC.Internal.Data.Traversable"
+            , scdComponent  = "ghc-internal"
+            , scdRequested  = "Data.Traversable"
+            , scdProvenance =
+                Resolved (DefinedOutside (ModulePath "GHC.Internal.Data.Traversable"))
+            , scdLine       = Just 120
+            , scdKind       = Just DkFunction
+            }
+      assertBool "names the defining package"
+        ("ghc-internal:GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "module link leaves the asking package"
+        ("/pkg/ghc-internal/GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "source link leaves the asking package"
+        ("/source/ghc-internal/GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "never links the definition under the asking package"
+        (not ("/pkg/containers/GHC.Internal" `Text.isInfixOf` html))
   ]
   where
+    -- The page is reached as containers/… in every case above; the
+    -- cross-package case deliberately disagrees with it.
     renderCard = LText.toStrict . renderText . symbolCard "insertWith" "containers"

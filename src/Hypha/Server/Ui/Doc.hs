@@ -49,38 +49,50 @@ symbolCard name pkg card = div_ [class_ "doc"] $ do
     Just hd -> div_ [class_ "haddock"] (Haddock.renderHaddockHtml hd)
     Nothing -> mempty
   div_ [class_ "src-link"] $ do
-    a_ [ href_ ("/pkg/" <> pkg <> "/" <> scdModule card
+    a_ [ href_ ("/pkg/" <> defPkg <> "/" <> scdModule card
                  <> "#" <> anchorFor kind name)
        ]
        "View in module"
     toHtml (" \x00B7 source: " :: Text)
     case scdLine card of
       Just srcLine ->
-        a_ [ href_ ("/source/" <> pkg <> "/" <> scdModule card
+        a_ [ href_ ("/source/" <> defPkg <> "/" <> scdModule card
                      <> "?line=" <> Text.pack (show srcLine)
                      <> "#L"     <> Text.pack (show srcLine))
            ]
-           (toHtml (pkg <> "/" <> scdModule card <> ":" <> Text.pack (show srcLine)))
+           (toHtml (defPkg <> "/" <> scdModule card <> ":" <> Text.pack (show srcLine)))
       Nothing ->
-        a_ [ href_ ("/source/" <> pkg <> "/" <> scdModule card) ]
-           (toHtml (pkg <> "/" <> scdModule card))
+        a_ [ href_ ("/source/" <> defPkg <> "/" <> scdModule card) ]
+           (toHtml (defPkg <> "/" <> scdModule card))
   where
     -- Unclassified symbols default to the value namespace: correct for
     -- everything except a type we failed to parse, and a wrong @t:@
     -- guess would break value anchors far more often.
     kind = maybe DkFunction id (scdKind card)
 
+    -- Links to the definition are built from the component that /defines/
+    -- the symbol, not the one the URL asked for.  A re-export can cross a
+    -- package boundary, and @\/pkg\/base\/GHC.Internal…@ is a module @base@
+    -- does not have.
+    defPkg = scdComponent card
+
     -- The card is reached through the module the user asked for, but the
     -- code lives where it is declared.  Saying both is the difference
-    -- between an honest card and one that quietly relabels itself.
+    -- between an honest card and one that quietly relabels itself.  The
+    -- package is named only when it differs, so a same-package re-export
+    -- reads exactly as it did before.
     reexportNote
-      | scdRequested card == scdModule card = mempty
+      | scdRequested card == scdModule card && defPkg == pkg = mempty
       | otherwise = p_ [class_ "hint"] $ do
           toHtml ("Re-exported by " :: Text)
           code_ (toHtml (scdRequested card))
           toHtml (", defined in " :: Text)
-          code_ (toHtml (scdModule card))
+          code_ (toHtml definedIn)
           toHtml ("." :: Text)
+
+    definedIn
+      | defPkg == pkg = scdModule card
+      | otherwise     = defPkg <> ":" <> scdModule card
 
     -- A swept location is a guess.  Rendering it identically to a resolved
     -- one is how the wrong file came to look like fact.

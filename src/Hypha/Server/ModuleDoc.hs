@@ -65,6 +65,11 @@ data SymbolCardData = SymbolCardData
   , scdModule     :: !Text
     -- ^ The module that defines the symbol, as resolved — never derived
     -- from a file path.
+  , scdComponent  :: !Text
+    -- ^ The component that /defines/ the symbol, which need not be the one
+    -- the URL asked for: @base@'s @Data.Traversable@ re-exports from
+    -- @ghc-internal@.  Links to the definition are built from this, so they
+    -- cannot point at a module the page's package does not have.
   , scdRequested  :: !Text
     -- ^ The module the URL asked for.  Kept alongside 'scdModule' so the
     -- card can say \"re-exported by X, defined in Y\" instead of silently

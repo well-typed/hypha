@@ -15,6 +15,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Data.Aeson qualified as Aeson
 import Data.Aeson (Value (..), (.=))
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Set (Set)
 import Data.Text.IO qualified as TIO
@@ -27,10 +28,12 @@ import Hypha.Output.Outcome (Outcome, successOutcome)
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Index (ModuleSource (..))
 import Hypha.Search.Indexer qualified as Indexer
+import Hypha.Types.ComponentName (ComponentKey, componentKeyOf)
 import Hypha.Source.Locate
   ( LocatedDefinition (..), SourceLocation (..), findModuleFile
   , locateDefinitionInComponent, locateSymbolDefinitionInDir )
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
+import System.FilePath qualified as FP
 import System.IO (hPutStrLn, stderr)
 import Hypha.Types.BuildPlan (BuildPlan (..))
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
@@ -125,20 +128,27 @@ sourceFromDirE pid srcDir modPath mSym = do
 -- same-named binding it enumerates first — @Data.Map.Strict.insertWith@
 -- came back as @Data\/IntMap\/Internal.hs@.  The sweep survives only for
 -- packages whose cabal we cannot read, and says so.
+--
+-- No imported modules are supplied: a bare package directory comes with no
+-- build plan, so there is no dependency graph to find the owner of a
+-- cross-package re-export in.  'locateDefinitionInComponent' reports those
+-- rather than guessing — @hypha server@, which does have a plan, resolves
+-- them.
 locateSourceLoc
   :: FilePath -> FilePath -> Text -> Maybe Text -> IO (Maybe SourceLocation)
 locateSourceLoc filePath _ _ Nothing = pure (Just (SourceLocation filePath 1))
 locateSourceLoc _ srcDir modPath (Just sym) = do
-  comps <- Indexer.packageSources srcDir
+  comps   <- Indexer.packageSources srcDir
+  compKey <- componentKeyFor srcDir
   let matching =
-        [ (Comp.ciLanguageSettings ci, sources)
+        [ (Comp.ciLanguageSettings ci, Comp.ciKind ci, sources)
         | (ci, sources) <- comps
         , any ((== ModulePath modPath) . msDeclaredName) sources
         ]
   case matching of
-    ((langs, sources) : _) -> do
-      mLd <- locateDefinitionInComponent langs sources
-               (ModulePath modPath) (SymbolName sym)
+    ((langs, kind, sources) : _) -> do
+      mLd <- locateDefinitionInComponent langs (compKey kind) sources
+               Map.empty (ModulePath modPath) (SymbolName sym)
       case mLd of
         Just ld -> pure (Just (ldLocation ld))
         Nothing -> pure Nothing
@@ -147,6 +157,22 @@ locateSourceLoc _ srcDir modPath (Just sym) = do
         "hypha: no cabal component of " <> srcDir <> " lists "
           <> Text.unpack modPath <> "; falling back to a package scan"
       locateSymbolDefinitionInDir srcDir modPath sym
+
+-- | The component-key builder for a package directory, from the name of
+-- its cabal file.
+--
+-- The file name /is/ the package name — cabal requires it — and this call
+-- site has no build plan to ask instead.  A directory with no cabal file
+-- falls back to its own basename, which is what the sweep would have
+-- assumed anyway; the key only labels the definition's component, and the
+-- caller of this function reads only the location.
+componentKeyFor :: FilePath -> IO (Comp.ComponentKind -> ComponentKey)
+componentKeyFor srcDir = do
+  mCabal <- Comp.findCabalFile srcDir
+  let name = case mCabal of
+        Just cabal -> FP.takeBaseName cabal
+        Nothing    -> FP.takeBaseName (FP.dropTrailingPathSeparator srcDir)
+  pure (componentKeyOf (PackageName (Text.pack name)))
 
 -- | Lift a 'Maybe' into 'ExceptT' with a typed error on 'Nothing'.
 liftMaybe :: Monad m => HyphaError -> Maybe a -> ExceptT HyphaError m a
