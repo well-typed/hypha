@@ -22,6 +22,7 @@ module Hypha.Search.Cache
   , haveIndex
   , readIndex
   , lookupRowsByName
+  , lookupRowsInModule
   , readFingerprint
   , writeFingerprint
   , writeIndex
@@ -170,6 +171,24 @@ lookupRowsByName c name mMod = (reportAnomalies . map fromStored =<<) $ case mMo
       (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
               \WHERE name = :n AND mod = :m"))
       [":n" := name, ":m" := modT]
+
+-- | Every row a component's module presents, whatever the version.
+--
+-- What a module page needs: for each name the module exposes, the definition
+-- site the indexer already resolved — transitively, which is the part no
+-- single-hop walk of the imports can reproduce.  Version-free because the
+-- caller has a component and a module from a URL and no version to hand.
+lookupRowsInModule
+  :: IndexCache
+  -> Text                                  -- ^ component key
+  -> Text                                  -- ^ module path
+  -> IO [IndexRow]
+lookupRowsInModule c pkg modT =
+  (reportAnomalies . map fromStored =<<) $
+    queryNamed (icConn c)
+      (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
+              \WHERE pkg = :p AND mod = :m"))
+      [":p" := pkg, ":m" := modT]
 
 withWrite :: IndexCache -> IO a -> IO a
 withWrite c io = withMVar (icLock c) (\_ -> io)

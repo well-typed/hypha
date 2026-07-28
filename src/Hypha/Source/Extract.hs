@@ -20,12 +20,12 @@ module Hypha.Source.Extract
   , resolveModuleEntries
   ) where
 
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as Text
 import Data.Text (Text)
 
-import Hypha.Search.Index (DefinitionRef (..), ModuleSource (..))
+import Hypha.Search.Index
+  ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource (..) )
 import Hypha.Search.Reexport qualified as Reexport
 import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Source.Interface (ModuleInterface (..))
@@ -89,6 +89,15 @@ data ModuleDocInfo = ModuleDocInfo
     -- @module@ keyword), when present.
   , mdiEntries :: ![DocEntry]
     -- ^ One entry per top-level declaration, in source order.
+  , mdiSkipped :: ![(ModulePath, Parser.ParseError)]
+    -- ^ Sibling modules of the component that would not parse.
+    --
+    -- Carried rather than thrown: the page asked about /one/ module, and
+    -- one unparseable module elsewhere in the component must not take it
+    -- down.  @base@ has a module that fails on indentation, which is
+    -- enough to degrade every @base@ page to an export list when the whole
+    -- component has to parse for any of it to render.  The caller reports
+    -- these, so a thinner page still says why.
   }
   deriving stock (Show, Eq)
 
@@ -137,6 +146,7 @@ extractModuleDoc path src = do
   pure ModuleDocInfo
     { mdiHeader  = DocText <$> header
     , mdiEntries = map (entryFor numbered) decls
+    , mdiSkipped = []
     }
   where
     entryFor ls d = docEntryFrom ls d EntryLocal
@@ -173,27 +183,30 @@ docEntryFrom ls d origin = DocEntry
 -- this page\" rail because it declares almost nothing, and @base@'s
 -- @Data.Traversable@ had one because it declares nothing at all.
 --
--- @imported@ supplies the modules of /other/ components that this module's
--- exports resolve into, keyed by module name; the caller obtains them from
--- 'Reexport.outsideModulesFor' plus the plan.  An export whose owner is
--- missing from that map is still listed, with its origin and no signature:
--- a name we cannot describe is worth more to the reader than a silently
--- shorter page.
+-- @imported@ carries what the index resolved for names this component does
+-- not declare, plus the sources of the modules it named.  An export the
+-- index has no answer for falls back to resolving within the component, and
+-- one we cannot describe at all is still listed with its origin and no
+-- signature: a name without a signature is worth more to the reader than a
+-- silently shorter page.
 resolveModuleEntries
   :: Extensions.LanguageSettings
   -> ComponentKey                                  -- ^ the asking component
   -> [ModuleSource]
-  -> Map ModulePath (ComponentKey, ModuleSource)   -- ^ imported modules
+  -> ImportedDefinitions                           -- ^ what the index resolved
   -> ModulePath
   -> Either Parser.ParseError ModuleDocInfo
 resolveModuleEntries langs compKey sources imported asking = do
-  ifaces         <- traverse parseOne sources
-  importedParsed <- traverse parseImported (Map.toList imported)
+  -- Per module, not all-or-nothing: 'traverse' here made one unparseable
+  -- sibling degrade every page in the component to an export list.
+  let attempted = [ (ms, parseOne ms) | ms <- sources ]
+      ok        = [ (ms, i) | (ms, Right i) <- attempted ]
+      ifaces    = map snd ok
+      skipped   = [ (msDeclaredName ms, e) | (ms, Left e) <- attempted ]
+  importedParsed <- traverse parseImported (Map.toList (idSources imported))
   let byName  = Map.fromList [ (miName i, i) | i <- ifaces ]
       linesOf = Map.fromList
-        [ (miName i, numberedLines (msContent ms))
-        | (ms, i) <- zip sources ifaces
-        ]
+        [ (miName i, numberedLines (msContent ms)) | (ms, i) <- ok ]
       -- Keyed on the module name the caller asked for, not on the parsed
       -- name: that is how the resolution refers to it.
       outsideOf = Map.fromList
@@ -201,9 +214,17 @@ resolveModuleEntries langs compKey sources imported asking = do
         | (m, (c, ms, i)) <- importedParsed
         ]
       resolution = Reexport.resolveComponent ifaces
-  asked <- maybe (Left (missingModule asking)) Right (Map.lookup asking byName)
+  -- The module the page is about is the one failure that is fatal: with no
+  -- parse of it there is no export list to walk.  Its own error beats the
+  -- generic absence when we have one.
+  asked <- case Map.lookup asking byName of
+    Just i  -> Right i
+    Nothing -> Left (case lookup asking skipped of
+      Just e  -> e
+      Nothing -> missingModule asking)
   pure ModuleDocInfo
     { mdiHeader  = DocText <$> miHeaderDoc asked
+    , mdiSkipped = skipped
     , mdiEntries =
         [ entry
         | name <- Reexport.expandedExportNames ifaces asking
@@ -219,24 +240,44 @@ resolveModuleEntries langs compKey sources imported asking = do
       i <- Interface.parseInterface langs (msPath ms) (msContent ms)
       pure (m, (c, ms, i))
 
-    -- An entry from inside the component, from a named dependency module,
-    -- or a name-only placeholder when the dependency's source is absent.
-    entryFor byName linesOf outsideOf name site = case site of
-      Reexport.DefinedOutside m
-        | m /= asking -> case Map.lookup m outsideOf of
-            Just (c, i, ls) -> do
-              decl <- Parser.findDecl (unSymbolName name) (miDecls i)
-              pure (docEntryFrom ls decl (EntryReexport (DefinitionRef c m)))
-            Nothing -> Just (placeholder name (DefinitionRef compKey m))
-      _ -> do
-        let defMod = Reexport.definitionModule asking site
-        defIface <- Map.lookup defMod byName
-        decl     <- Parser.findDecl (unSymbolName name) (miDecls defIface)
-        let ls     = Map.findWithDefault [] defMod linesOf
-            origin = if defMod == asking
-                       then EntryLocal
-                       else EntryReexport (DefinitionRef compKey defMod)
-        pure (docEntryFrom ls decl origin)
+    -- The index's answer first, because it is the only transitively resolved
+    -- one: @base@'s @Data.List@ reaches @GHC.Internal.Data.List@, which
+    -- declares nothing and passes @mapAccumL@ along.  Reading the immediate
+    -- import found no declaration and dropped the entry.
+    entryFor byName linesOf outsideOf name site =
+      case fromIndex outsideOf name of
+        Just e  -> Just e
+        Nothing -> case site of
+          Reexport.DefinedOutside m
+            | m /= asking -> case fromModule outsideOf name m of
+                Just e  -> Just e
+                -- Everything we can still say: the name, and where it came
+                -- from.  Dropping it would leave no trace of a symbol the
+                -- module genuinely exports.
+                Nothing -> Just (placeholder name (DefinitionRef compKey m))
+          _ -> do
+            let defMod = Reexport.definitionModule asking site
+            defIface <- Map.lookup defMod byName
+            decl     <- Parser.findDecl (unSymbolName name) (miDecls defIface)
+            let ls     = Map.findWithDefault [] defMod linesOf
+                origin = if defMod == asking
+                           then EntryLocal
+                           else EntryReexport (DefinitionRef compKey defMod)
+            pure (docEntryFrom ls decl origin)
+
+    -- An entry built from the definition site the index resolved.
+    fromIndex outsideOf name = do
+      def <- Map.lookup name (idSites imported)
+      (_, i, ls) <- Map.lookup (drModule def) outsideOf
+      decl <- Parser.findDecl (unSymbolName name) (miDecls i)
+      pure (docEntryFrom ls decl (EntryReexport def))
+
+    -- An entry built from a module we happen to have, when the index had no
+    -- answer for this name.
+    fromModule outsideOf name m = do
+      (c, i, ls) <- Map.lookup m outsideOf
+      decl <- Parser.findDecl (unSymbolName name) (miDecls i)
+      pure (docEntryFrom ls decl (EntryReexport (DefinitionRef c m)))
 
     -- Everything we know when the defining source is out of reach: the
     -- name, and where it came from.

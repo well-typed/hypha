@@ -11,10 +11,14 @@ module Hypha.Search.Index
   , visibilityToText
   , visibilityFromText
   , DefinitionRef (..)
+  , ImportedDefinitions (..)
+  , noImportedDefinitions
   , IndexRow (..)
   , currentIndexFormat
   ) where
 
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 
 import Hypha.Types.ComponentName (ComponentKey)
@@ -75,6 +79,33 @@ data DefinitionRef = DefinitionRef
   , drModule    :: !ModulePath
   }
   deriving stock (Show, Eq, Ord)
+
+-- | What a browsing pass knows about other components: where each of the
+-- asking module's exports is declared, and the sources of the modules that
+-- answer names.
+--
+-- Both halves come from the index, which is the only place a /transitively/
+-- resolved definition site exists.  Following the immediate import instead
+-- is one hop, and a hop is not enough: @base@'s @Data.List@ reaches
+-- @GHC.Internal.Data.List@, which declares nothing and passes @mapAccumL@
+-- along from @GHC.Internal.Data.Traversable@.  Scanning the immediate import
+-- found no declaration, so the symbol card answered \"symbol not found\" for
+-- a symbol search had just offered.
+--
+-- 'idSites' can be missing a name the module exports — the index may still
+-- be building, and class methods have no rows at all — so consumers fall
+-- back to resolving within the component and must never treat a miss as
+-- \"no such symbol\".
+data ImportedDefinitions = ImportedDefinitions
+  { idSites   :: !(Map SymbolName DefinitionRef)
+  , idSources :: !(Map ModulePath (ComponentKey, ModuleSource))
+  }
+  deriving stock (Show, Eq)
+
+-- | Nothing resolved from outside: the CLI's position, with no build plan
+-- and so no dependency graph to resolve through.
+noImportedDefinitions :: ImportedDefinitions
+noImportedDefinitions = ImportedDefinitions Map.empty Map.empty
 
 -- | One search-index entry.
 --

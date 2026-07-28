@@ -19,6 +19,7 @@ module Hypha.Search.PackageCache
   , haveCachedIndex
   , readCachedIndex
   , lookupByName
+  , lookupInModule
   , readCachedFingerprint
   , writeCachedFingerprint
   , writeCachedIndex
@@ -34,7 +35,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Search.Cache
-  ( IndexCache, defaultCachePath, haveIndex, lookupRowsByName
+  ( IndexCache, defaultCachePath, haveIndex, lookupRowsByName, lookupRowsInModule
   , openIndexCache, readBlob, readFingerprint, readIndex
   , writeBlob, writeFingerprint, writeIndex )
 import Hypha.Search.Index (IndexRow (..))
@@ -122,6 +123,24 @@ lookupByName c rawQuery = do
     Just p  -> lookupRowsByName p name mMod
     Nothing -> pure []
   globalRows  <- lookupRowsByName (hpcGlobal c) name mMod
+  pure (mergeShadow projectRows globalRows)
+
+-- | Every row a component's module presents, project rows shadowing global
+-- ones on the same @(pkg, mod, name)@ triple.
+--
+-- Browsing asks this for the definition sites the indexer already resolved:
+-- following a module's imports by hand is one hop, and @base@'s @Data.List@
+-- is two away from where @mapAccumL@ is declared.
+lookupInModule
+  :: HyphaPackageCache
+  -> Text                              -- ^ component key
+  -> Text                              -- ^ module path
+  -> IO [IndexRow]
+lookupInModule c pkg modT = do
+  projectRows <- case hpcProject c of
+    Just p  -> lookupRowsInModule p pkg modT
+    Nothing -> pure []
+  globalRows  <- lookupRowsInModule (hpcGlobal c) pkg modT
   pure (mergeShadow projectRows globalRows)
 
 -- | Split @Data.Map.lookup@ into @(Just "Data.Map", "lookup")@.

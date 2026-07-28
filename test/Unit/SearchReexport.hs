@@ -18,8 +18,8 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Reexport
-  ( Ambiguity (..), DefinitionSite (..), Resolution (..), outsideModulesFor
-  , resolveComponent, sharedSegments )
+  ( Ambiguity (..), DefinitionSite (..), Resolution (..), resolveComponent
+  , sharedSegments )
 import Hypha.Source.Extensions (defaultLanguageSettings)
 import Hypha.Source.Interface
   ( ExportItem (..), ImportItem (..), ModuleInterface (..), parseInterface )
@@ -162,19 +162,4 @@ tests = testGroup "Unit.SearchReexport"
       sharedSegments (ModulePath "Data.Map.Strict") (ModulePath "Data.Map.Internal") @?= 2
       sharedSegments (ModulePath "Data.Map.Strict") (ModulePath "Data.Set.Internal") @?= 1
       sharedSegments (ModulePath "Data.Map")        (ModulePath "Data.Map")          @?= 2
-
-  , testCase "a facade's outside modules are the imports its exports need" $ do
-      -- A module page has to read the defining module's source to render
-      -- haddock and line numbers, so it needs these named before any IO.
-      i <- load "test/fixtures/reexport/src/Fixture/Imported.hs"
-      outsideModulesFor [i] (ModulePath "Fixture.Imported")
-        @?= [ModulePath "Dep.Internal"]
-
-  , testCase "a module that defines what it exports needs nothing outside" $ do
-      i <- load "test/fixtures/reexport/src/Fixture/Internal.hs"
-      outsideModulesFor [i] (ModulePath "Fixture.Internal") @?= []
-
-  , testCase "an intra-component re-export is not an outside module" $ do
-      ifaces <- component
-      outsideModulesFor ifaces (ModulePath "Fixture.Facade") @?= []
   ]

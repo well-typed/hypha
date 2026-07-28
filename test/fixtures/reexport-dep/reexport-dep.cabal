@@ -6,5 +6,6 @@ synopsis:      Dependency fixture: the package a reexport facade re-exports from
 library
   hs-source-dirs:     src
   exposed-modules:    Dep.Internal
+                    , Dep.Facade
   default-language:   GHC2021
   build-depends:      base

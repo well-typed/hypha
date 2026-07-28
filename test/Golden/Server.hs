@@ -65,6 +65,7 @@ tests = testGroup "Golden.Server"
                   , deOrigin    = EntryLocal
                   }
               ]
+          , mdiSkipped = []
           }
       , sdRawHaddock = Just "fixture-pkg-0.1.0.0"
       }

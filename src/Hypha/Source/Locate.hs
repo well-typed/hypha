@@ -18,7 +18,6 @@ module Hypha.Source.Locate
 
 import Control.Monad (filterM)
 import Data.List (sortOn)
-import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -27,7 +26,8 @@ import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type     (BuildEnv (..))
-import Hypha.Search.Index      (ModuleSource (..))
+import Hypha.Search.Index
+  ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource (..) )
 import Hypha.Search.Reexport   (DefinitionSite (..), Resolution (..))
 import qualified Hypha.Search.Reexport as Reexport
 import qualified Hypha.Source.Extensions as Extensions
@@ -335,37 +335,54 @@ locateDefinitionInComponent
   :: Extensions.LanguageSettings
   -> ComponentKey                                  -- ^ the asking component
   -> [ModuleSource]
-  -> Map ModulePath (ComponentKey, ModuleSource)   -- ^ imported modules
+  -> ImportedDefinitions                           -- ^ what the index resolved
   -> ModulePath
   -> SymbolName
   -> IO (Maybe LocatedDefinition)
-locateDefinitionInComponent langs ownComponent sources imported asking sym = do
-  parsed <- mapM parseOne sources
-  mapM_ reportParseFailure [ (ms, e) | (ms, Left e) <- parsed ]
-  let ifaces     = [ i | (_, Right i) <- parsed ]
-      resolution = Reexport.resolveComponent ifaces
-  case Map.lookup (asking, sym) resolution of
-    Nothing -> do
-      hPutStrLn stderr $
-        "hypha: " <> Text.unpack (unModulePath asking) <> " does not export "
-          <> Text.unpack (unSymbolName sym)
-      pure Nothing
-    Just res -> case resSite res of
-      DefinedOutside m | m /= asking -> case Map.lookup m imported of
+locateDefinitionInComponent langs ownComponent sources imported asking sym =
+  -- The index's answer first, because it is the only transitively resolved
+  -- one.  Following the immediate import instead is a single hop, and
+  -- @base:Data.List@ needs two: @GHC.Internal.Data.List@ declares nothing
+  -- and passes @mapAccumL@ along from @GHC.Internal.Data.Traversable@, so
+  -- scanning it reported the symbol absent.
+  case resolvedSite of
+    Just (def, ms) -> scanned (drComponent def) (drModule def)
+                        (DefinedOutside (drModule def)) ms
+    Nothing        -> byResolution
+  where
+    resolvedSite = do
+      def <- Map.lookup sym (idSites imported)
+      (_, ms) <- Map.lookup (drModule def) (idSources imported)
+      pure (def, ms)
+
+    byResolution = do
+      parsed <- mapM parseOne sources
+      mapM_ reportParseFailure [ (ms, e) | (ms, Left e) <- parsed ]
+      let ifaces     = [ i | (_, Right i) <- parsed ]
+          resolution = Reexport.resolveComponent ifaces
+      case Map.lookup (asking, sym) resolution of
         Nothing -> do
           hPutStrLn stderr $
-            "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
-              <> Text.unpack (unSymbolName sym) <> " from "
-              <> Text.unpack (unModulePath m)
-              <> ", whose source was not supplied"
+            "hypha: " <> Text.unpack (unModulePath asking) <> " does not export "
+              <> Text.unpack (unSymbolName sym)
           pure Nothing
-        Just (comp, ms) -> scanned comp m (resSite res) ms
-      site -> do
-        let target = Reexport.definitionModule asking site
-        case [ ms | (ms, Right i) <- parsed, Interface.miName i == target ] of
-          []       -> pure Nothing
-          (ms : _) -> scanned ownComponent target site ms
-  where
+        Just res -> case resSite res of
+          DefinedOutside m | m /= asking ->
+            case Map.lookup m (idSources imported) of
+              Nothing -> do
+                hPutStrLn stderr $
+                  "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
+                    <> Text.unpack (unSymbolName sym) <> " from "
+                    <> Text.unpack (unModulePath m)
+                    <> ", whose source was not supplied"
+                pure Nothing
+              Just (comp, ms) -> scanned comp m (resSite res) ms
+          site -> do
+            let target = Reexport.definitionModule asking site
+            case [ ms | (ms, Right i) <- parsed, Interface.miName i == target ] of
+              []       -> pure Nothing
+              (ms : _) -> scanned ownComponent target site ms
+
     scanned comp target site ms = do
       r <- scanFileE (unSymbolName sym) (msPath ms)
       case r of

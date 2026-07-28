@@ -134,15 +134,28 @@ tests = testGroup "Unit.SearchIndexBuild"
 
   , testCase "a symbol re-exported from another package gets a row" $ do
       ci <- fixture
-      case rowsFor ci "depThing" of
+      case [ r | r <- rowsFor ci "depThing"
+               , rowModule r == ModulePath "Fixture.Imported" ] of
         [r] -> do
-          rowModule r     @?= ModulePath "Fixture.Imported"
           rowDefinition r @?= DefinitionRef (ComponentKey "reexport-dep")
                                             (ModulePath "Dep.Internal")
           -- The signature comes from the dependency's parse, not from a
           -- name-keyed guess inside this component.
           rowSignature r  @?= Signature "depThing :: Int -> Int"
         other -> fail ("expected one depThing row, got " <> show (length other))
+
+  , testCase "a two-hop cross-package re-export lands on the declaration" $ do
+      -- Fixture.TwoHop -> Dep.Facade -> Dep.Internal, the base:Data.List
+      -- shape.  The environment carries the dependency's own resolved
+      -- definition, so the middle hop is skipped for free.
+      ci <- fixture
+      case [ r | r <- rowsFor ci "depThing"
+               , rowModule r == ModulePath "Fixture.TwoHop" ] of
+        [r] -> do
+          rowDefinition r @?= DefinitionRef (ComponentKey "reexport-dep")
+                                            (ModulePath "Dep.Internal")
+          rowSignature r  @?= Signature "depThing :: Int -> Int"
+        other -> fail ("expected one TwoHop row, got " <> show (length other))
 
   , testCase "a dependency symbol nobody re-exports gets no row here" $ do
       ci <- fixture

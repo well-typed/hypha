@@ -38,6 +38,7 @@ fixtureSources = sourcesFor
   , ("test/fixtures/reexport/src/Fixture/StrictInternal.hs", "Fixture.StrictInternal", Internal)
   , ("test/fixtures/reexport/src/Fixture/Other.hs",          "Fixture.Other",          Exposed)
   , ("test/fixtures/reexport/src/Fixture/Imported.hs",       "Fixture.Imported",       Exposed)
+  , ("test/fixtures/reexport/src/Fixture/TwoHop.hs",         "Fixture.TwoHop",         Exposed)
   , ("test/fixtures/reexport/src/Fixture/Renamed.hs",        "Fixture.Declared",       Internal)
   ]
 
@@ -46,4 +47,6 @@ fixtureSources = sourcesFor
 -- point of the fixture is that the two are different components.
 depSources :: IO [ModuleSource]
 depSources = sourcesFor
-  [ ("test/fixtures/reexport-dep/src/Dep/Internal.hs", "Dep.Internal", Exposed) ]
+  [ ("test/fixtures/reexport-dep/src/Dep/Internal.hs", "Dep.Internal", Exposed)
+  , ("test/fixtures/reexport-dep/src/Dep/Facade.hs",   "Dep.Facade",   Exposed)
+  ]

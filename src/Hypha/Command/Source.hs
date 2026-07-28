@@ -15,7 +15,6 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Data.Aeson qualified as Aeson
 import Data.Aeson (Value (..), (.=))
-import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Set (Set)
 import Data.Text.IO qualified as TIO
@@ -26,7 +25,7 @@ import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
 import Hypha.Project.Components qualified as Comp
-import Hypha.Search.Index (ModuleSource (..))
+import Hypha.Search.Index (ModuleSource (..), noImportedDefinitions)
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Types.ComponentName (ComponentKey, componentKeyOf)
 import Hypha.Source.Locate
@@ -148,7 +147,7 @@ locateSourceLoc _ srcDir modPath (Just sym) = do
   case matching of
     ((langs, kind, sources) : _) -> do
       mLd <- locateDefinitionInComponent langs (compKey kind) sources
-               Map.empty (ModulePath modPath) (SymbolName sym)
+               noImportedDefinitions (ModulePath modPath) (SymbolName sym)
       case mLd of
         Just ld -> pure (Just (ldLocation ld))
         Nothing -> pure Nothing

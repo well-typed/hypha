@@ -8,6 +8,7 @@ library
   exposed-modules:    Fixture.Wrapper
                     , Fixture.Facade
                     , Fixture.Imported
+                    , Fixture.TwoHop
                     , Fixture.Strict
                     , Fixture.Other
                     , Fixture.Internal
