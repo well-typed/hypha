@@ -15,7 +15,7 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Cache (openIndexCache, readIndex, writeIndex)
-import Hypha.Search.Index (IndexRow (..), Visibility (..))
+import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
 import Util.Row (rowIn)
 
@@ -37,7 +37,8 @@ tests = testGroup "Unit.SearchIndexCache"
         rows @?= [wrapperRow]
         -- The two new columns are the point: a round-trip that lost them
         -- would still pass an equality on the original four.
-        map rowDefModule rows @?= [ModulePath "Data.Map.Strict.Internal"]
+        map (drModule . rowDefinition) rows
+          @?= [ModulePath "Data.Map.Strict.Internal"]
         map rowVisibility rows @?= [Exposed]
 
   , testCase "internal visibility survives the round-trip" $

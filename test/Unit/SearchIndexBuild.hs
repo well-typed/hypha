@@ -16,7 +16,7 @@ import qualified Data.Text as Text
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-import Hypha.Search.Index (IndexRow (..), Visibility (..))
+import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Search.Indexer
   ( ComponentIndex (..), indexComponentPure )
 import Hypha.Source.Extensions (defaultLanguageSettings)
@@ -62,7 +62,7 @@ tests = testGroup "Unit.SearchIndexBuild"
   , testCase "each row's definition module is the real one" $ do
       ci <- fixture
       let defOf m =
-            [ rowDefModule r
+            [ drModule (rowDefinition r)
             | r <- rowsFor ci "insertBag", rowModule r == ModulePath m ]
       defOf "Fixture.Wrapper"        @?= [ModulePath "Fixture.Internal"]
       -- Two hops from the definition, and still the definition.

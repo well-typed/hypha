@@ -9,11 +9,13 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Collapse
-  ( SearchResult (..), SymbolResult (..), collapseRows, resultHref )
+  ( SearchResult (..), SymbolResult (..), collapseRows, definitionHref
+  , resultHref )
 import Hypha.Search.Fuzzy (mkSymbolRow)
-import Hypha.Search.Index (IndexRow, Visibility (..))
+import Hypha.Search.Index (DefinitionRef (..), IndexRow, Visibility (..))
+import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
-import Util.Row (rowIn)
+import Util.Row (rowFrom, rowIn)
 
 -- | An @insertWith@ row: presented by one module, defined in another.
 mapRow :: Text -> Text -> Visibility -> IndexRow
@@ -33,7 +35,7 @@ tests = testGroup "Unit.SearchCollapse"
                     ] of
         [ResultSymbol s] -> do
           srModule s     @?= ModulePath "Data.Map.Strict"
-          srDefModule s  @?= ModulePath "Data.Map.Strict.Internal"
+          drModule (srDefinition s) @?= ModulePath "Data.Map.Strict.Internal"
           srAlternates s @?= 1
         other -> fail ("expected one collapsed result, got " <> show (length other))
 
@@ -83,4 +85,18 @@ tests = testGroup "Unit.SearchCollapse"
             _                -> Nothing
       winner [a, b] @?= Just (ModulePath "Data.Map.Strict")
       winner [b, a] @?= Just (ModulePath "Data.Map.Strict")
+
+  , testCase "the definition link names the defining component, not the presenting one" $
+      -- base presents mapAccumL; ghc-internal defines it.  Building the
+      -- link from the presentation's component would point at a module
+      -- base does not have.
+      case collapse [ rowFrom "base" "Data.Traversable" "mapAccumL" "sig"
+                        (DefinitionRef (ComponentKey "ghc-internal")
+                                       (ModulePath "GHC.Internal.Data.Traversable"))
+                        Exposed
+                    ] of
+        [ResultSymbol s] ->
+          definitionHref s
+            @?= "/pkg/ghc-internal/GHC.Internal.Data.Traversable/mapAccumL"
+        _ -> fail "expected one result"
   ]

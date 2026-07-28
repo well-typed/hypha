@@ -10,6 +10,7 @@ module Hypha.Search.Index
   , ModuleSource (..)
   , visibilityToText
   , visibilityFromText
+  , DefinitionRef (..)
   , IndexRow (..)
   , currentIndexFormat
   ) where
@@ -60,11 +61,27 @@ data ModuleSource = ModuleSource
   }
   deriving stock (Show, Eq)
 
+-- | Where a symbol is declared: which component, and which of its
+-- modules.
+--
+-- A module alone was never an identity — two packages can expose a module
+-- of the same name — which is why this is a pair.  Carrying the component
+-- is what lets search collapse @base:Data.Traversable.mapAccumL@ into the
+-- same result as @ghc-internal:GHC.Internal.Data.Traversable.mapAccumL@
+-- without also merging two unrelated packages that happen to agree on a
+-- module name.
+data DefinitionRef = DefinitionRef
+  { drComponent :: !ComponentKey
+  , drModule    :: !ModulePath
+  }
+  deriving stock (Show, Eq, Ord)
+
 -- | One search-index entry.
 --
--- 'rowDefModule' is the module that actually declares the symbol: equal
--- to 'rowModule' for a local declaration, and the definition site for a
--- re-export.  Carrying it is what lets search collapse
+-- 'rowDefinition' is where the symbol actually is: the row's own
+-- component and module for a local declaration, another module of the
+-- component for an intra-package re-export, and another /component/ for a
+-- cross-package one.  Carrying it is what lets search collapse
 -- @Data.Map.Strict.Internal.insertWith@ into @Data.Map.Strict.insertWith@
 -- without also merging @Data.Map.Lazy.insertWith@ — same name, same
 -- signature, different definition.
@@ -73,7 +90,7 @@ data IndexRow = IndexRow
   , rowModule     :: !ModulePath
   , rowName       :: !SymbolName
   , rowSignature  :: !Signature
-  , rowDefModule  :: !ModulePath
+  , rowDefinition :: !DefinitionRef
   , rowVisibility :: !Visibility
   }
   deriving stock (Show, Eq, Ord)
@@ -82,7 +99,9 @@ data IndexRow = IndexRow
 --
 -- Generation 1 rows are not migrated but discarded: their module names
 -- may have come from file paths and their signatures may have been
--- resolved by symbol name, and neither defect is detectable per row.  The
--- only honest options are to re-index or to lie.
+-- resolved by symbol name, and neither defect is detectable per row.
+-- Generation 2 rows go the same way for the same reason: a stored
+-- @def_mod@ cannot be attributed to a component after the fact.  The only
+-- honest options are to re-index or to lie.
 currentIndexFormat :: Int
-currentIndexFormat = 2
+currentIndexFormat = 3

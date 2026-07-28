@@ -39,8 +39,8 @@ import System.IO (hPutStrLn, stderr)
 
 import Hypha.Cache qualified as Cache
 import Hypha.Search.Index
-  ( IndexRow (..), Visibility (Internal), currentIndexFormat
-  , visibilityFromText, visibilityToText )
+  ( DefinitionRef (..), IndexRow (..), Visibility (Internal)
+  , currentIndexFormat, visibilityFromText, visibilityToText )
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import System.Directory (createDirectoryIfMissing)
@@ -75,6 +75,7 @@ openIndexCache path = do
   -- Columns first, so opening a generation-1 database does not throw
   -- before 'ensureIndexFormat' gets the chance to clear it.
   migrateAddColumn conn "pkg_index" "def_mod"    "TEXT NOT NULL DEFAULT ''"
+  migrateAddColumn conn "pkg_index" "def_pkg"    "TEXT NOT NULL DEFAULT ''"
   migrateAddColumn conn "pkg_index" "visibility" "TEXT NOT NULL DEFAULT ''"
   lock <- newMVar ()
   let c = IndexCache conn lock
@@ -119,6 +120,7 @@ schema =
     \  , name    TEXT NOT NULL \
     \  , sig     TEXT NOT NULL \
     \  , def_mod TEXT NOT NULL \
+    \  , def_pkg TEXT NOT NULL \
     \  , visibility TEXT NOT NULL )"
   , "CREATE INDEX IF NOT EXISTS pkg_index_by_pv \
     \  ON pkg_index (pkg, version)"
@@ -211,31 +213,37 @@ readIndex c pkg ver =
 -- drift apart.  Column order is a wire format: it is spelled out rather
 -- than derived.
 rowColumns :: Text
-rowColumns = "pkg, mod, name, sig, def_mod, visibility"
+rowColumns = "pkg, mod, name, sig, def_mod, def_pkg, visibility"
 
 -- | Rebuild a row from its stored columns, along with a description of
 -- anything about it we could not make sense of.
 --
--- An unrecognised visibility can only come from a row
--- 'ensureIndexFormat' should already have cleared, so the anomaly travels
--- out to 'reportAnomalies' — which is in 'IO' and can actually say
--- something — rather than being silently defaulted here.  The row is kept
--- as 'Internal', the ranking-neutral choice.
-fromStored :: (Text, Text, Text, Text, Text, Text) -> (IndexRow, Maybe Text)
-fromStored (pkg, modPath, name, sig, defMod, vis) =
+-- An unrecognised visibility, or a missing definition component, can only
+-- come from a row 'ensureIndexFormat' should already have cleared, so the
+-- anomaly travels out to 'reportAnomalies' — which is in 'IO' and can
+-- actually say something — rather than being silently defaulted here.  The
+-- row is kept as 'Internal' (the ranking-neutral choice) and attributed to
+-- its own component (the pre-cross-package meaning).
+fromStored
+  :: (Text, Text, Text, Text, Text, Text, Text) -> (IndexRow, Maybe Text)
+fromStored (pkg, modPath, name, sig, defMod, defPkg, vis) =
   ( IndexRow
       { rowComponent  = ComponentKey pkg
       , rowModule     = ModulePath modPath
       , rowName       = SymbolName name
       , rowSignature  = Signature sig
-      , rowDefModule  = ModulePath defMod
+      , rowDefinition = DefinitionRef (ComponentKey definingPkg) (ModulePath defMod)
       , rowVisibility = maybe Internal id (visibilityFromText vis)
       }
-  , case visibilityFromText vis of
-      Just _  -> Nothing
-      Nothing -> Just
+  , case (visibilityFromText vis, Text.null defPkg) of
+      (Just _,  False) -> Nothing
+      (Nothing, _)     -> Just
         (pkg <> "/" <> modPath <> ": unrecognised visibility " <> Text.pack (show vis))
+      (Just _,  True)  -> Just
+        (pkg <> "/" <> modPath <> ": no definition component; assuming " <> pkg)
   )
+  where
+    definingPkg = if Text.null defPkg then pkg else defPkg
 
 -- | Trace every anomaly 'fromStored' found, then hand back the rows.
 reportAnomalies :: [(IndexRow, Maybe Text)] -> IO [IndexRow]
@@ -270,15 +278,16 @@ writeIndex c pkg ver rows = withWrite c $ Sql.withTransaction (icConn c) $ do
               , unModulePath (rowModule r)
               , unSymbolName (rowName r)
               , unSignature (rowSignature r)
-              , unModulePath (rowDefModule r)
+              , unModulePath (drModule (rowDefinition r))
+              , unComponentKey (drComponent (rowDefinition r))
               , visibilityToText (rowVisibility r)
               )
             | r <- rows
             ]
       executeMany (icConn c)
         "INSERT INTO pkg_index \
-        \  (pkg, version, mod, name, sig, def_mod, visibility) \
-        \VALUES (?,?,?,?,?,?,?)"
+        \  (pkg, version, mod, name, sig, def_mod, def_pkg, visibility) \
+        \VALUES (?,?,?,?,?,?,?,?)"
         expanded
   -- @strftime('%s','now')@ stores the timestamp as a Unix second so the
   -- meta row stays human-inspectable from a sqlite3 prompt.

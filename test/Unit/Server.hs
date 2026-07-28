@@ -16,6 +16,7 @@ import Lucid (renderText)
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
 import Hypha.Search.Collapse (SearchResult (..), SymbolResult (..))
+import Hypha.Search.Index (DefinitionRef (..))
 import Hypha.Search.Reexport (DefinitionSite (..))
 import Hypha.Server.ModuleDoc (SymbolCardData (..))
 import Hypha.Server.Ui.Doc (symbolCard)
@@ -93,7 +94,8 @@ scopeSearchRowsTests =
       , srModule     = ModulePath "Data.Aeson"
       , srName       = SymbolName "encode"
       , srSignature  = Signature "Value -> ByteString"
-      , srDefModule  = ModulePath "Data.Aeson.Encoding"
+      , srDefinition = DefinitionRef (ComponentKey "aeson")
+                                     (ModulePath "Data.Aeson.Encoding")
       , srAlternates = 0
       }
     containersRow = ResultSymbol SymbolResult
@@ -101,7 +103,8 @@ scopeSearchRowsTests =
       , srModule     = ModulePath "Data.Map"
       , srName       = SymbolName "lookup"
       , srSignature  = Signature "k -> Map k v -> Maybe v"
-      , srDefModule  = ModulePath "Data.Map.Internal"
+      , srDefinition = DefinitionRef (ComponentKey "containers")
+                                     (ModulePath "Data.Map.Internal")
       , srAlternates = 0
       }
     rows = [aesonRow, containersRow]

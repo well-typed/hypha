@@ -43,7 +43,7 @@ import Hypha.Package.Resolver (PackageResolver (..))
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.Index
-  (IndexRow (..), ModuleSource (..), Visibility (..))
+  (DefinitionRef (..), IndexRow (..), ModuleSource (..), Visibility (..))
 import Hypha.Search.Reexport (DefinitionSite (..), Resolution (..))
 import Hypha.Search.Reexport qualified as Reexport
 import Hypha.Source.Extensions (LanguageSettings)
@@ -308,7 +308,7 @@ indexParsedComponent compKey parsed = ComponentIndex
           , rowModule     = presented
           , rowName       = name
           , rowSignature  = sig
-          , rowDefModule  = defMod
+          , rowDefinition = DefinitionRef compKey defMod
           , rowVisibility = Map.findWithDefault Internal presented visibilityOf
           }
       | ((presented, name), res) <- Map.toList (Reexport.resolveComponent ifaces)

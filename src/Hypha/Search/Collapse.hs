@@ -28,7 +28,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 
 import Hypha.Search.Fuzzy (Entity (..), IndexedRow (..), scoreRow)
-import Hypha.Search.Index (IndexRow (..), Visibility (..))
+import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature, SymbolName (..))
@@ -47,7 +47,7 @@ data SymbolResult = SymbolResult
     -- exposes this definition.
   , srName       :: !SymbolName
   , srSignature  :: !Signature
-  , srDefModule  :: !ModulePath
+  , srDefinition :: !DefinitionRef
   , srAlternates :: !Int
     -- ^ How many other presentations were folded in.  Rendered as a small
     -- affordance linking the definition site, so nothing is hidden.
@@ -99,8 +99,8 @@ collapseRows rows = go Map.empty rows
       EntityModule c m v   -> ResultModule c m v
       EntitySymbol row     -> ResultSymbol (symbolResult row 0)
 
-symbolKey :: IndexRow -> (ComponentKey, ModulePath, SymbolName)
-symbolKey r = (rowComponent r, rowDefModule r, rowName r)
+symbolKey :: IndexRow -> (ComponentKey, DefinitionRef, SymbolName)
+symbolKey r = (rowComponent r, rowDefinition r, rowName r)
 
 symbolResult :: IndexRow -> Int -> SymbolResult
 symbolResult r alternates = SymbolResult
@@ -108,7 +108,7 @@ symbolResult r alternates = SymbolResult
   , srModule     = rowModule r
   , srName       = rowName r
   , srSignature  = rowSignature r
-  , srDefModule  = rowDefModule r
+  , srDefinition = rowDefinition r
   , srAlternates = alternates
   }
 
@@ -140,10 +140,14 @@ resultHref = \case
 
 -- | Where the @+N@ affordance points: the definition site, so the escape
 -- hatch out of a collapsed group is one click.
+--
+-- The component comes from the definition, not from the presentation: a
+-- re-export can cross a package boundary, and @\/pkg\/base\/GHC.Internal…@
+-- is a module @base@ does not have.
 definitionHref :: SymbolResult -> Text
 definitionHref s =
-  "/pkg/" <> unComponentKey (srComponent s)
-    <> "/" <> unModulePath (srDefModule s)
+  "/pkg/" <> unComponentKey (drComponent (srDefinition s))
+    <> "/" <> unModulePath (drModule (srDefinition s))
     <> "/" <> unSymbolName (srName s)
 
 -- | The component a result belongs to, for the search bar's scope chip.

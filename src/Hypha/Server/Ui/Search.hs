@@ -17,6 +17,7 @@ import Lucid.Base (makeAttributes)
 
 import Hypha.Search.Collapse
   ( SearchResult (..), SymbolResult (..), definitionHref, resultHref )
+import Hypha.Search.Index (DefinitionRef (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
@@ -111,7 +112,7 @@ resultsFragment tokens results = ul_ [class_ "results", id_ "results"] $
          , href_ (definitionHref s)
          , title_ ("also exposed by " <> Text.pack (show (srAlternates s))
                      <> " other module(s); defined in "
-                     <> unModulePath (srDefModule s))
+                     <> unModulePath (drModule (srDefinition s)))
          ]
          (toHtml ("+" <> Text.pack (show (srAlternates s))))
 
