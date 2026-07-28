@@ -23,6 +23,7 @@ module Hypha.Search.Reexport
   , Resolution (..)
   , resolveComponent
   , expandedExportNames
+  , outsideModulesFor
   , definitionModule
   , sharedSegments
   ) where
@@ -223,6 +224,30 @@ expandedExportNames ifaces asking = case Map.lookup asking byName of
       , Just target <- [Map.lookup m byName]
       , n <- Interface.interfaceExportedNames target
       ]
+
+-- | The modules outside the component that the asking module's exports
+-- resolve into.
+--
+-- A module page needs the /sources/ of these, not just their names: the
+-- entries it renders carry haddock and line numbers only the defining
+-- module has.  Naming them without doing the IO is what keeps this module
+-- pure and lets the caller read exactly those files and no others.
+--
+-- A site naming the asking module itself is the "no import plausibly
+-- supplies this" fallback rather than a module to go and read, so it is
+-- excluded.  Deduplicated and sorted, so the caller's read set does not
+-- depend on export-list order.
+outsideModulesFor :: [ModuleInterface] -> ModulePath -> [ModulePath]
+outsideModulesFor ifaces asking =
+  Set.toList (Set.fromList
+    [ m
+    | n <- expandedExportNames ifaces asking
+    , Just res <- [Map.lookup (asking, n) resolution]
+    , DefinedOutside m <- [resSite res]
+    , m /= asking
+    ])
+  where
+    resolution = resolveComponent ifaces
 
 -- | How many leading dot-separated segments two module paths share.
 --
