@@ -15,6 +15,7 @@
 module Hypha.Search.Indexer
   ( -- * Building
     buildAndCacheIndex
+  , Hydrated (..)
   , hydrateFromCache
     -- * The pure core
   , ComponentIndex (..)
@@ -31,6 +32,7 @@ module Hypha.Search.Indexer
   , chooseSourceRoots
   ) where
 
+import Control.Monad (foldM, void)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
@@ -91,6 +93,18 @@ componentsForUnit plan pid d =
       roots <- chooseSourceRoots d
       pure [(Comp.MainLib, roots)]
 
+-- | What hydration recovered: the exports of every component it loaded,
+-- and the units it could not.
+--
+-- The environment is returned rather than rebuilt later because the
+-- background pass needs it before it indexes anything: a warm cache
+-- holding @ghc-internal@ is exactly how @base@ becomes resolvable in a run
+-- that only rebuilds @base@.
+data Hydrated = Hydrated
+  { hyEnv     :: !ExportEnv
+  , hyMissing :: ![PackageId]
+  }
+
 -- | Pull every cached component index into the in-memory ref.  A unit
 -- counts as "fully hydrated" only when /every/ one of its components
 -- has cached rows; otherwise it's reported as missing so the
@@ -100,31 +114,35 @@ hydrateFromCache
   -> Cache.HyphaPackageCache
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
-  -> IO [PackageId]
-hydrateFromCache plan cache pids ref = go [] pids
+  -> IO Hydrated
+hydrateFromCache plan cache pids ref = go Exports.emptyEnv [] pids
   where
-    go missing [] = pure (reverse missing)
-    go missing (pid : rest) = do
+    go env missing [] = pure Hydrated
+      { hyEnv     = env
+      , hyMissing = reverse missing
+      }
+    go env missing (pid : rest) = do
       let pkgT  = unPackageName (pkgName pid)
           verT  = unVersion    (pkgVersion pid)
       kinds <- componentKinds plan pid
       case kinds of
-        []  -> go (pid : missing) rest
+        []  -> go env (pid : missing) rest
         _   -> do
           let keys = [ unComponentKey (componentKeyOf (PackageName pkgT) k)
                      | k <- kinds ]
           hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
           if and hits
             then do
-              mapM_ (loadKey pid verT) keys
-              go missing rest
-            else go (pid : missing) rest
+              env' <- foldM (loadKey pid verT) env keys
+              go env' missing rest
+            else go env (pid : missing) rest
 
-    loadKey pid verT k = do
+    loadKey pid verT env k = do
       rows <- Cache.readCachedIndex cache k verT
       let indexed = scorerRows (pkgName pid) (pkgVersion pid) rows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+      pure (Exports.extendEnv rows env)
 
     -- | Just the component kinds for a unit, mirroring the
     -- structure 'componentsForUnit' would emit.  We avoid needing a
@@ -138,8 +156,14 @@ hydrateFromCache plan cache pids ref = go [] pids
 
 -- | Walk the source trees of the given packages, extract their module
 -- exports, persist the result to the cache, and prepend them to the
--- in-memory ref.  Packages whose source cannot be resolved are silently
--- skipped — the index is a best-effort fallback.
+-- in-memory ref.  Packages whose source cannot be resolved are skipped,
+-- with a reason on stderr — the index is a best-effort fallback, not a
+-- silent one.
+--
+-- Units are walked dependencies-first and each component's rows extend the
+-- environment the next one resolves against.  That order is a correctness
+-- requirement, not a performance one: @base@ has no signature for
+-- @mapAccumL@ until @ghc-internal@ has been indexed.
 --
 -- Per-module rows are built fully /outside/ the atomicModifyIORef'
 -- critical section; prepending makes each insert O(|rows|) instead of
@@ -148,12 +172,13 @@ buildAndCacheIndex
   :: BuildPlan
   -> Cache.HyphaPackageCache
   -> PackageResolver IO
+  -> ExportEnv                          -- ^ what the warm cache already supplies
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
   -> IORef.IORef Int                    -- ^ packages-done counter
   -> IO ()
-buildAndCacheIndex plan cache resolver pids ref doneRef =
-  mapM_ indexUnit pids
+buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
+  void (foldM indexUnit env0 (topologicalOrder plan pids))
   where
     -- Local + source-repository-package units land in the project DB;
     -- everything else (store packages) goes to the shared global DB.
@@ -165,24 +190,29 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
     -- the progress bar continues to read in package units.
     bump = IORef.atomicModifyIORef' doneRef (\n -> (n + 1, ()))
 
-    indexUnit pid = do
+    indexUnit env pid = do
       eDir <- resolveSrc resolver pid
       case eDir of
-        Left _  -> bump
+        Left err -> do
+          hPutStrLn stderr $
+            "hypha index: no source for "
+              <> Text.unpack (unPackageName (pkgName pid)) <> ": " <> show err
+          bump
+          pure env
         Right d -> do
           comps <- componentsForUnit plan pid d
-          mapM_ (indexComponent pid) comps
+          env'  <- foldM (indexComponent pid) env comps
           bump
+          pure env'
 
-    indexComponent pid (kind, srcDirs) = do
+    indexComponent pid env (kind, srcDirs) = do
       let pkgT    = unPackageName (pkgName    pid)
           verT    = unVersion    (pkgVersion pid)
           compKey = componentKeyOf (PackageName pkgT) kind
           langs   = languageSettingsFor plan pid kind
       sources <- componentModules plan pid kind srcDirs
       parsed   <- mapM (parseGuarded langs) sources
-      let ci       = indexParsedComponent compKey (dependencySet plan pid)
-                       Exports.emptyEnv parsed
+      let ci       = indexParsedComponent compKey (dependencySet plan pid) env parsed
           flatRows = ciRows ci
           indexed  = scorerRows (pkgName pid) (pkgVersion pid) flatRows
       reportComponentIndex compKey ci
@@ -192,6 +222,7 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
         (unComponentKey compKey) verT flatRows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+      pure (Exports.extendEnv flatRows env)
 
 -- | The packages a unit may resolve a re-export through: its dependencies,
 -- plus its own name.

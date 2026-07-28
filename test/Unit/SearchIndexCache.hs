@@ -7,6 +7,9 @@
 -- outliving the fix.
 module Unit.SearchIndexCache (tests) where
 
+import qualified Data.IORef as IORef
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Database.SQLite.Simple as Sql
 import           System.FilePath ((</>))
 import           System.IO.Temp (withSystemTempDirectory)
@@ -15,8 +18,15 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Cache (openIndexCache, readIndex, writeIndex)
+import Hypha.Search.Exports (Export (..), ExportChoice (..), lookupExport)
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
-import Hypha.Types.SymbolPath (ModulePath (..))
+import Hypha.Search.Indexer (Hydrated (..), hydrateFromCache)
+import Hypha.Search.PackageCache
+  ( CacheOrigin (..), openPackageCacheAt, writeCachedIndex )
+import Hypha.Types.BuildPlan
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
+import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import Util.Row (rowIn)
 
 -- | A wrapper's row: presented by @Data.Map.Strict@, defined in its
@@ -82,4 +92,37 @@ tests = testGroup "Unit.SearchIndexCache"
         c2   <- openIndexCache path
         rows <- readIndex c2 "containers" "0.7"
         rows @?= [wrapperRow]
+
+  , testCase "hydration hands back an environment the next unit can resolve against" $
+      -- A warm cache holding ghc-internal is exactly how base becomes
+      -- resolvable in a run that only rebuilds base.
+      withSystemTempDirectory "hypha-hyd" $ \dir -> do
+        c <- openPackageCacheAt (dir </> "g.db") Nothing
+        writeCachedIndex c OriginGlobal "ghc-internal" "9.1003.0"
+          [ rowIn "ghc-internal" "GHC.Internal.Data.Traversable" "mapAccumL"
+              "mapAccumL :: Traversable t => (s -> a -> (s, b)) -> s -> t a -> (s, t b)"
+              "GHC.Internal.Data.Traversable" Exposed
+          ]
+        let pid  = PackageId (PackageName "ghc-internal") (Version "9.1003.0")
+            plan = emptyBuildPlan
+              { bpUnits = Map.singleton (PackageName "ghc-internal") PlannedUnit
+                  { puId            = pid
+                  , puDeps          = []
+                  , puIsLocal       = False
+                  , puOrigin        = OriginDistribution
+                  , puSrcDir        = Nothing
+                  , puDistDir       = Nothing
+                  , puLibComponents = []
+                  }
+              }
+        ref <- IORef.newIORef []
+        hyd <- hydrateFromCache plan c [pid] ref
+        hyMissing hyd @?= []
+        case lookupExport (Set.singleton (PackageName "ghc-internal"))
+               (ModulePath "GHC.Internal.Data.Traversable")
+               (SymbolName "mapAccumL") (hyEnv hyd) of
+          Just ch -> exSignature (ecChosen ch)
+            @?= Signature
+                  "mapAccumL :: Traversable t => (s -> a -> (s, b)) -> s -> t a -> (s, t b)"
+          Nothing -> fail "cached rows did not reach the environment"
   ]

@@ -198,13 +198,15 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
   -- accepts requests so the common (warm) path renders results
   -- immediately on the first keystroke.  Anything not yet cached gets
   -- built in the background and persisted for next time.
-  missing  <- Indexer.hydrateFromCache plan cache pids indexRef
+  hyd <- Indexer.hydrateFromCache plan cache pids indexRef
+  let missing = Indexer.hyMissing hyd
   IORef.writeIORef totalRef (length missing)
   case missing of
     [] -> IORef.writeIORef readyRef True
     _  -> do
       _ <- forkIO $ do
-        r <- try (Indexer.buildAndCacheIndex plan cache resolver missing indexRef doneRef)
+        r <- try (Indexer.buildAndCacheIndex plan cache resolver
+                    (Indexer.hyEnv hyd) missing indexRef doneRef)
         case r :: Either SomeException () of
           Left e  -> hPutStrLn stderr ("hypha index build failed: " <> show e)
           Right _ -> pure ()
