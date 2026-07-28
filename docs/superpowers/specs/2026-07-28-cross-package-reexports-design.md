@@ -104,16 +104,22 @@ data Export = Export
 
 emptyEnv     :: ExportEnv
 extendEnv    :: [IndexRow] -> ExportEnv -> ExportEnv
+data ExportChoice = ExportChoice
+  { ecChosen   :: !Export
+  , ecRejected :: ![DefinitionRef]   -- ^ empty when the choice was forced
+  }
+
 lookupExport :: Set PackageName    -- ^ the asking unit's dependencies
-             -> ModulePath -> SymbolName -> ExportEnv
-             -> Maybe (Export, Ambiguity)
+             -> ModulePath -> SymbolName -> ExportEnv -> Maybe ExportChoice
 ```
 
 `Nothing` means no dependency of this unit exports that pair. A `Just`
-always carries a chosen `Export`, and the `Ambiguity` says whether the
-choice was forced or made among rejected candidates — the same shape
-`Reexport.Resolution` already uses, so ambiguity is reportable rather
-than a failure.
+always carries a chosen `Export`, with `ecRejected` saying whether the
+choice was forced or made among candidates — the same
+resolved-but-reportable shape `Reexport.Resolution` uses. It does not
+reuse `Reexport.Ambiguity`, whose payload is a `NonEmpty ModulePath`:
+here the rejected candidates differ by *component*, so a module alone
+could not name them.
 
 Built from `IndexRow`s rather than from parse trees, which buys
 transitivity for free: a dependency's rows already carry their own
