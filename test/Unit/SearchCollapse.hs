@@ -86,6 +86,51 @@ tests = testGroup "Unit.SearchCollapse"
       winner [a, b] @?= Just (ModulePath "Data.Map.Strict")
       winner [b, a] @?= Just (ModulePath "Data.Map.Strict")
 
+  , testCase "base's presentation wins over ghc-internal's definition" $ do
+      -- The issue in one case: mapAccumL is declared in ghc-internal and
+      -- published by base.  One result, presented by base.
+      let ghcInternal = ModulePath "GHC.Internal.Data.Traversable"
+          def = DefinitionRef (ComponentKey "ghc-internal") ghcInternal
+      case collapse
+             [ rowFrom "ghc-internal" "GHC.Internal.Data.Traversable"
+                 "mapAccumL" "sig" def Exposed
+             , rowFrom "ghc-internal" "GHC.Internal.Data.List"
+                 "mapAccumL" "sig" def Exposed
+             , rowFrom "base" "Data.Traversable" "mapAccumL" "sig" def Exposed
+             ] of
+        [ResultSymbol s] -> do
+          srComponent s  @?= ComponentKey "base"
+          srModule s     @?= ModulePath "Data.Traversable"
+          srDefinition s @?= def
+          srAlternates s @?= 2
+          resultHref (ResultSymbol s) @?= "/pkg/base/Data.Traversable/mapAccumL"
+        other -> fail ("expected one collapsed result, got " <> show (length other))
+
+  , testCase "two packages that merely share a module name stay two results" $ do
+      -- Same module name, same symbol, different definitions.  Collapsing
+      -- these would claim one package's code is the other's.
+      let results = collapse
+            [ rowFrom "alpha" "Shared.Mod" "thing" "sig"
+                (DefinitionRef (ComponentKey "alpha") (ModulePath "Shared.Mod")) Exposed
+            , rowFrom "beta"  "Shared.Mod" "thing" "sig"
+                (DefinitionRef (ComponentKey "beta")  (ModulePath "Shared.Mod")) Exposed
+            ]
+      length results @?= 2
+
+  , testCase "the component breaks a tie between identical presentations" $ do
+      -- Two packages presenting one definition under the same module name.
+      -- Which wins does not matter; that it is the same one every run does.
+      let def = DefinitionRef (ComponentKey "core") (ModulePath "Core.Internal")
+          rows =
+            [ rowFrom "zeta"  "Facade" "thing" "sig" def Exposed
+            , rowFrom "alpha" "Facade" "thing" "sig" def Exposed
+            ]
+      case (collapse rows, collapse (reverse rows)) of
+        ([ResultSymbol a], [ResultSymbol b]) -> do
+          srComponent a @?= ComponentKey "alpha"
+          srComponent b @?= ComponentKey "alpha"
+        _ -> fail "expected one collapsed result from each order"
+
   , testCase "the definition link names the defining component, not the presenting one" $
       -- base presents mapAccumL; ghc-internal defines it.  Building the
       -- link from the presentation's component would point at a module

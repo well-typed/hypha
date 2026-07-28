@@ -61,11 +61,18 @@ rankRows tokens rows =
 
 -- | Fold every presentation of one definition into a single result.
 --
--- The group key is @(component, definition module, name)@ — not the name,
--- and not the name plus signature.  @Data.Map.Strict.insertWith@ and
+-- The group key is @(definition, name)@ — not the name, and not the name
+-- plus signature.  @Data.Map.Strict.insertWith@ and
 -- @Data.Map.Lazy.insertWith@ have the same name /and/ the same signature
 -- and are different functions; they differ only in where they are defined,
 -- which is why that is the key.
+--
+-- The /presenting/ component is deliberately not part of the key.
+-- @base:Data.Traversable.mapAccumL@ and
+-- @ghc-internal:GHC.Internal.Data.Traversable.mapAccumL@ are one function
+-- published under two surfaces, and the author meant it to be consumed
+-- from @base@.  'DefinitionRef' carries its own component, so two packages
+-- that merely share a module name still key apart.
 --
 -- Input order (already ranked) is preserved: a group appears where its
 -- first member appeared.
@@ -99,8 +106,8 @@ collapseRows rows = go Map.empty rows
       EntityModule c m v   -> ResultModule c m v
       EntitySymbol row     -> ResultSymbol (symbolResult row 0)
 
-symbolKey :: IndexRow -> (ComponentKey, DefinitionRef, SymbolName)
-symbolKey r = (rowComponent r, rowDefinition r, rowName r)
+symbolKey :: IndexRow -> (DefinitionRef, SymbolName)
+symbolKey r = (rowDefinition r, rowName r)
 
 symbolResult :: IndexRow -> Int -> SymbolResult
 symbolResult r alternates = SymbolResult
@@ -117,15 +124,25 @@ pickPresentation :: NonEmpty IndexRow -> IndexRow
 pickPresentation = NE.head . NE.sortWith presentationRank
 
 -- | Ordered: exposed before internal, then a path with no @Internal@
--- segment, then fewer segments, then lexicographic.  Total and
--- deterministic, so the winner does not depend on the order SQLite
--- happened to return rows in.
-presentationRank :: IndexRow -> (Int, Int, Int, Text)
+-- segment, then fewer segments, then lexicographic on the module, then on
+-- the component.  Total and deterministic, so the winner does not depend
+-- on the order SQLite happened to return rows in — and now that a group can
+-- span components, the module alone is no longer a total order.
+--
+-- This ladder is what picks @base:Data.Traversable@ (two segments, no
+-- @Internal@) over @ghc-internal:GHC.Internal.Data.Traversable@ (four
+-- segments, one @Internal@).  It ranks by the shape of the published
+-- surface, not by any notion of which package the project "meant" to
+-- depend on, so a facade with shorter module names than the package it
+-- wraps would win; the @+N@ affordance is the escape hatch when the shape
+-- misleads.
+presentationRank :: IndexRow -> (Int, Int, Int, Text, Text)
 presentationRank row =
   ( case rowVisibility row of Exposed -> 0; Internal -> 1
   , if "Internal" `elem` segments then 1 else 0
   , length segments
   , unModulePath (rowModule row)
+  , unComponentKey (rowComponent row)
   )
   where
     segments = Text.splitOn "." (unModulePath (rowModule row))
