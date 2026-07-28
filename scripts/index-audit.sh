@@ -24,6 +24,17 @@ check "module names with a lower-case segment" \
   "SELECT count(*) FROM pkg_index WHERE mod GLOB '[a-z]*' OR mod GLOB '*.[a-z]*';"
 check "rows with an empty definition module" \
   "SELECT count(*) FROM pkg_index WHERE def_mod = '';"
+# A definition site is (component, module); a row missing the component half
+# cannot be linked to without guessing that it is the row's own package,
+# which is the guess cross-package re-exports made wrong.
+check "rows with an empty definition component" \
+  "SELECT count(*) FROM pkg_index WHERE def_pkg = '';"
+# A def_pkg naming a component that contributed no rows of its own means we
+# resolved a re-export into a package we never indexed -- the signature we
+# copied would have come from nowhere.
+check "rows defined by a component with no rows" \
+  "SELECT count(*) FROM pkg_index r WHERE NOT EXISTS \
+   (SELECT 1 FROM pkg_index d WHERE d.pkg = r.def_pkg);"
 check "rows with an unrecognised visibility" \
   "SELECT count(*) FROM pkg_index WHERE visibility NOT IN ('exposed','internal');"
 check "IntMap symbols carrying a Map signature" \

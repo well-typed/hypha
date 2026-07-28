@@ -2766,3 +2766,102 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - `locateDefinitionInComponent` gains a `ComponentKey` parameter beyond what the spec described. It has to report which component the definition is in, and deriving that from a module path is the precise mistake this change exists to remove.
 
 **Open risk, flagged rather than designed around.** `presentationRank` picks the winner from the shape of the module path. A façade package with shorter module names than the package it wraps would out-rank it. Task 6's test pins the `base`/`ghc-internal` case and the determinism, not the general question, and the `+N` affordance is the escape hatch. The alternative — ranking by whether the project depends on the package directly — was considered during brainstorming and rejected because it makes search results depend on the current project's plan.
+
+---
+
+## Notes — measurement, 2026-07-28
+
+Full re-index of this project's plan on GHC 9.10.3, generation 2 → 3.
+Log: the server's stderr; audit: `scripts/index-audit.sh`.
+
+### Row counts
+
+| | before | after |
+|---|---|---|
+| total rows | 61 531 | **63 146** |
+| packages | 282 | **283** |
+| `base` | 308 | **1450** |
+| `ghc-internal` | 1240 | 1245 |
+| cross-package rows (`def_pkg <> pkg`) | 0 (unrepresentable) | **1615**, across 33 packages |
+
+Top cross-package consumers: `base` 1142, `serialise` 76, `time-compat` 74,
+`base-compat` 68, `os-string` 68, `conduit-extra` 35, `ansi-terminal` 31,
+`filepath` 26, `tls` 24.
+
+### The issue's own case
+
+```text
+pkg   | mod              | def_pkg      | def_mod
+base  | Data.List        | ghc-internal | GHC.Internal.Data.Traversable
+base  | Data.Traversable | ghc-internal | GHC.Internal.Data.Traversable
+```
+
+Both rows exist where there were none. `base`'s previously-empty façade
+modules are now populated: `Data.Traversable` 9 (its complete export list),
+`Control.Monad` 22, `Data.Foldable` 21, `Data.List` 13, `Data.Maybe` 9,
+`Prelude` 3.
+
+### Audit
+
+Every counter 0, including the two checks added for this work — no row has
+an empty `def_pkg`, and no row's `def_pkg` names a component that
+contributed no rows of its own. Index format 3.
+
+### Unresolved exports: 7217 reports, one root cause
+
+Every report traces to a module whose source we could not parse or read.
+147 of the 411 distinct target modules have **zero** rows anywhere in the
+index; the other 264 have rows for what they declare and are missing
+exactly what they re-export from an unparseable module. Worked example:
+
+- `GHC.Internal.Base` fails with `parse error on input '#'` (CPP) → 0 rows.
+- `GHC.Internal.Control.Monad` therefore has rows for what it declares
+  (`filterM`, `foldM`, `forM`, …) and none for what it re-exports from
+  `GHC.Internal.Base` (`>>=`, `>>`, `Monad`, `Functor`, `return`, `fail`,
+  `mapM`, `sequence`, `ap`, `join`, `liftM`…).
+- `base`'s `Control.Monad` and `Prelude` inherit the same hole, which is
+  why `Prelude` has only 3 rows.
+
+Parse failures: **159 — identical to the previous round**, so this work
+introduced no parse regression. This is that round's deliberately-deferred
+Task 17 (CPP `include-dirs` + `MIN_VERSION_*` / `CALLCONV` synthesis),
+now *visible* instead of silent. The measurement strengthens the case for
+it considerably: it is the sole remaining cause of missing rows.
+
+Ambiguous resolutions: **0** — no `(module, name)` pair was supplied by two
+dependencies of one unit. Name mismatches: 66 reports; rows use the
+header-declared name and the audit finds no path-shaped module names.
+
+### Consequence worth a decision
+
+`mapAccumL` now collapses to one result across four rows sharing the
+definition `ghc-internal:GHC.Internal.Data.Traversable`. `presentationRank`
+ties `base:Data.List` and `base:Data.Traversable` (both exposed, both two
+segments, neither `Internal`) and breaks the tie lexicographically, so the
+result presents **`base:Data.List`**, not `Data.Traversable` as issue #11
+names. Both are `base` and both genuinely export the symbol — Hackage
+documents it under both — so this is correct but not literally what was
+asked for.
+
+A cheap fix exists and was **not** applied, being outside this plan: prefer
+the presentation whose last module segment equals the definition module's
+last segment (`Data.Traversable` ↔ `GHC.Internal.Data.Traversable`). It
+would need testing against the whole corpus before being trusted, since it
+reorders every collapsed group.
+
+### Deviations from the plan
+
+1. `foldl'` is imported qualified from `Data.Foldable` in `BuildPlan`
+   (Task 2). base 4.20 added it to the `Prelude`, so an unqualified import
+   is redundant on 9.10 and required on 9.6; `-Werror` rejects either
+   choice.
+2. `Hypha.Command.Source` was a second, unplanned caller of
+   `locateDefinitionInComponent` (Task 8). It gets a real `ComponentKey`
+   built from the cabal file name and an empty imported-module map — a bare
+   package directory has no plan, so no dependency graph — and the
+   cross-package case is now reported rather than silently unresolved.
+3. `Unit.SourceLocate` is a new test module; the plan assumed
+   `locateDefinitionInComponent` already had coverage somewhere, and it
+   had none.
+
+Tests: 273 → **305**, all passing. Zero golden-file churn throughout.
