@@ -214,6 +214,7 @@ test-suite hypha-tests
     Golden.Human
     Golden.Versions
     Golden.Source
+    Property.BuildPlanOrder
     Property.ComponentName
     Property.LookupCascade
     Property.LookupOutcomeShape
@@ -223,6 +224,7 @@ test-suite hypha-tests
     Property.SymbolPath
     Unit.BuildEnv
     Unit.BuildEnvCompose
+    Unit.BuildPlanOrder
     Unit.Components
     Unit.Doctor
     Unit.EmbeddedAssets

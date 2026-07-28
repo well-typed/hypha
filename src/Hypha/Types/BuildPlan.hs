@@ -20,10 +20,16 @@ module Hypha.Types.BuildPlan
   , applyOverrides
   , forwardDepsOf
   , reverseDepsOf
+  , topologicalOrder
   ) where
 
+-- Qualified rather than unqualified: base 4.20 added 'foldl'' to the
+-- Prelude, so an unqualified import is redundant on GHC 9.10 and required
+-- on 9.6, and -Werror rejects whichever one we pick.
+import qualified Data.Foldable as Foldable
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Data.Text (Text)
 
 import Hypha.Project.Components (ComponentInfo)
@@ -166,3 +172,35 @@ reverseDepsOf target bp =
   | u <- Map.elems (bpUnits bp)
   , any (\d -> pkgName d == target) (puDeps u)
   ]
+
+-- | The given units, dependencies before dependents.
+--
+-- Only edges /within/ the input matter: a dependency that is already
+-- cached is not in the list and has no order to constrain.  Each distinct
+-- unit is emitted exactly once, and nothing is ever dropped — a unit the
+-- plan does not know has no edges, and a unit inside a cycle is emitted
+-- when its own traversal returns.  So a cycle produces an arbitrary but
+-- total order rather than a hang, which matters because a plan is only a
+-- DAG by construction, not by type.
+--
+-- The indexer needs this because a component's cross-package re-exports
+-- resolve against the rows its dependencies already produced: @base@ has
+-- no signature for @mapAccumL@ until @ghc-internal@ has been indexed.
+topologicalOrder :: BuildPlan -> [PackageId] -> [PackageId]
+topologicalOrder bp pids = reverse (snd (Foldable.foldl' visit (Set.empty, []) pids))
+  where
+    wanted = Set.fromList pids
+
+    visit (seen, acc) pid
+      | pid `Set.member` seen = (seen, acc)
+      | otherwise =
+          -- Marked before recursing, so a back edge terminates.  Consing
+          -- the unit in front of its own dependencies and reversing at the
+          -- end is what puts the dependencies first without an O(n²)
+          -- append.
+          let (seen', acc') = Foldable.foldl' visit (Set.insert pid seen, acc) (depsOf pid)
+          in (seen', pid : acc')
+
+    depsOf pid = case Map.lookup (pkgName pid) (bpUnits bp) of
+      Nothing -> []
+      Just u  -> [ d | d <- puDeps u, d `Set.member` wanted ]

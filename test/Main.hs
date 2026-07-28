@@ -11,6 +11,7 @@ import qualified Golden.Server
 import qualified Golden.Source
 import qualified Golden.Symbol
 import qualified Golden.Versions
+import qualified Property.BuildPlanOrder
 import qualified Property.ComponentName
 import qualified Property.LookupCascade
 import qualified Property.LookupOutcomeShape
@@ -21,6 +22,7 @@ import qualified Property.SearchRanking
 import qualified Property.SymbolPath
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
+import qualified Unit.BuildPlanOrder
 import qualified Unit.Components
 import qualified Unit.Deps
 import qualified Unit.Doctor
@@ -71,6 +73,7 @@ allTests = testGroup "hypha"
   , Golden.Source.tests
   , Golden.Symbol.tests
   , Golden.Versions.tests
+  , Property.BuildPlanOrder.tests
   , Property.ComponentName.tests
   , Property.LookupCascade.tests
   , Property.LookupOutcomeShape.tests
@@ -81,6 +84,7 @@ allTests = testGroup "hypha"
   , Property.OutputJson.tests
   , Unit.BuildEnv.tests
   , Unit.BuildEnvCompose.tests
+  , Unit.BuildPlanOrder.tests
   , Unit.Components.tests
   , Unit.Deps.tests
   , Unit.Doctor.tests
