@@ -2882,6 +2882,53 @@ mapAccumL, scope=base      base : Data.List  +1  base:Data.Traversable
 A second full pass settled at exactly 63 146 rows / 283 packages, so the
 build is deterministic.
 
+### A third live-server bug, and what it revealed about the plan
+
+`/pkg/base/Data.List/mapAccumL` answered "symbol not found" for a link
+search had just offered. `base:Data.List` reaches
+`GHC.Internal.Data.List`, which exports `mapAccumL`, imports it from
+`GHC.Internal.Data.Traversable`, and *hides* it from
+`GHC.Internal.Data.OldList` — so it declares nothing. **Two hops**, and both
+browsing paths followed one, scanned the passthrough module, and gave up.
+`Data.Traversable` worked only because its single hop lands on the
+declaration. The module page had the same root cause and dropped the entry
+silently.
+
+The indexer never had this bug: `ExportEnv` is built from rows that already
+carry a resolved `DefinitionRef`, so transitivity came free. Browsing now
+asks the index for that answer — `Cache.lookupInModule` plus a new
+`ImportedDefinitions` carrying both the resolved sites and the sources they
+name — instead of re-deriving one hop of it.
+
+**`moduleOwner` and `outsideModulesFor` were the wrong primitives and are
+deleted.** `moduleOwner` reads `puLibComponents`, which `Project.Plan` fills
+from a unit's unpacked `.cabal`, and `extractSrcDir` yields a path only for
+`LocalUnpackedPackage`. So **every dependency's component list is empty** and
+`moduleOwner` could never resolve one — measured on the real plan: `hypha`
+has 81 exposed modules, `base`/`ghc-internal`/`containers` have `[]`. The
+index row names the defining component outright, so resolving that component
+and finding the module's file needs no component info at all.
+
+**The process failure worth recording:** Tasks 7 and 8 shipped green on
+tests that injected `ImportedDefinitions` directly and therefore never
+exercised `moduleOwner` — the one link that was broken. Pure-function tests
+cannot verify a path whose IO they replace. The fix was verified instead by
+driving `buildServerConfig` and calling `scSymbolLookup` / `scModuleDoc`
+directly (harness: `scratchpad/card.ghci`), which is what any future change
+to a browsing path should do.
+
+**Also fixed, found by that harness:** `resolveModuleEntries` used
+`traverse` over the component's modules, so one unparseable sibling degraded
+every page in the component to a bare export list — which is what
+`base/Data.List` actually rendered. It now parses per module and carries the
+failures in `mdiSkipped` for the server to report.
+
+Verified on the real handlers: `base/Data.List/mapAccumL` and
+`base/Data.Traversable/mapAccumL` both resolve to
+`ghc-internal:GHC.Internal.Data.Traversable` with full signatures,
+`containers/Data.Map.Strict/insertWith` unchanged, and `base/Data.List`
+renders 121 entries where it previously rendered none.
+
 ### Found while verifying, NOT fixed: class methods and constructors are never indexed
 
 Pre-existing and unrelated to this work, but larger than the defect this
@@ -2920,4 +2967,6 @@ attaches to them.
    `locateDefinitionInComponent` already had coverage somewhere, and it
    had none.
 
-Tests: 273 → **307**, all passing. Zero golden-file churn throughout.
+Tests: 273 → **305**, all passing (307 at peak; six went with the two
+deleted primitives, four arrived with the browsing fix). One golden fixture
+gained `mdiSkipped = []`; no rendered golden output changed.
