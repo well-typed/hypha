@@ -21,19 +21,23 @@ module Hypha.Types.BuildPlan
   , forwardDepsOf
   , reverseDepsOf
   , topologicalOrder
+  , moduleOwner
   ) where
 
 -- Qualified rather than unqualified: base 4.20 added 'foldl'' to the
 -- Prelude, so an unqualified import is redundant on GHC 9.10 and required
 -- on 9.6, and -Werror rejects whichever one we pick.
 import qualified Data.Foldable as Foldable
+import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
 
-import Hypha.Project.Components (ComponentInfo)
+import Hypha.Project.Components
+  ( ComponentInfo (..), ComponentKind )
 import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
+import Hypha.Types.SymbolPath (ModulePath (..))
 
 -- | Absolute path to the project root (directory containing @cabal.project@).
 newtype ProjectRoot = ProjectRoot { unProjectRoot :: FilePath }
@@ -204,3 +208,40 @@ topologicalOrder bp pids = reverse (snd (Foldable.foldl' visit (Set.empty, []) p
     depsOf pid = case Map.lookup (pkgName pid) (bpUnits bp) of
       Nothing -> []
       Just u  -> [ d | d <- puDeps u, d `Set.member` wanted ]
+
+-- | Which of a unit's dependencies exposes a module, and under which
+-- component.
+--
+-- Answered from the plan alone: no source is read and no index is
+-- consulted, so a module page can find the owner of a cross-package
+-- re-export before deciding what to load.
+--
+-- Scoped to the asking unit's dependencies, plus the unit itself so a
+-- sub-library re-exporting from the main library resolves.  Two unrelated
+-- packages can expose a module of the same name, and only the asking
+-- unit's dependency list says which one it meant.  Ties among dependencies
+-- break lexicographically, so the answer does not depend on plan order.
+--
+-- Lives here rather than in "Hypha.Project.Components" — which owns
+-- 'ComponentInfo' and would be the natural home — because that module
+-- cannot see 'BuildPlan': the dependency runs the other way.
+moduleOwner
+  :: BuildPlan
+  -> PackageId
+  -> ModulePath
+  -> Maybe (PackageId, ComponentKind)
+moduleOwner bp asking m = case sortOn (unPackageName . pkgName . fst) candidates of
+  (c : _) -> Just c
+  []      -> Nothing
+  where
+    scope = pkgName asking : case Map.lookup (pkgName asking) (bpUnits bp) of
+      Nothing -> []
+      Just u  -> map pkgName (puDeps u)
+
+    candidates =
+      [ (puId u, ciKind c)
+      | n <- scope
+      , Just u <- [Map.lookup n (bpUnits bp)]
+      , c <- puLibComponents u
+      , unModulePath m `elem` ciExposedModules c
+      ]
