@@ -12,13 +12,18 @@
 module Hypha.Search.Collapse
   ( SearchResult (..)
   , SymbolResult (..)
+  , Presentation (..)
   , rankRows
   , collapseRows
   , resultHref
   , definitionHref
+  , presentationHref
+  , presentationLabel
+  , definitionLabel
   , resultComponent
   ) where
 
+import Data.Containers.ListUtils (nubOrd)
 import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
@@ -40,6 +45,16 @@ data SearchResult
   | ResultSymbol  !SymbolResult
   deriving stock (Show, Eq)
 
+-- | One module of one component that exposes a definition.
+--
+-- A group's members differ only in this, which is why it is what the
+-- collapsed result carries.
+data Presentation = Presentation
+  { prComponent :: !ComponentKey
+  , prModule    :: !ModulePath
+  }
+  deriving stock (Show, Eq, Ord)
+
 data SymbolResult = SymbolResult
   { srComponent  :: !ComponentKey
   , srModule     :: !ModulePath
@@ -48,9 +63,14 @@ data SymbolResult = SymbolResult
   , srName       :: !SymbolName
   , srSignature  :: !Signature
   , srDefinition :: !DefinitionRef
-  , srAlternates :: !Int
-    -- ^ How many other presentations were folded in.  Rendered as a small
-    -- affordance linking the definition site, so nothing is hidden.
+  , srAlternates :: ![Presentation]
+    -- ^ The other presentations folded into this result, best-first.
+    --
+    -- A count was enough while every alternate was a module of the same
+    -- package: "+2, defined in Data.Map.Internal" told the whole story.
+    -- Now that a group can span packages it cannot, because the question
+    -- the affordance exists to answer became "which /other packages/ expose
+    -- this?" — and a number cannot answer it.
   }
   deriving stock (Show, Eq)
 
@@ -93,8 +113,14 @@ collapseRows rows = go Map.empty rows
              then go seen rest
              else
                let group  = Map.findWithDefault (row :| []) k grouped
-                   winner = pickPresentation group
-               in ResultSymbol (symbolResult winner (length group - 1))
+                   ranked = NE.sortWith presentationRank group
+                   winner = NE.head ranked
+                   -- nubOrd because one presentation can reach the scorer
+                   -- twice — a unit hydrated from cache and then rebuilt
+                   -- prepends its rows again — and a count that double-counts
+                   -- is exactly the kind of lie the list replaced.
+                   others = nubOrd (map presentationOf (NE.tail ranked))
+               in ResultSymbol (symbolResult winner others)
                     : go (Map.insert k () seen) rest
 
     symbolOf r = case irEntity r of
@@ -104,12 +130,12 @@ collapseRows rows = go Map.empty rows
     entityResult = \case
       EntityPackage p v    -> ResultPackage p v
       EntityModule c m v   -> ResultModule c m v
-      EntitySymbol row     -> ResultSymbol (symbolResult row 0)
+      EntitySymbol row     -> ResultSymbol (symbolResult row [])
 
 symbolKey :: IndexRow -> (DefinitionRef, SymbolName)
 symbolKey r = (rowDefinition r, rowName r)
 
-symbolResult :: IndexRow -> Int -> SymbolResult
+symbolResult :: IndexRow -> [Presentation] -> SymbolResult
 symbolResult r alternates = SymbolResult
   { srComponent  = rowComponent r
   , srModule     = rowModule r
@@ -119,9 +145,8 @@ symbolResult r alternates = SymbolResult
   , srAlternates = alternates
   }
 
--- | The presentation of a definition the user should land on.
-pickPresentation :: NonEmpty IndexRow -> IndexRow
-pickPresentation = NE.head . NE.sortWith presentationRank
+presentationOf :: IndexRow -> Presentation
+presentationOf r = Presentation (rowComponent r) (rowModule r)
 
 -- | Ordered: exposed before internal, then a path with no @Internal@
 -- segment, then fewer segments, then lexicographic on the module, then on
@@ -166,6 +191,29 @@ definitionHref s =
   "/pkg/" <> unComponentKey (drComponent (srDefinition s))
     <> "/" <> unModulePath (drModule (srDefinition s))
     <> "/" <> unSymbolName (srName s)
+
+-- | Where one folded-in presentation lives, so an alternate can be reached
+-- and not merely counted.
+presentationHref :: SymbolName -> Presentation -> Text
+presentationHref name p =
+  "/pkg/" <> unComponentKey (prComponent p)
+    <> "/" <> unModulePath (prModule p)
+    <> "/" <> unSymbolName name
+
+-- | @component:module@ — the form the UI shows a folded-in presentation in.
+--
+-- Always qualified by the component, even when it matches the presentation
+-- the user landed on: the whole point of the label is to say /where else/,
+-- and dropping the package for same-package alternates would make the two
+-- cases indistinguishable at a glance.
+presentationLabel :: Presentation -> Text
+presentationLabel p =
+  unComponentKey (prComponent p) <> ":" <> unModulePath (prModule p)
+
+-- | @component:module@ for a definition site.
+definitionLabel :: DefinitionRef -> Text
+definitionLabel d =
+  unComponentKey (drComponent d) <> ":" <> unModulePath (drModule d)
 
 -- | The component a result belongs to, for the search bar's scope chip.
 resultComponent :: SearchResult -> Text

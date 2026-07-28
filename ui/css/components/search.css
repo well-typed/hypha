@@ -108,10 +108,14 @@
   margin-bottom: 0.15rem;
 }
 .results li .name         { font-family: var(--mono); font-weight: 600; }
-/* Collapse never hides a presentation: the count links the definition
-   site, so an .Internal module folded into its wrapper stays one click
-   away. */
+/* Collapse never hides a presentation, and the affordance has to prove it.
+   Once a group can span packages a bare count answers nothing — "+1" on a
+   base result that folded in ghc-internal is exactly the question, not the
+   answer — so the badge opens a list naming every presentation, each a
+   link, with the definition site tagged. */
+.results li .alt-group   { display: inline; }
 .results li .alt-count {
+  display: inline-block;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.75rem;
@@ -120,10 +124,36 @@
   padding: 0 0.35rem;
   margin-left: 0.4rem;
   text-decoration: none;
+  cursor: pointer;
+  list-style: none;          /* suppress the default disclosure triangle */
 }
+.results li .alt-count::-webkit-details-marker { display: none; }
+.results li .alt-count::marker                 { content: ""; }
 .results li .alt-count:hover {
   color: var(--accent);
   border-color: var(--accent);
+}
+.results li .alt-list {
+  margin: 0.35rem 0 0.1rem 0.4rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--border);
+  list-style: none;
+}
+.results li .alt-list li {
+  padding: 0.1rem 0;
+  margin: 0;
+  border: 0;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+.results li .alt-list a       { color: var(--accent-2); text-decoration: none; }
+.results li .alt-list a:hover { text-decoration: underline; }
+.results li .alt-tag {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  font-style: italic;
+  margin-left: 0.4rem;
 }
 .results li .sig          {
   color: var(--muted);

@@ -15,17 +15,14 @@ import Lucid (renderText)
 
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
-import Hypha.Search.Collapse (SearchResult (..), SymbolResult (..))
-import Hypha.Search.Index (DefinitionRef (..))
 import Hypha.Search.Reexport (DefinitionSite (..))
 import Hypha.Server.ModuleDoc (SymbolCardData (..))
 import Hypha.Server.Ui.Doc (symbolCard)
 import Hypha.Source.Locate (Provenance (..))
 import Hypha.Source.Parser (DeclKind (..))
-import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
-import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
-import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
+import Hypha.Types.SymbolPath (ModulePath (..))
+import Hypha.Server.App (mimeFor, sanitizeSegments)
 import Hypha.Server.Ui.Search (highlightTokens)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
@@ -42,7 +39,6 @@ tests = testGroup "Unit.Server"
   , testGroup "Server.briefException" briefExceptionTests
   , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
   , testGroup "App.mimeFor" mimeForTests
-  , testGroup "App.scopeSearchRows" scopeSearchRowsTests
   , testGroup "Tree.splitByOrigin" splitByOriginTests
   , testGroup "Tree.hackageLink" hackageLinkTests
   , testGroup "Doc.symbolCard" symbolCardTests
@@ -76,38 +72,6 @@ mimeForTests =
   , testCase "extension-less falls back to octet-stream" $
       mimeFor "LICENSE" @?= "application/octet-stream"
   ]
-
-scopeSearchRowsTests :: [TestTree]
-scopeSearchRowsTests =
-  [ testCase "no scope parameter keeps every row" $
-      scopeSearchRows Nothing rows @?= rows
-  , testCase "empty scope parameter keeps every row" $
-      scopeSearchRows (Just "") rows @?= rows
-  , testCase "non-empty scope keeps only matching rows" $
-      scopeSearchRows (Just "aeson") rows @?= [aesonRow]
-  , testCase "scope matching no package yields no rows" $
-      scopeSearchRows (Just "nope") rows @?= []
-  ]
-  where
-    aesonRow = ResultSymbol SymbolResult
-      { srComponent  = ComponentKey "aeson"
-      , srModule     = ModulePath "Data.Aeson"
-      , srName       = SymbolName "encode"
-      , srSignature  = Signature "Value -> ByteString"
-      , srDefinition = DefinitionRef (ComponentKey "aeson")
-                                     (ModulePath "Data.Aeson.Encoding")
-      , srAlternates = 0
-      }
-    containersRow = ResultSymbol SymbolResult
-      { srComponent  = ComponentKey "containers"
-      , srModule     = ModulePath "Data.Map"
-      , srName       = SymbolName "lookup"
-      , srSignature  = Signature "k -> Map k v -> Maybe v"
-      , srDefinition = DefinitionRef (ComponentKey "containers")
-                                     (ModulePath "Data.Map.Internal")
-      , srAlternates = 0
-      }
-    rows = [aesonRow, containersRow]
 
 splitByOriginTests :: [TestTree]
 splitByOriginTests =

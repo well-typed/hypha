@@ -16,8 +16,8 @@ import Lucid
 import Lucid.Base (makeAttributes)
 
 import Hypha.Search.Collapse
-  ( SearchResult (..), SymbolResult (..), definitionHref, resultHref )
-import Hypha.Search.Index (DefinitionRef (..))
+  ( Presentation, SearchResult (..), SymbolResult (..), definitionHref
+  , definitionLabel, presentationHref, presentationLabel, resultHref )
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
@@ -85,7 +85,7 @@ resultsFragment tokens results = ul_ [class_ "results", id_ "results"] $
     entry r = li_ $ do
       a_ [href_ (resultHref r)] (body r)
       case r of
-        ResultSymbol s | srAlternates s > 0 -> alternates s
+        ResultSymbol s | not (null (srAlternates s)) -> alternates s
         _                                   -> mempty
 
     body :: SearchResult -> Html ()
@@ -105,16 +105,38 @@ resultsFragment tokens results = ul_ [class_ "results", id_ "results"] $
           (toHtml (unComponentKey (srComponent s) <> " \183 "
                      <> unModulePath (srModule s)))
 
-    -- Nothing is hidden by collapse: the count links the definition site.
+    -- Nothing is hidden by collapse, and the affordance has to prove it.
+    -- A bare count could while every alternate was a module of the same
+    -- package; once a group spans packages, "+1" on a base result that
+    -- folded in ghc-internal tells the reader nothing they wanted to know.
+    -- So every folded-in presentation is named, and each is a link.
     alternates :: SymbolResult -> Html ()
-    alternates s =
-      a_ [ class_ "alt-count"
-         , href_ (definitionHref s)
-         , title_ ("also exposed by " <> Text.pack (show (srAlternates s))
-                     <> " other module(s); defined in "
-                     <> unModulePath (drModule (srDefinition s)))
-         ]
-         (toHtml ("+" <> Text.pack (show (srAlternates s))))
+    alternates s = details_ [class_ "alt-group"] $ do
+      summary_ [ class_ "alt-count"
+               , title_ (altSummary s)
+               ]
+               (toHtml ("+" <> tshow (length (srAlternates s))))
+      ul_ [class_ "alt-list"] $ do
+        li_ $ do
+          a_ [href_ (definitionHref s)]
+             (toHtml (definitionLabel (srDefinition s)))
+          span_ [class_ "alt-tag"] "defines it"
+        mapM_ (altItem s) (srAlternates s)
+
+    altItem :: SymbolResult -> Presentation -> Html ()
+    altItem s p = li_ $
+      a_ [href_ (presentationHref (srName s) p)]
+         (toHtml (presentationLabel p))
+
+    -- Duplicated into the tooltip so hovering answers the question too,
+    -- without having to open the list.
+    altSummary s =
+      "also exposed by " <> Text.intercalate ", "
+        (map presentationLabel (srAlternates s))
+        <> "; defined in " <> definitionLabel (srDefinition s)
+
+    tshow :: Int -> Text
+    tshow = Text.pack . show
 
 -- | Wrap the first case-insensitive occurrence of every token in
 -- @\<mark\>@.  Matches are claimed left-to-right and never overlap or

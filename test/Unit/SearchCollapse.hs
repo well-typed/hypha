@@ -10,8 +10,8 @@ import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Collapse
   ( SearchResult (..), SymbolResult (..), collapseRows, definitionHref
-  , resultHref )
-import Hypha.Search.Fuzzy (mkSymbolRow)
+  , definitionLabel, presentationLabel, resultHref )
+import Hypha.Search.Fuzzy (mkSymbolRow, scopeRows)
 import Hypha.Search.Index (DefinitionRef (..), IndexRow, Visibility (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
@@ -36,7 +36,7 @@ tests = testGroup "Unit.SearchCollapse"
         [ResultSymbol s] -> do
           srModule s     @?= ModulePath "Data.Map.Strict"
           drModule (srDefinition s) @?= ModulePath "Data.Map.Strict.Internal"
-          srAlternates s @?= 1
+          length (srAlternates s) @?= 1
         other -> fail ("expected one collapsed result, got " <> show (length other))
 
   , testCase "strict and lazy stay two results (same name, same signature)" $ do
@@ -102,9 +102,46 @@ tests = testGroup "Unit.SearchCollapse"
           srComponent s  @?= ComponentKey "base"
           srModule s     @?= ModulePath "Data.Traversable"
           srDefinition s @?= def
-          srAlternates s @?= 2
+          length (srAlternates s) @?= 2
           resultHref (ResultSymbol s) @?= "/pkg/base/Data.Traversable/mapAccumL"
         other -> fail ("expected one collapsed result, got " <> show (length other))
+
+  , testCase "a collapsed result names every presentation it folded in" $ do
+      -- A count alone was enough while alternates were modules of one
+      -- package.  Across packages it cannot answer "which other packages
+      -- expose this?", which is all the +N affordance is for.
+      let def = DefinitionRef (ComponentKey "ghc-internal")
+                              (ModulePath "GHC.Internal.Data.Traversable")
+      case collapse
+             [ rowFrom "base" "Data.Traversable" "mapAccumL" "sig" def Exposed
+             , rowFrom "ghc-internal" "GHC.Internal.Data.List"
+                 "mapAccumL" "sig" def Exposed
+             , rowFrom "ghc-internal" "GHC.Internal.Data.Traversable"
+                 "mapAccumL" "sig" def Exposed
+             ] of
+        [ResultSymbol s] ->
+          map presentationLabel (srAlternates s)
+            @?= [ "ghc-internal:GHC.Internal.Data.List"
+                , "ghc-internal:GHC.Internal.Data.Traversable"
+                ]
+        other -> fail ("expected one collapsed result, got " <> show (length other))
+
+  , testCase "a lone presentation folds in nothing" $
+      case collapse [mapRow "Data.Map.Strict" "Data.Map.Strict.Internal" Exposed] of
+        [ResultSymbol s] -> srAlternates s @?= []
+        _ -> fail "expected one result"
+
+  , testCase "the definition label names its package" $
+      case collapse
+             [ rowFrom "base" "Data.Traversable" "mapAccumL" "sig"
+                 (DefinitionRef (ComponentKey "ghc-internal")
+                                (ModulePath "GHC.Internal.Data.Traversable"))
+                 Exposed
+             ] of
+        [ResultSymbol s] ->
+          definitionLabel (srDefinition s)
+            @?= "ghc-internal:GHC.Internal.Data.Traversable"
+        _ -> fail "expected one result"
 
   , testCase "two packages that merely share a module name stay two results" $ do
       -- Same module name, same symbol, different definitions.  Collapsing
@@ -130,6 +167,45 @@ tests = testGroup "Unit.SearchCollapse"
           srComponent a @?= ComponentKey "alpha"
           srComponent b @?= ComponentKey "alpha"
         _ -> fail "expected one collapsed result from each order"
+
+  , testCase "scoping to a package keeps a definition another package also presents" $ do
+      -- The bug: mapAccumL is presented by base and by ghc-internal and
+      -- collapses to one result whose component is the winner's.  Filtering
+      -- collapsed results dropped it from the loser's package view
+      -- entirely, so restricting search to base found nothing.  Scope has
+      -- to be applied to rows, before they are folded together.
+      let def = DefinitionRef (ComponentKey "ghc-internal")
+                              (ModulePath "GHC.Internal.Data.Traversable")
+          rows = [ rowFrom "base" "Data.List" "mapAccumL" "sig" def Exposed
+                 , rowFrom "base" "Data.Traversable" "mapAccumL" "sig" def Exposed
+                 , rowFrom "ghc-internal" "GHC.Internal.Data.Traversable"
+                     "mapAccumL" "sig" def Exposed
+                 ]
+          scopedTo s = collapseRows (scopeRows s (map mkSymbolRow rows))
+      case scopedTo (Just "base") of
+        [ResultSymbol s] -> do
+          srComponent s @?= ComponentKey "base"
+          map presentationLabel (srAlternates s) @?= ["base:Data.Traversable"]
+        other -> fail ("base scope: expected one result, got " <> show (length other))
+      -- And the other side of the same coin.
+      case scopedTo (Just "ghc-internal") of
+        [ResultSymbol s] -> do
+          srComponent s @?= ComponentKey "ghc-internal"
+          srAlternates s @?= []
+        other -> fail ("ghc-internal scope: expected one, got " <> show (length other))
+      -- No scope still folds all three into one.
+      length (scopedTo Nothing) @?= 1
+
+  , testCase "an empty scope is no scope" $ do
+      let rows = map mkSymbolRow
+            [ mapRow "Data.Map.Strict" "Data.Map.Strict.Internal" Exposed ]
+      length (collapseRows (scopeRows (Just "") rows)) @?= 1
+      length (collapseRows (scopeRows Nothing rows))   @?= 1
+
+  , testCase "scoping to a package with no rows yields nothing" $
+      collapseRows (scopeRows (Just "nope")
+        (map mkSymbolRow [mapRow "Data.Map" "Data.Map.Internal" Exposed]))
+        @?= []
 
   , testCase "the definition link names the defining component, not the presenting one" $
       -- base presents mapAccumL; ghc-internal defines it.  Building the

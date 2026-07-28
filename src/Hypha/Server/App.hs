@@ -6,7 +6,6 @@ module Hypha.Server.App
     -- * Pure helpers (exported for tests)
   , sanitizeSegments
   , mimeFor
-  , scopeSearchRows
   ) where
 
 import Control.Monad.IO.Class (liftIO)
@@ -51,8 +50,15 @@ data ServerConfig = ServerConfig
       -- ^ @(indexed, total)@ snapshot of the background indexer.  Drives
       -- the topbar progress bar.  Both are @0@ when nothing needed
       -- building (warm cache hit on every package).
-  , scHumanSearch  :: !(Text -> IO [Collapse.SearchResult])
-      -- ^ Given a query string, return the ranked, collapsed results.
+  , scHumanSearch  :: !(Text -> Maybe Text -> IO [Collapse.SearchResult])
+      -- ^ Query string plus an optional component to restrict to, returning
+      -- the ranked, collapsed results.
+      --
+      -- The scope is the search's business rather than the caller's because
+      -- it has to be applied to rows /before/ they are collapsed: a
+      -- definition several packages present folds into one result carrying
+      -- one component, so a caller filtering the results cannot see the
+      -- other packages it belongs to.
   , scSymbolLookup :: !(Text -> Text -> Text -> IO (Maybe SymbolCardData))
       -- ^ pkg → mod → sym → everything the symbol card renders.
   , scHaddockFile  :: !(Text -> [Text] -> IO (Maybe (FilePath, BL.ByteString)))
@@ -142,8 +148,8 @@ searchPage cfg mq mpkg = do
       if not ready
         then pure UISearch.buildingFragment
         else do
-          rows <- liftIO (scHumanSearch cfg q)
-          pure (UISearch.resultsFragment (Fuzzy.tokenize q) (scopeSearchRows mpkg rows))
+          rows <- liftIO (scHumanSearch cfg q (Text.pack <$> mpkg))
+          pure (UISearch.resultsFragment (Fuzzy.tokenize q) rows)
 
 -- | Package overview page — show pinned version + linked module index.
 pkgPage :: ServerConfig -> String -> Handler (Html ())
@@ -252,17 +258,6 @@ mimeFor fp = case Text.toLower ext of
   _       -> "application/octet-stream"
   where
     ext = snd (Text.breakOnEnd "." (Text.pack fp))
-
--- | Filter search rows down to one package when a scope is requested.
--- Both a missing @pkg@ query parameter and an explicitly empty one
--- (sent once the scope chip has just been cleared, since the hidden
--- input's now-empty value is still included in the htmx request) mean
--- "no scope" — every row passes through unfiltered.
-scopeSearchRows :: Maybe String -> [Collapse.SearchResult] -> [Collapse.SearchResult]
-scopeSearchRows mp rows = case mp of
-  Just p | not (null p) ->
-    filter ((== Text.pack p) . Collapse.resultComponent) rows
-  _ -> rows
 
 -- | Source code view with skylighting-rendered Haskell + optional
 -- @?line=N@ scroll target.

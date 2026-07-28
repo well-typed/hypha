@@ -223,16 +223,22 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
     , App.scIndexProgress = (,)
         <$> IORef.readIORef doneRef
         <*> IORef.readIORef totalRef
-    , App.scHumanSearch  = \q -> do
+    , App.scHumanSearch  = \q mScope -> do
         let tokens = Fuzzy.tokenize q
         if null tokens
           then pure []
           else do
             idx <- IORef.readIORef indexRef
-            -- Collapse before truncating: taking the top 50 rows first
+            -- Scope first, collapse second.  A definition several packages
+            -- present folds into one result carrying one component, so
+            -- scoping the results instead would hide it from every package
+            -- but the winner's.
+            --
+            -- Then collapse before truncating: taking the top 50 rows first
             -- would spend the budget on several presentations of the same
             -- definition and drop distinct symbols to make room.
-            pure (take 50 (Collapse.collapseRows (Collapse.rankRows tokens idx)))
+            let scoped = Fuzzy.scopeRows mScope idx
+            pure (take 50 (Collapse.collapseRows (Collapse.rankRows tokens scoped)))
     , App.scSymbolLookup = \pkgT modT symT -> do
         mDirs <- resolveComponentDirs plan resolver pkgT
         case mDirs of
