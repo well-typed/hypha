@@ -15,7 +15,9 @@ import qualified Data.Text as Text
 import Lucid
 
 import qualified Hypha.Server.Ui.Haddock as Haddock
+import           Hypha.Search.Index (DefinitionRef (..))
 import           Hypha.Server.ModuleDoc
+import           Hypha.Types.ComponentName (ComponentKey (..))
 import           Hypha.Types.SymbolPath (ModulePath (..))
 import           Hypha.Source.Extract
                    (DocEntry (..), EntryOrigin (..), ModuleDocInfo (..))
@@ -125,26 +127,38 @@ entrySection pkgT modT e =
     -- page the reader can trust and one that quietly implies the code
     -- lives here.
     reexportNote = case deOrigin e of
-      EntryLocal            -> mempty
-      EntryReexport defMod  ->
+      EntryLocal        -> mempty
+      EntryReexport def ->
         a_ [ class_ "decl-origin"
-           , href_ ("/pkg/" <> pkgT <> "/" <> unModulePath defMod
+           , href_ ("/pkg/" <> unComponentKey (drComponent def)
+                      <> "/" <> unModulePath (drModule def)
                       <> "/" <> deName e)
-           , title_ "Defined in another module of this package"
+           , title_ (if unComponentKey (drComponent def) == pkgT
+                       then "Defined in another module of this package"
+                       else "Defined in another package")
            ]
-           (toHtml ("from " <> unModulePath defMod))
+           (toHtml ("from " <> originLabel def))
+
+    -- The package is named only when it differs, so an intra-package
+    -- re-export reads exactly as it did before.
+    originLabel def
+      | unComponentKey (drComponent def) == pkgT = unModulePath (drModule def)
+      | otherwise =
+          unComponentKey (drComponent def) <> ":" <> unModulePath (drModule def)
 
     -- The source link follows the definition, because that is where the
-    -- lines this entry reports actually are.
-    srcModule = case deOrigin e of
-      EntryLocal           -> modT
-      EntryReexport defMod -> unModulePath defMod
+    -- lines this entry reports actually are — including into another
+    -- package.
+    (srcComponent, srcModule) = case deOrigin e of
+      EntryLocal        -> (pkgT, modT)
+      EntryReexport def -> ( unComponentKey (drComponent def)
+                           , unModulePath (drModule def) )
 
     srcLink = case anchorLine of
       Nothing -> mempty
       Just n  ->
         a_ [ class_ "decl-src"
-           , href_ ("/source/" <> pkgT <> "/" <> srcModule
+           , href_ ("/source/" <> srcComponent <> "/" <> srcModule
                      <> "?line=" <> tshow n <> "#L" <> tshow n)
            , title_ "Jump to source"
            ]

@@ -4,6 +4,7 @@
 -- 'DocEntry' per top-level declaration, in source order.
 module Unit.SourceExtract (tests) where
 
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 
 import Data.List (sort)
@@ -11,6 +12,7 @@ import Data.List (sort)
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
+import           Hypha.Search.Index (DefinitionRef (..))
 import qualified Hypha.Source.Extract as Extract
 import           Hypha.Source.Extract
                    ( DocEntry (..), EntryOrigin (..), ModuleDocInfo (..)
@@ -18,9 +20,10 @@ import           Hypha.Source.Extract
 import           Hypha.Source.Extensions (defaultLanguageSettings)
 import qualified Hypha.Source.Parser  as Parser
 import           Hypha.Source.Parser  (parseErrorMessage)
+import           Hypha.Types.ComponentName (ComponentKey (..))
 import           Hypha.Types.Doc      (DocText (..))
 import           Hypha.Types.SymbolPath (ModulePath (..))
-import           Util.Fixture (fixtureSources)
+import           Util.Fixture (depSources, fixtureSources)
 
 tests :: TestTree
 tests = testGroup "Unit.SourceExtract"
@@ -168,21 +171,23 @@ tests = testGroup "Unit.SourceExtract"
       -- Data.Map.Strict's page was empty because entries came only from
       -- local declarations, and that module declares almost nothing.
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings srcs
-             (ModulePath "Fixture.Wrapper") of
+      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             Map.empty (ModulePath "Fixture.Wrapper") of
         Left e     -> assertFailure (show e)
         Right info -> do
           sort (map deName (mdiEntries info))
             @?= ["Bag", "insertBag", "otherOnly", "sizeBag"]
           [ deOrigin e | e <- mdiEntries info, deName e == "insertBag" ]
-            @?= [EntryReexport (ModulePath "Fixture.Internal")]
+            @?= [EntryReexport (DefinitionRef (ComponentKey "reexport")
+                                              (ModulePath "Fixture.Internal"))]
           [ deOrigin e | e <- mdiEntries info, deName e == "otherOnly" ]
-            @?= [EntryReexport (ModulePath "Fixture.Other")]
+            @?= [EntryReexport (DefinitionRef (ComponentKey "reexport")
+                                              (ModulePath "Fixture.Other"))]
 
   , testCase "a re-exported entry carries the definition's haddock" $ do
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings srcs
-             (ModulePath "Fixture.Wrapper") of
+      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             Map.empty (ModulePath "Fixture.Wrapper") of
         Left e     -> assertFailure (show e)
         Right info ->
           assertBool "insertBag has documentation"
@@ -191,8 +196,8 @@ tests = testGroup "Unit.SourceExtract"
 
   , testCase "a definition module's entries are all local" $ do
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings srcs
-             (ModulePath "Fixture.Internal") of
+      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             Map.empty (ModulePath "Fixture.Internal") of
         Left e     -> assertFailure (show e)
         Right info ->
           assertBool "all local"
@@ -200,11 +205,42 @@ tests = testGroup "Unit.SourceExtract"
 
   , testCase "a module the component does not have is a reportable absence" $ do
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings srcs
-             (ModulePath "Fixture.Nope") of
+      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             Map.empty (ModulePath "Fixture.Nope") of
         Right _ -> assertFailure "expected an error for an unknown module"
         Left e  -> assertBool "names the module"
           ("Fixture.Nope" `Text.isInfixOf` parseErrorMessage e)
+
+  , testCase "a facade page shows its dependency's entry, with haddock" $ do
+      srcs <- fixtureSources
+      dep  <- depSources
+      let imported = Map.fromList
+            [ (ModulePath "Dep.Internal", (ComponentKey "reexport-dep", d))
+            | d <- dep
+            ]
+      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
+             srcs imported (ModulePath "Fixture.Imported") of
+        Left e     -> assertFailure (show e)
+        Right info -> do
+          [ deOrigin e | e <- mdiEntries info, deName e == "depThing" ]
+            @?= [ EntryReexport (DefinitionRef (ComponentKey "reexport-dep")
+                                               (ModulePath "Dep.Internal")) ]
+          [ deSignature e | e <- mdiEntries info, deName e == "depThing" ]
+            @?= [Just "depThing :: Int -> Int"]
+          assertBool "the dependency's haddock is carried over"
+            (or [ deHaddock e /= Nothing
+                | e <- mdiEntries info, deName e == "depThing" ])
+
+  , testCase "an entry whose owner is unknown is listed, not dropped" $ do
+      -- No imported sources at all: the page must still name depThing.
+      -- Omitting it leaves the reader with no way to know it exists.
+      srcs <- fixtureSources
+      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
+             srcs Map.empty (ModulePath "Fixture.Imported") of
+        Left e     -> assertFailure (show e)
+        Right info -> do
+          map deName (mdiEntries info) @?= ["depThing"]
+          map deSignature (mdiEntries info) @?= [Nothing]
   ]
   where
     safeHead []      = Nothing

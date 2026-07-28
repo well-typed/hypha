@@ -29,6 +29,7 @@ import Control.Monad.Trans.Maybe (MaybeT (..), hoistMaybe, runMaybeT)
 import Data.ByteString.Lazy qualified as LBS
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes)
 import Data.String qualified as String
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TIO
@@ -42,7 +43,9 @@ import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.Collapse qualified as Collapse
 import Hypha.Search.Index qualified as Index
+import Hypha.Search.Reexport qualified as Reexport
 import Hypha.Source.Extensions qualified as Extensions
+import Hypha.Source.Interface qualified as Interface
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Search.PackageCache qualified as Cache
 import Hypha.Server.App qualified as App
@@ -374,9 +377,13 @@ moduleDocFor cacheRoot plan env resolver pkgT modT = do
         -- The whole component, not just this module: a wrapper's entries
         -- live in the modules it re-exports from, and resolving them is
         -- what fills the \"On this page\" rail for @Data.Map.Strict@.
-        sources <- lift (componentSourcesFor plan resolver pkgT dirs)
-        let langs = componentLanguageSettings plan pkgT
-        case Extract.resolveModuleEntries langs sources (ModulePath modT) of
+        sources  <- lift (componentSourcesFor plan resolver pkgT dirs)
+        imported <- lift (importedSourcesFor plan resolver pkgT sources
+                            (ModulePath modT))
+        let langs   = componentLanguageSettings plan pkgT
+            compKey = componentKeyOf (cnPackage cn) (cnKind cn)
+        case Extract.resolveModuleEntries langs compKey sources imported
+               (ModulePath modT) of
           Left perr -> do
             f <- liftMaybeReason
                    ("module " <> modT <> " has no source file in the package")
@@ -502,6 +509,78 @@ componentSourcesFor plan resolver rawName dirs = do
           <> " for module docs: " <> show err
       pure []
     Right rp -> Indexer.componentModules plan (rpPkgId rp) (cnKind cn) dirs
+
+-- | The modules of /other/ components that a module's exports resolve
+-- into, keyed by module name.
+--
+-- Two cheap hops before any read: 'Reexport.outsideModulesFor' says which
+-- module names the page needs, and 'moduleOwner' says which dependency
+-- exposes each one — from the plan alone.  Only then is a file opened, so
+-- this costs one extra parse per page view rather than one per indexed
+-- package.
+--
+-- Every way this can come up empty is reported.  A page with fewer entries
+-- than the module exports is indistinguishable from a correct one unless we
+-- say so.
+importedSourcesFor
+  :: BuildPlan
+  -> PackageResolver IO
+  -> Text                    -- ^ component name from the URL
+  -> [Index.ModuleSource]    -- ^ the asking component's modules
+  -> ModulePath
+  -> IO (Map.Map ModulePath (ComponentKey, Index.ModuleSource))
+importedSourcesFor plan resolver pkgT sources asking = do
+  parsed <- mapM parseOne sources
+  let ifaces = [ i | Right i <- parsed ]
+      wanted = Reexport.outsideModulesFor ifaces asking
+      cn     = parseComponentName pkgT
+  case wanted of
+    [] -> pure Map.empty
+    _  -> do
+      ePid <- resolvePkg resolver (cnPackage cn)
+      case ePid of
+        Left err -> do
+          hPutStrLn stderr $
+            "hypha server: cannot resolve " <> Text.unpack pkgT
+              <> " to find its dependencies: " <> show err
+          pure Map.empty
+        Right rp ->
+          Map.fromList . catMaybes <$> mapM (loadOwner (rpPkgId rp)) wanted
+  where
+    langs = componentLanguageSettings plan pkgT
+
+    parseOne ms = Interface.parseInterfaceIO langs
+                    (Index.msPath ms) (Index.msContent ms)
+
+    loadOwner pid m = case moduleOwner plan pid m of
+      Nothing -> do
+        hPutStrLn stderr $
+          "hypha server: no dependency of "
+            <> Text.unpack (unPackageName (pkgName pid)) <> " exposes "
+            <> Text.unpack (unModulePath m)
+            <> "; its entries will have no signature"
+        pure Nothing
+      Just (ownerPid, kind) -> do
+        let ownerKey = componentKeyOf (pkgName ownerPid) kind
+        eDir <- resolveSrc resolver ownerPid
+        case eDir of
+          Left err -> do
+            hPutStrLn stderr $
+              "hypha server: no source for "
+                <> Text.unpack (unComponentKey ownerKey) <> ": " <> show err
+            pure Nothing
+          Right d -> do
+            comps <- Indexer.componentsForUnit plan ownerPid d
+            let dirs = concat [ ds | (k, ds) <- comps, k == kind ]
+            srcs <- Indexer.loadModuleSources dirs
+                      [(unModulePath m, Index.Exposed)]
+            case srcs of
+              (ms : _) -> pure (Just (m, (ownerKey, ms)))
+              []       -> do
+                hPutStrLn stderr $
+                  "hypha server: " <> Text.unpack (unComponentKey ownerKey)
+                    <> " has no source file for " <> Text.unpack (unModulePath m)
+                pure Nothing
 
 -- | The language settings the component fixes for its modules, so the
 -- module page parses them the way the indexer did.
