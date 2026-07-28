@@ -120,6 +120,7 @@ library
     Hypha.Project.Fingerprint
     Hypha.Search.Cache
     Hypha.Search.Collapse
+    Hypha.Search.Exports
     Hypha.Search.Index
     Hypha.Search.Indexer
     Hypha.Search.PackageCache
@@ -248,6 +249,7 @@ test-suite hypha-tests
     Unit.RepoCache
     Unit.SourceExtensions
     Unit.SearchCollapse
+    Unit.SearchExports
     Unit.SearchIndexBuild
     Unit.SearchIndexCache
     Unit.SearchReexport

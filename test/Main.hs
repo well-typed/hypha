@@ -45,6 +45,7 @@ import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
 import qualified Unit.SourceExtensions
 import qualified Unit.SearchCollapse
+import qualified Unit.SearchExports
 import qualified Unit.SearchIndexBuild
 import qualified Unit.SearchIndexCache
 import qualified Unit.SearchReexport
@@ -107,6 +108,7 @@ allTests = testGroup "hypha"
   , Unit.RepoCache.tests
   , Unit.SourceExtensions.tests
   , Unit.SearchCollapse.tests
+  , Unit.SearchExports.tests
   , Unit.SearchIndexBuild.tests
   , Unit.SearchIndexCache.tests
   , Unit.SearchReexport.tests
