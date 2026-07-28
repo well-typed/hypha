@@ -1,0 +1,10 @@
+cabal-version: 2.4
+name:          reexport-dep
+version:       0.1.0
+synopsis:      Dependency fixture: the package a reexport facade re-exports from
+
+library
+  hs-source-dirs:     src
+  exposed-modules:    Dep.Internal
+  default-language:   GHC2021
+  build-depends:      base

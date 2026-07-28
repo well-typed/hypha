@@ -18,9 +18,11 @@ module Hypha.Search.Indexer
   , hydrateFromCache
     -- * The pure core
   , ComponentIndex (..)
+  , OutsideExport (..)
   , indexComponentPure
   , indexParsedComponent
     -- * Component discovery
+  , dependencySet
   , componentsForUnit
   , componentModules
   , packageSources
@@ -32,6 +34,8 @@ module Hypha.Search.Indexer
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TIO
@@ -42,6 +46,9 @@ import System.IO (hPutStrLn, stderr)
 import Hypha.Package.Resolver (PackageResolver (..))
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
+import Hypha.Search.Exports
+  (Export (..), ExportChoice (..), ExportEnv, lookupExport)
+import Hypha.Search.Exports qualified as Exports
 import Hypha.Search.Index
   (DefinitionRef (..), IndexRow (..), ModuleSource (..), Visibility (..))
 import Hypha.Search.Reexport (DefinitionSite (..), Resolution (..))
@@ -174,7 +181,8 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
           langs   = languageSettingsFor plan pid kind
       sources <- componentModules plan pid kind srcDirs
       parsed   <- mapM (parseGuarded langs) sources
-      let ci       = indexParsedComponent compKey parsed
+      let ci       = indexParsedComponent compKey (dependencySet plan pid)
+                       Exports.emptyEnv parsed
           flatRows = ciRows ci
           indexed  = scorerRows (pkgName pid) (pkgVersion pid) flatRows
       reportComponentIndex compKey ci
@@ -184,6 +192,18 @@ buildAndCacheIndex plan cache resolver pids ref doneRef =
         (unComponentKey compKey) verT flatRows
       indexed `seq`
         IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+
+-- | The packages a unit may resolve a re-export through: its dependencies,
+-- plus its own name.
+--
+-- Its own name is in there because a sub-library re-exporting from the
+-- package's main library crosses a /component/ boundary without crossing a
+-- package one, and 'lookupExport' filters on package names.
+dependencySet :: BuildPlan -> PackageId -> Set PackageName
+dependencySet plan pid =
+  Set.insert (pkgName pid) $ case lookupUnit (pkgName pid) plan of
+    Nothing -> Set.empty
+    Just u  -> Set.fromList (map pkgName (puDeps u))
 
 -- | Pick the source roots to scan for a package.  If any of the common
 -- @hs-source-dirs@ subdirectories exist we walk those exclusively;
@@ -242,6 +262,17 @@ hsToModule fp =
 
 -- The pure core ------------------------------------------------------
 
+-- | An export the component does not itself declare.
+--
+-- Named rather than tupled because all three fields are module paths or
+-- close to it, and a bare triple at a report site is unreadable.
+data OutsideExport = OutsideExport
+  { oeModule   :: !ModulePath   -- ^ the module that exports it
+  , oeName     :: !SymbolName
+  , oeExpected :: !ModulePath   -- ^ the import we believe supplies it
+  }
+  deriving stock (Show, Eq, Ord)
+
 -- | What indexing one component produced, and what it could not.
 data ComponentIndex = ComponentIndex
   { ciRows          :: ![IndexRow]
@@ -250,6 +281,13 @@ data ComponentIndex = ComponentIndex
     -- ^ @(name the stanza expected, name the source declares)@.  Real in
     -- the wild, and silently trusting either side produces rows nobody
     -- can reach.
+  , ciUnresolved    :: ![OutsideExport]
+    -- ^ Exports whose definition lives outside the component and which no
+    -- indexed dependency could supply.  A symbol missing from the index is
+    -- invisible, and the user has no other way to find out.
+  , ciAmbiguous     :: ![(OutsideExport, ExportChoice)]
+    -- ^ Exports more than one dependency could have supplied.  Resolved,
+    -- deterministically, and worth saying so.
   }
   deriving stock (Show, Eq)
 
@@ -263,27 +301,34 @@ data ComponentIndex = ComponentIndex
 -- signatures through a name-keyed map.
 indexComponentPure
   :: ComponentKey
+  -> Set PackageName          -- ^ the packages a re-export may resolve through
+  -> ExportEnv                -- ^ what the components indexed so far export
   -> LanguageSettings
   -> [ModuleSource]
   -> ComponentIndex
-indexComponentPure compKey langs sources = indexParsedComponent compKey
-  [ (ms, Interface.parseInterface langs (msPath ms) (msContent ms))
-  | ms <- sources
-  ]
+indexComponentPure compKey deps env langs sources =
+  indexParsedComponent compKey deps env
+    [ (ms, Interface.parseInterface langs (msPath ms) (msContent ms))
+    | ms <- sources
+    ]
 
 -- | The core, over parse results the caller obtained.
 --
 -- Parsing is the caller's job because it is where the exceptions are: see
 -- 'Interface.parseInterfaceIO'.  Everything from here on is a function of
--- the sources.
+-- the sources and of what the dependencies exported.
 indexParsedComponent
   :: ComponentKey
+  -> Set PackageName
+  -> ExportEnv
   -> [(ModuleSource, Either Parser.ParseError ModuleInterface)]
   -> ComponentIndex
-indexParsedComponent compKey parsed = ComponentIndex
-  { ciRows          = rows
+indexParsedComponent compKey deps env parsed = ComponentIndex
+  { ciRows          = localRows ++ outsideRows
   , ciParseFailures = failures
   , ciNameMismatch  = mismatches
+  , ciUnresolved    = unresolved
+  , ciAmbiguous     = ambiguous
   }
   where
     failures   = [ (msDeclaredName ms, e) | (ms, Left e)  <- parsed ]
@@ -302,18 +347,22 @@ indexParsedComponent compKey parsed = ComponentIndex
     ifaceOf      = Map.fromList [ (miName i, i)               | (_,  i) <- ok ]
     contentOf    = Map.fromList [ (miName i, msContent ms)    | (ms, i) <- ok ]
 
-    rows =
+    resolved = Map.toList (Reexport.resolveComponent ifaces)
+
+    visibilityFor presented = Map.findWithDefault Internal presented visibilityOf
+
+    -- Exports this component declares, here or in a sibling module.
+    localRows =
       [ IndexRow
           { rowComponent  = compKey
           , rowModule     = presented
           , rowName       = name
           , rowSignature  = sig
           , rowDefinition = DefinitionRef compKey defMod
-          , rowVisibility = Map.findWithDefault Internal presented visibilityOf
+          , rowVisibility = visibilityFor presented
           }
-      | ((presented, name), res) <- Map.toList (Reexport.resolveComponent ifaces)
-      , not (isDefinedOutside (resSite res))
-      , let defMod = Reexport.definitionModule presented (resSite res)
+      | ((presented, name), res) <- resolved
+      , defMod <- insideSite presented (resSite res)
       , Just defIface <- [Map.lookup defMod ifaceOf]
         -- The signature is read from the module the resolver landed on.
         -- Looking it up in a component-wide name map is what published
@@ -323,23 +372,85 @@ indexParsedComponent compKey parsed = ComponentIndex
       , let sig = Signature (maybe "" id (Parser.declSigText src decl))
       ]
 
--- | A symbol the component does not define gets no row: we have no
--- signature for it, and its definition belongs to another index entry.
-isDefinedOutside :: DefinitionSite -> Bool
-isDefinedOutside site = case site of
-  DefinedOutside{} -> True
-  DefinedHere      -> False
-  DefinedIn{}      -> False
+    -- Exports whose definition is in a dependency.  A site naming the
+    -- asking module itself is "Hypha.Search.Reexport"'s "no import
+    -- plausibly supplies this" fallback, not a claim about a dependency:
+    -- looking it up would match any dependency exposing a module of the
+    -- same name, so it goes straight to the unresolved report.
+    outside =
+      [ OutsideExport presented name m
+      | ((presented, name), DefinedOutside m) <- map (fmap resSite) resolved
+      , m /= presented
+      ]
+
+    selfNamed =
+      [ OutsideExport presented name m
+      | ((presented, name), DefinedOutside m) <- map (fmap resSite) resolved
+      , m == presented
+      ]
+
+    classified = [ (oe, lookupExport deps (oeExpected oe) (oeName oe) env)
+                 | oe <- outside
+                 ]
+
+    outsideRows =
+      [ IndexRow
+          { rowComponent  = compKey
+          , rowModule     = oeModule oe
+          , rowName       = oeName oe
+          , rowSignature  = exSignature (ecChosen ch)
+          , rowDefinition = exDefinition (ecChosen ch)
+          , rowVisibility = visibilityFor (oeModule oe)
+          }
+      | (oe, Just ch) <- classified
+      ]
+
+    unresolved = selfNamed ++ [ oe | (oe, Nothing) <- classified ]
+
+    ambiguous =
+      [ (oe, ch)
+      | (oe, Just ch) <- classified
+      , not (null (ecRejected ch))
+      ]
+
+-- | The definition module when it is inside this component, and nothing
+-- when it is not.  A list rather than a 'Maybe' so it drops straight into
+-- the row comprehension.
+insideSite :: ModulePath -> DefinitionSite -> [ModulePath]
+insideSite asking site = case site of
+  DefinedHere      -> [asking]
+  DefinedIn m      -> [m]
+  DefinedOutside _ -> []
 
 -- | Trace what a component's index pass could not do.  Never silent: a
--- module missing from the index is invisible to search, and the user has
--- no other way to find out.
+-- module or symbol missing from the index is invisible to search, and the
+-- user has no other way to find out.
 reportComponentIndex :: ComponentKey -> ComponentIndex -> IO ()
 reportComponentIndex compKey ci = do
-  mapM_ reportFailure  (ciParseFailures ci)
-  mapM_ reportMismatch (ciNameMismatch ci)
+  mapM_ reportFailure    (ciParseFailures ci)
+  mapM_ reportMismatch   (ciNameMismatch ci)
+  mapM_ reportUnresolved (ciUnresolved ci)
+  mapM_ reportAmbiguous  (ciAmbiguous ci)
   where
     label = Text.unpack (unComponentKey compKey)
+
+    reportUnresolved oe = hPutStrLn stderr $
+      "hypha index: " <> label <> " could not resolve "
+        <> Text.unpack (unModulePath (oeModule oe)) <> "."
+        <> Text.unpack (unSymbolName (oeName oe))
+        <> " through " <> Text.unpack (unModulePath (oeExpected oe))
+        <> "; no indexed dependency exports it"
+
+    reportAmbiguous (oe, ch) = hPutStrLn stderr $
+      "hypha index: " <> label <> " resolved "
+        <> Text.unpack (unModulePath (oeModule oe)) <> "."
+        <> Text.unpack (unSymbolName (oeName oe)) <> " to "
+        <> renderRef (exDefinition (ecChosen ch)) <> ", rejecting "
+        <> unwords (map renderRef (ecRejected ch))
+
+    renderRef r =
+      Text.unpack (unComponentKey (drComponent r)) <> ":"
+        <> Text.unpack (unModulePath (drModule r))
 
     reportFailure (m, e) = hPutStrLn stderr $
       "hypha index: " <> label <> " skipped module "

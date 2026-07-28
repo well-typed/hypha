@@ -7,6 +7,7 @@ library
   hs-source-dirs:     src
   exposed-modules:    Fixture.Wrapper
                     , Fixture.Facade
+                    , Fixture.Imported
                     , Fixture.Strict
                     , Fixture.Other
                     , Fixture.Internal

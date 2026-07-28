@@ -4,6 +4,7 @@
 -- the fixture contains.
 module Util.Fixture
   ( fixtureSources
+  , depSources
   , sourcesFor
   ) where
 
@@ -36,5 +37,13 @@ fixtureSources = sourcesFor
   , ("test/fixtures/reexport/src/Fixture/Strict.hs",         "Fixture.Strict",         Exposed)
   , ("test/fixtures/reexport/src/Fixture/StrictInternal.hs", "Fixture.StrictInternal", Internal)
   , ("test/fixtures/reexport/src/Fixture/Other.hs",          "Fixture.Other",          Exposed)
+  , ("test/fixtures/reexport/src/Fixture/Imported.hs",       "Fixture.Imported",       Exposed)
   , ("test/fixtures/reexport/src/Fixture/Renamed.hs",        "Fixture.Declared",       Internal)
   ]
+
+-- | The @reexport-dep@ component: the package @Fixture.Imported@
+-- re-exports from.  Kept separate from 'fixtureSources' because the whole
+-- point of the fixture is that the two are different components.
+depSources :: IO [ModuleSource]
+depSources = sourcesFor
+  [ ("test/fixtures/reexport-dep/src/Dep/Internal.hs", "Dep.Internal", Exposed) ]

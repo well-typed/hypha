@@ -11,23 +11,43 @@
 module Unit.SearchIndexBuild (tests) where
 
 import           Data.List (sort)
+import qualified Data.Set as Set
 import qualified Data.Text as Text
 
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
+import Hypha.Search.Exports (emptyEnv, envFromRows)
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Search.Indexer
-  ( ComponentIndex (..), indexComponentPure )
+  ( ComponentIndex (..), OutsideExport (..), indexComponentPure )
 import Hypha.Source.Extensions (defaultLanguageSettings)
 import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.PackageId (PackageName (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
-import Util.Fixture (fixtureSources, sourcesFor)
+import Util.Fixture (depSources, fixtureSources, sourcesFor)
 
+-- | The packages the fixture component may resolve a re-export through:
+-- itself, and the neighbouring fixture package it re-exports from.
+reexportDeps :: Set.Set PackageName
+reexportDeps = Set.fromList [PackageName "reexport", PackageName "reexport-dep"]
+
+-- | The fixture component with its dependency already indexed, which is
+-- the state the real pass reaches by walking units dependencies-first.
 fixture :: IO ComponentIndex
 fixture = do
   srcs <- fixtureSources
-  pure (indexComponentPure (ComponentKey "reexport") defaultLanguageSettings srcs)
+  dep  <- depIndex
+  pure (indexComponentPure (ComponentKey "reexport") reexportDeps
+          (envFromRows (ciRows dep)) defaultLanguageSettings srcs)
+
+-- | The dependency component, indexed on its own with nothing before it.
+depIndex :: IO ComponentIndex
+depIndex = do
+  srcs <- depSources
+  pure (indexComponentPure (ComponentKey "reexport-dep")
+          (Set.singleton (PackageName "reexport-dep")) emptyEnv
+          defaultLanguageSettings srcs)
 
 rowsFor :: ComponentIndex -> Text.Text -> [IndexRow]
 rowsFor ci n = [ r | r <- ciRows ci, rowName r == SymbolName n ]
@@ -47,7 +67,8 @@ tests = testGroup "Unit.SearchIndexBuild"
   , testCase "a path/header disagreement is reported, and the header wins" $ do
       srcs <- sourcesFor
         [ ("test/fixtures/reexport/src/Fixture/Renamed.hs", "Fixture.Renamed", Internal) ]
-      let ci = indexComponentPure (ComponentKey "reexport") defaultLanguageSettings srcs
+      let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
+                 defaultLanguageSettings srcs
       ciNameMismatch ci
         @?= [(ModulePath "Fixture.Renamed", ModulePath "Fixture.Declared")]
       assertBool "rows use the declared-in-source name"
@@ -100,13 +121,52 @@ tests = testGroup "Unit.SearchIndexBuild"
       -- from whatever else shared the name.
       srcs <- sourcesFor
         [ ("test/fixtures/reexport/src/Fixture/Broken.hs", "Fixture.Broken", Exposed) ]
-      let ci = indexComponentPure (ComponentKey "reexport") defaultLanguageSettings srcs
+      let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
+                 defaultLanguageSettings srcs
       ciRows ci @?= []
       length (ciParseFailures ci) @?= 1
 
-  , testCase "a symbol defined outside the component gets no row" $ do
-      -- We have no signature for it and its definition belongs to another
-      -- index entry; a row here would be an invention.
+  , testCase "a symbol nothing in the component exports gets no row" $ do
+      -- Fixture.Internal uses 'length' and exports nothing of the sort, so
+      -- it is not a re-export to resolve -- it is not an export at all.
       ci <- fixture
       rowsFor ci "length" @?= []
+
+  , testCase "a symbol re-exported from another package gets a row" $ do
+      ci <- fixture
+      case rowsFor ci "depThing" of
+        [r] -> do
+          rowModule r     @?= ModulePath "Fixture.Imported"
+          rowDefinition r @?= DefinitionRef (ComponentKey "reexport-dep")
+                                            (ModulePath "Dep.Internal")
+          -- The signature comes from the dependency's parse, not from a
+          -- name-keyed guess inside this component.
+          rowSignature r  @?= Signature "depThing :: Int -> Int"
+        other -> fail ("expected one depThing row, got " <> show (length other))
+
+  , testCase "a dependency symbol nobody re-exports gets no row here" $ do
+      ci <- fixture
+      rowsFor ci "depUnused" @?= []
+
+  , testCase "an unresolvable cross-package export is reported, not dropped" $ do
+      -- The same facade with an empty environment: the dependency has not
+      -- been indexed, so there is no signature to give.  Silently producing
+      -- nothing is what hid base for a whole release.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/Imported.hs", "Fixture.Imported", Exposed) ]
+      let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
+                 defaultLanguageSettings srcs
+      ciRows ci @?= []
+      ciUnresolved ci
+        @?= [ OutsideExport
+                { oeModule   = ModulePath "Fixture.Imported"
+                , oeName     = SymbolName "depThing"
+                , oeExpected = ModulePath "Dep.Internal"
+                } ]
+
+  , testCase "intra-package re-export rows are unchanged" $ do
+      ci <- fixture
+      let mods = sort (map (unModulePath . rowModule) (rowsFor ci "insertBag"))
+      mods @?= [ "Fixture.Facade", "Fixture.Internal", "Fixture.Strict"
+               , "Fixture.StrictInternal", "Fixture.Wrapper" ]
   ]
