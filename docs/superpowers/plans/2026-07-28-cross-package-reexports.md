@@ -2849,6 +2849,62 @@ last segment (`Data.Traversable` ↔ `GHC.Internal.Data.Traversable`). It
 would need testing against the whole corpus before being trusted, since it
 reorders every collapsed group.
 
+### Two bugs found by running the server, and fixed
+
+Reported against a live server after the plan's nine tasks were done. Both
+were consequences of collapsing across packages that the plan did not
+anticipate; both are now covered by tests.
+
+1. **Restricting search to a package found nothing.** Scope was applied to
+   collapsed results and matched only the winning presentation's component,
+   so a definition presented by both `base` and `ghc-internal` survived
+   under exactly one of them. Scope is now applied to rows *before* they are
+   folded (`Fuzzy.scopeRows`), and `scHumanSearch` takes it, because the
+   ordering is the search's business rather than the caller's.
+   `App.scopeSearchRows` is deleted — filtering collapsed results *was* the
+   bug.
+
+2. **The `+N` affordance could not say which other packages exposed the
+   symbol.** `srAlternates :: Int` was enough while every alternate was a
+   module of one package and useless once a group spans packages. It now
+   carries `[Presentation]`; the badge is a disclosure listing each one as a
+   link with the definition site tagged, and the tooltip enumerates them too.
+
+Verified on the complete index:
+
+```text
+mapAccumL, no scope        base : Data.List  +3
+  base:Data.Traversable, ghc-internal:GHC.Internal.Data.List,
+  ghc-internal:GHC.Internal.Data.Traversable
+mapAccumL, scope=base      base : Data.List  +1  base:Data.Traversable
+```
+
+A second full pass settled at exactly 63 146 rows / 283 packages, so the
+build is deterministic.
+
+### Found while verifying, NOT fixed: class methods and constructors are never indexed
+
+Pre-existing and unrelated to this work, but larger than the defect this
+plan set out to fix, so it should not stay unrecorded.
+
+| symbol | rows in the whole index |
+|---|---|
+| `traverse` | 4 (none in `base` or `ghc-internal`) |
+| `fmap`, `Just`, `mempty`, `liftA2` | **0** |
+
+`GHC.Internal.Data.Traversable` yields a row for `Traversable` — the class —
+and none for `traverse` or `sequenceA`. `Parser.findDecl` matches top-level
+declarations, and a class's methods and a data type's constructors are not
+top-level declarations, so `indexParsedComponent` has no declaration to read
+a signature from and writes no row. The export side already knows about them:
+`Traversable(..)` is recorded with its subordinates.
+
+`traverse` is the clean demonstration — its module parses and the class row
+exists, so this is purely the method gap and not the CPP cascade above.
+Fixing it means teaching `Hypha.Source.Parser` to emit class methods and
+constructors as their own declarations, with the signatures GHC already
+attaches to them.
+
 ### Deviations from the plan
 
 1. `foldl'` is imported qualified from `Data.Foldable` in `BuildPlan`
@@ -2864,4 +2920,4 @@ reorders every collapsed group.
    `locateDefinitionInComponent` already had coverage somewhere, and it
    had none.
 
-Tests: 273 → **305**, all passing. Zero golden-file churn throughout.
+Tests: 273 → **307**, all passing. Zero golden-file churn throughout.
