@@ -77,9 +77,9 @@ something (`Data.List.NonEmpty`, `Data.Functor.Classes`,
 
 `IndexRow.rowDefModule` identifies a definition site by module alone.
 Two packages can expose the same module name, so a module is not an
-identity. `Collapse.definitionHref` already reads the consequence
-wrongly: it builds the definition link from the *presentation's*
-component and the *definition's* module. With cross-package rows in the
+identity. The definition link already reads the consequence wrongly: it
+is built from the *presentation's* component and the *definition's*
+module. With cross-package rows in the
 index that link would point at a module the package does not have.
 
 ## Approach
@@ -328,7 +328,7 @@ has no other way to find out.
     an unresolved export when the env has no answer.
   - `collapseRows` folds rows from two components sharing a
     `DefinitionRef` into one result; the `base`-shaped presentation wins;
-    `definitionHref` points at the dependency's component.
+    the definition link points at the dependency's component.
   - `topologicalOrder` puts dependencies first and keeps plan-unknown
     units in input order.
   - `resolveModuleEntries` renders a cross-package entry with haddock

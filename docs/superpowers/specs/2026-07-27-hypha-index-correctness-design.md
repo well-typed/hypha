@@ -186,7 +186,7 @@ is "really" something else at a boundary we are already touching:
 |---|---|---|
 | `Signature` | `Text` (`sig` column, `srSignature`) | `Hypha.Types.SymbolPath` |
 | `ComponentKey` | `Text` from `componentKey` | `Hypha.Types.ComponentName` |
-| `SrcLine` | `Int` line numbers | `Hypha.Source.Interface` |
+| `SrcLine` | `Int` line numbers | `Hypha.Source.Interface` — proposed, **not adopted**: every line number stayed an `Int`, and the unused newtype has been deleted |
 | `UnknownExtension` | dropped on the floor | `Hypha.Source.Extensions` |
 
 ## §1 Parse layer — language settings, not a whitelist
@@ -247,7 +247,7 @@ then re-initialise with the resolved set. GHC bootstraps the same way.
 ```haskell
 data ParseError = ParseError
   { peMessage  :: !Text        -- ^ GHC's rendered diagnostic
-  , peLocation :: !(Maybe SrcLine)
+  , peLocation :: !(Maybe SrcLine)   -- ^ shipped as `peLine :: Maybe Int`
   , peUnknownExtensions :: ![UnknownExtension]
   }
 ```
@@ -326,7 +326,7 @@ data SymbolCardData = SymbolCardData
   , scdModule     :: !ModulePath          -- ^ definition site, from §3.2
   , scdRequested  :: !ModulePath          -- ^ what the URL asked for
   , scdProvenance :: !Provenance
-  , scdLine       :: !(Maybe SrcLine)
+  , scdLine       :: !(Maybe SrcLine)  -- ^ shipped as Maybe Int
   , scdKind       :: !(Maybe DeclKind)
   }
 ```
