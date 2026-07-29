@@ -20,13 +20,13 @@ module Hypha.Source.Parser
   , parseErrorMessage
   , parseDecls
   , parseDeclsWith
-  , parseDeclsIO
   , parseModuleDoc
   , parseModuleDocWith
   , parseModuleWith
-  , parseModuleDocIO
   , findDecl
   , declSigText
+  , declSigTextIn
+  , numberedLines
   , renderRdrName
   ) where
 
@@ -167,13 +167,6 @@ parseModuleWith
 parseModuleWith ls path source = unsafePerformIO (parseModuleIO ls path source)
 {-# NOINLINE parseModuleWith #-}
 
--- | Backwards-compatible 'IO' entry point for the doc views.
-parseModuleDocIO
-  :: Extensions.LanguageSettings -> FilePath -> Text
-  -> IO (Either ParseError (Maybe Text, [Decl]))
-parseModuleDocIO ls path source =
-  fmap (fmap (\(_, hdr, ds) -> (hdr, ds))) (parseModuleIO ls path source)
-
 parseModuleIO
   :: Extensions.LanguageSettings -> FilePath -> Text
   -> IO (Either ParseError (HsModule GhcPs, Maybe Text, [Decl]))
@@ -271,16 +264,25 @@ findDecl q ds =
 -- source bytes you pass to this function, not into the post-cpphs
 -- ones.
 declSigText :: Text -> Decl -> Maybe Text
-declSigText source d = do
+declSigText = declSigTextIn . numberedLines
+
+-- | 'declSigText' over lines already numbered, for callers slicing many
+-- declarations out of one module: numbering the source per declaration is
+-- what made the batch path quadratic.
+declSigTextIn :: [(Int, Text)] -> Decl -> Maybe Text
+declSigTextIn ls d = do
   startLn <- declSigLine d
   let endLn = case declSigEndLine d of
                 Just e  -> max startLn e
                 Nothing -> startLn
-      ls    = zip [1 :: Int ..] (Text.lines source)
       slice = [ t | (i, t) <- ls, i >= startLn, i <= endLn ]
   case slice of
     []    -> Nothing
     parts -> Just (Text.unwords (filter (not . Text.null) (map Text.strip parts)))
+
+-- | A module's lines, 1-based, the form every line-slicing helper takes.
+numberedLines :: Text -> [(Int, Text)]
+numberedLines = zip [1 :: Int ..] . Text.lines
 
 -- Internals --------------------------------------------------------
 

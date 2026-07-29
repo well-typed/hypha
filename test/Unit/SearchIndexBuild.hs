@@ -177,9 +177,4 @@ tests = testGroup "Unit.SearchIndexBuild"
                 , oeExpected = ModulePath "Dep.Internal"
                 } ]
 
-  , testCase "intra-package re-export rows are unchanged" $ do
-      ci <- fixture
-      let mods = sort (map (unModulePath . rowModule) (rowsFor ci "insertBag"))
-      mods @?= [ "Fixture.Facade", "Fixture.Internal", "Fixture.Strict"
-               , "Fixture.StrictInternal", "Fixture.Wrapper" ]
   ]

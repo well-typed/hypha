@@ -23,13 +23,11 @@
 module Hypha.Search.Fuzzy
   ( Entity (..)
   , ResultKind (..)
-  , entityKind
   , IndexedRow (..)
   , mkSymbolRow
   , mkPackageRow
   , mkModuleRow
   , moduleRows
-  , entityComponent
   , scopeRows
   , scoreRow
   , tokenize

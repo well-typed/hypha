@@ -24,7 +24,7 @@ module Hypha.Types.ComponentName
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Project.Components (ComponentKind (..))
+import Hypha.Project.Components (ComponentKind (..), renderComponentKind)
 import Hypha.Types.PackageId    (PackageName (..))
 
 -- | Reference to a single library or executable component.
@@ -63,9 +63,8 @@ parseComponentName raw =
 
 -- | Inverse of 'parseComponentName'.
 renderComponentName :: ComponentName -> Text
-renderComponentName (ComponentName (PackageName p) MainLib)    = p
-renderComponentName (ComponentName (PackageName p) (SubLib s)) = p <> ":" <> s
-renderComponentName (ComponentName (PackageName p) (Exe    s)) = p <> ":exe:" <> s
+renderComponentName (ComponentName (PackageName p) kind) =
+  p <> renderComponentKind kind
 
 -- | The rendered component reference, as it appears in the @pkg@ column
 -- of the search cache and in @\/pkg\/…@ URLs.

@@ -11,13 +11,15 @@
 module Hypha.Project.Components
   ( ComponentInfo (..)
   , ComponentKind (..)
+  , renderComponentKind
   , parseLibComponents
   , findCabalFile
   , getExposedModules
   ) where
 
-import Control.Exception.Safe (IOException, try)
+import Control.Exception.Safe (IOException, displayException, try)
 import Data.ByteString qualified as BS
+import Data.List (intercalate)
 import Data.Text qualified as T
 import Data.Text qualified as Text
 import Data.Text (Text)
@@ -29,8 +31,9 @@ import Distribution.Utils.Path qualified as UP
 import Language.Haskell.Extension qualified as Cabal
 import GHC.Driver.Session qualified as GHCLang
 import Hypha.Source.Extensions
-  ( LanguageSettings (..), UnknownExtension, extensionFromFlagName )
+  ( LanguageSettings (..), UnknownExtension (..), extensionFromFlagName )
 import System.Directory (doesDirectoryExist, listDirectory)
+import System.IO (hPutStrLn, stderr)
 import System.FilePath ((</>), takeExtension)
 import Text.PrettyPrint (render)
 
@@ -43,6 +46,15 @@ data ComponentKind
   | SubLib !Text
   | Exe    !Text
   deriving stock (Show, Eq, Ord)
+
+-- | The suffix a kind contributes to a component name: nothing for the
+-- main library, @:name@ for a sub-library, @:exe:name@ for an executable.
+-- Lives here, with the type, so the wire form has one definition.
+renderComponentKind :: ComponentKind -> Text
+renderComponentKind k = case k of
+  MainLib  -> ""
+  SubLib n -> ":" <> n
+  Exe    n -> ":exe:" <> n
 
 -- | One library or executable component of a package.
 data ComponentInfo = ComponentInfo
@@ -93,9 +105,13 @@ parseLibComponents
 parseLibComponents cabalPath pkgRoot = do
   eBs <- try @IO @IOException (BS.readFile cabalPath)
   case eBs of
-    Left _   -> pure []
+    Left err -> do
+      report ("could not be read: " <> displayException err)
+      pure []
     Right bs -> case PDP.parseGenericPackageDescriptionMaybe bs of
-      Nothing  -> pure []
+      Nothing  -> do
+        report "is not a cabal file we can parse"
+        pure []
       Just gpd ->
         let mainComp =
               [ toComponent MainLib (PD.condTreeData ct)
@@ -110,8 +126,34 @@ parseLibComponents cabalPath pkgRoot = do
                   (PD.emptyLibrary { PD.libBuildInfo = (PD.buildInfo (PD.condTreeData ct)) })
               | (n, ct) <- PD.condExecutables gpd
               ]
-        in pure (mainComp ++ subComps ++ exeComps)
+            comps    = mainComp ++ subComps ++ exeComps
+        in do mapM_ reportUnknownExtensions comps
+              pure comps
   where
+    -- Neither failure is silent: a caller told only "no components"
+    -- falls back to guessing, and the guess is what the component list
+    -- exists to replace.
+    report why = hPutStrLn stderr $
+      "hypha: " <> cabalPath <> " " <> why
+        <> "; its module lists and language settings are unavailable"
+
+    -- An extension name cabal accepted and GHC's own table does not know.
+    -- Rare, but it silently changes how we parse every module of the
+    -- component, so it is said out loud rather than carried unread.
+    reportUnknownExtensions ci = case ciUnknownExtensions ci of
+      []   -> pure ()
+      exts -> hPutStrLn stderr $
+        "hypha: " <> cabalPath <> " sets default-extensions GHC does not"
+          <> " recognise (" <> intercalate ", "
+               [ T.unpack (unUnknownExtension e) | e <- exts ]
+          <> "); modules of " <> T.unpack (describeKind (ciKind ci))
+          <> " are parsed without them"
+
+    describeKind k = case k of
+      MainLib  -> "its library"
+      SubLib n -> "its sub-library " <> n
+      Exe    n -> "its executable " <> n
+
     toComponent kind lib =
       let bi   = PD.libBuildInfo lib
           raw  = map UP.getSymbolicPath (PD.hsSourceDirs bi)

@@ -186,6 +186,14 @@ section.decl:hover .decl-anchor { opacity: 1; }
   font-family: var(--mono);
 }
 .decl-src:hover { color: var(--accent); }
+/* "from pkg:Module" on a re-exported entry: a provenance note, so it is
+   muted like .decl-src rather than competing with the declaration name. */
+.decl-origin {
+  font-size: 0.78rem;
+  color: var(--faint);
+  font-family: var(--mono);
+}
+.decl-origin:hover { color: var(--accent); }
 section.decl .signature { margin: 0.5rem 0; }
 section.decl .haddock   { margin: 0.5rem 0 0; }
 

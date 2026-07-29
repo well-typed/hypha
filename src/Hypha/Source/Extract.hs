@@ -33,6 +33,7 @@ import Hypha.Search.Reexport qualified as Reexport
 import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Source.Interface (ModuleInterface (..))
 import Hypha.Source.Interface qualified as Interface
+import Hypha.Source.Parser (numberedLines)
 import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.ComponentName (ComponentKey)
 import Hypha.Types.Doc (DocText (..))
@@ -83,7 +84,7 @@ noSymbolInfo = SymbolInfo Nothing Nothing Nothing Nothing Nothing
 -- | 'SymbolInfo' for a declaration already in hand.
 symbolInfoFromDecl :: [(Int, Text)] -> Parser.Decl -> SymbolInfo
 symbolInfoFromDecl numbered d = SymbolInfo
-  { siSignature = sigText numbered d
+  { siSignature = Parser.declSigTextIn numbered d
   , siHaddock   = DocText <$> Parser.declDoc d
   , siKind      = Just (Parser.declKind d)
   , siSigLine   = Parser.declSigLine d
@@ -180,7 +181,7 @@ docEntryFrom ls d origin = DocEntry
   , deOrigin    = origin
   }
   where
-    signatureFor lns decl = case sigText lns decl of
+    signatureFor lns decl = case Parser.declSigTextIn lns decl of
       Just t  -> Just t
       Nothing
         | Parser.declKind decl == Parser.DkFunction -> Nothing
@@ -219,7 +220,7 @@ resolveModuleEntries langs compKey sources imported asking = do
   -- Per module, not all-or-nothing, for the component's own modules /and/
   -- for the ones borrowed from a dependency: 'traverse' over either made
   -- one unparseable sibling degrade every page to an export list.
-  attempted      <- mapM parseOne sources
+  attempted      <- Interface.parseSources langs sources
   importedParsed <- mapM parseImported (Map.toList (idSources imported))
   let ok      = [ (ms, i) | (ms, Right i) <- attempted ]
       ifaces  = map snd ok
@@ -257,12 +258,8 @@ resolveModuleEntries langs compKey sources imported asking = do
           ]
       }
   where
-    parseOne ms = do
-      i <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
-      pure (ms, i)
-
     parseImported (m, (c, ms)) = do
-      i <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
+      (_, i) <- Interface.parseSource langs ms
       pure (m, (c, ms, i))
 
     -- The index's answer first, because it is the only transitively resolved
@@ -347,19 +344,4 @@ declSlice ls s e =
 -- Internals --------------------------------------------------------
 
 -- | Pair each line with its 1-based index.
-numberedLines :: Text -> [(Int, Text)]
-numberedLines = zip [1 :: Int ..] . Text.lines
 
--- | Pull the signature text for a decl out of the line-numbered
--- source, joining continuation lines into a single whitespace-
--- collapsed string.
-sigText :: [(Int, Text)] -> Parser.Decl -> Maybe Text
-sigText ls d = do
-  startLn <- Parser.declSigLine d
-  let endLn = case Parser.declSigEndLine d of
-                Just e  -> max startLn e
-                Nothing -> startLn
-      slice = [ t | (i, t) <- ls, i >= startLn, i <= endLn ]
-  case slice of
-    []    -> Nothing
-    parts -> Just (Text.unwords (filter (not . Text.null) (map Text.strip parts)))

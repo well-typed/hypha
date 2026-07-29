@@ -21,13 +21,10 @@ module Hypha.Search.Indexer
   , ComponentIndex (..)
   , OutsideExport (..)
   , indexComponentPure
-  , indexParsedComponent
     -- * Component discovery
-  , dependencySet
-  , componentsForUnit
   , componentModules
+  , languageSettingsFor
   , packageSources
-  , loadModuleSources
   , enumModulesIn
   , chooseSourceRoots
   ) where
@@ -36,7 +33,10 @@ import Control.Exception qualified as Exception
 import Control.Monad (foldM, void)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes)
+import Data.List (partition)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -83,16 +83,29 @@ enumModulesIn roots = do
 componentsForUnit
   :: BuildPlan -> PackageId -> FilePath
   -> IO [(Comp.ComponentKind, [FilePath])]
-componentsForUnit plan pid d =
-  case lookupUnit (pkgName pid) plan of
-    Just pu | not (null (puLibComponents pu)) ->
-      pure
-        [ (Comp.ciKind c, Comp.ciHsSourceDirs c)
-        | c <- puLibComponents pu
-        ]
-    _ -> do
-      roots <- chooseSourceRoots d
-      pure [(Comp.MainLib, roots)]
+componentsForUnit plan pid d = case componentsOf plan pid of
+  Just cs -> pure [ (Comp.ciKind c, Comp.ciHsSourceDirs c) | c <- cs ]
+  Nothing -> do
+    roots <- chooseSourceRoots d
+    pure [(Comp.MainLib, roots)]
+
+-- | The components the plan records for a unit, or 'Nothing' when it
+-- records none — every store dependency, whose @pkg-src@ we never parsed.
+--
+-- One derivation, because the build pass and the hydrate pass are two
+-- halves of the same decision: they must agree on which component keys a
+-- unit has, or hydration looks for keys the build never wrote.
+componentsOf :: BuildPlan -> PackageId -> Maybe [Comp.ComponentInfo]
+componentsOf plan pid = case lookupUnit (pkgName pid) plan of
+  Just pu | not (null (puLibComponents pu)) -> Just (puLibComponents pu)
+  _                                         -> Nothing
+
+-- | The component kinds a unit has, mirroring 'componentsForUnit' without
+-- needing a source directory: hydration works off the cache alone.
+componentKindsOf :: BuildPlan -> PackageId -> NonEmpty Comp.ComponentKind
+componentKindsOf plan pid = case componentsOf plan pid of
+  Just (c : cs) -> Comp.ciKind c :| map Comp.ciKind cs
+  _             -> Comp.MainLib :| []
 
 -- | What hydration recovered: the exports of every component it loaded,
 -- and the units it could not.
@@ -123,37 +136,23 @@ hydrateFromCache plan cache pids ref = go Exports.emptyEnv [] pids
       , hyMissing = reverse missing
       }
     go env missing (pid : rest) = do
-      let pkgT  = unPackageName (pkgName pid)
-          verT  = unVersion    (pkgVersion pid)
-      kinds <- componentKinds plan pid
-      case kinds of
-        []  -> go env (pid : missing) rest
-        _   -> do
-          let keys = [ unComponentKey (componentKeyOf (PackageName pkgT) k)
-                     | k <- kinds ]
-          hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
-          if and hits
-            then do
-              env' <- foldM (loadKey verT) env keys
-              -- Once per unit, not once per component key.
-              publishRows ref [Fuzzy.mkPackageRow (pkgName pid) (pkgVersion pid)]
-              go env' missing rest
-            else go env (pid : missing) rest
+      let verT = unVersion (pkgVersion pid)
+          keys = [ unComponentKey (componentKeyOf (pkgName pid) k)
+                 | k <- NE.toList (componentKindsOf plan pid) ]
+      hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
+      if and hits
+        then do
+          env' <- foldM (loadKey verT) env keys
+          -- Once per unit, not once per component key.
+          publishRows ref [Fuzzy.mkPackageRow (pkgName pid) (pkgVersion pid)]
+          go env' missing rest
+        else go env (pid : missing) rest
 
     loadKey verT env k = do
       rows <- Cache.readCachedIndex cache k verT
       publishRows ref (componentScorerRows rows)
       pure (Exports.extendEnv rows env)
 
-    -- | Just the component kinds for a unit, mirroring the
-    -- structure 'componentsForUnit' would emit.  We avoid needing a
-    -- source dir here because hydrate works off the cache alone.
-    componentKinds :: BuildPlan -> PackageId -> IO [Comp.ComponentKind]
-    componentKinds p pid =
-      case lookupUnit (pkgName pid) p of
-        Just pu | not (null (puLibComponents pu)) ->
-          pure [ Comp.ciKind c | c <- puLibComponents pu ]
-        _ -> pure [Comp.MainLib]
 
 -- | Walk the source trees of the given packages, extract their module
 -- exports, persist the result to the cache, and prepend them to the
@@ -211,9 +210,9 @@ buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
       let pkgT    = unPackageName (pkgName    pid)
           verT    = unVersion    (pkgVersion pid)
           compKey = componentKeyOf (PackageName pkgT) kind
-          langs   = languageSettingsFor plan pid kind
+          langs   = languageSettingsFor plan (pkgName pid) kind
       sources <- componentModules plan pid kind srcDirs
-      parsed   <- mapM (parseGuarded langs) sources
+      parsed   <- Interface.parseSources langs sources
       let ci       = indexParsedComponent compKey (dependencySet plan pid) env parsed
           flatRows = ciRows ci
       reportComponentIndex compKey ci
@@ -373,14 +372,17 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
     ifaces = map snd ok
 
     -- Keyed on the name the source declares, which is the same key the
-    -- resolution map uses.
-    visibilityOf = Map.fromList [ (miName i, msVisibility ms) | (ms, i) <- ok ]
-    ifaceOf      = Map.fromList [ (miName i, i)               | (_,  i) <- ok ]
-    contentOf    = Map.fromList [ (miName i, msContent ms)    | (ms, i) <- ok ]
+    -- resolution map uses.  One map rather than three with identical key
+    -- sets: the two 'findWithDefault' defaults the split version needed
+    -- could never fire, so a reader had to reconstruct that argument to
+    -- know the empty signature was not a sentinel.
+    byModule :: Map.Map ModulePath (ModuleSource, ModuleInterface)
+    byModule = Map.fromList [ (miName i, (ms, i)) | (ms, i) <- ok ]
 
     resolved = Map.toList (Reexport.resolveComponent ifaces)
 
-    visibilityFor presented = Map.findWithDefault Internal presented visibilityOf
+    visibilityFor presented =
+      maybe Internal (msVisibility . fst) (Map.lookup presented byModule)
 
     -- Exports this component declares, here or in a sibling module.
     localRows =
@@ -394,13 +396,13 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
           }
       | ((presented, name), res) <- resolved
       , defMod <- insideSite presented (resSite res)
-      , Just defIface <- [Map.lookup defMod ifaceOf]
+      , Just (defSrc, defIface) <- [Map.lookup defMod byModule]
         -- The signature is read from the module the resolver landed on.
         -- Looking it up in a component-wide name map is what published
         -- Data.IntMap.Lazy.insertWith with Data.Map's signature.
       , Just decl <- [Parser.findDecl (unSymbolName name) (miDecls defIface)]
-      , let src = Map.findWithDefault "" defMod contentOf
-      , let sig = Signature (maybe "" id (Parser.declSigText src decl))
+      , let sig = Signature
+              (fromMaybe "" (Parser.declSigText (msContent defSrc) decl))
       ]
 
     -- Exports whose definition is in a dependency.  A site naming the
@@ -408,17 +410,11 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
     -- plausibly supplies this" fallback, not a claim about a dependency:
     -- looking it up would match any dependency exposing a module of the
     -- same name, so it goes straight to the unresolved report.
-    outside =
-      [ OutsideExport presented name m
-      | ((presented, name), DefinedOutside m) <- map (fmap resSite) resolved
-      , m /= presented
-      ]
-
-    selfNamed =
-      [ OutsideExport presented name m
-      | ((presented, name), DefinedOutside m) <- map (fmap resSite) resolved
-      , m == presented
-      ]
+    (selfNamed, outside) =
+      partition (\oe -> oeModule oe == oeExpected oe)
+        [ OutsideExport presented name m
+        | ((presented, name), DefinedOutside m) <- map (fmap resSite) resolved
+        ]
 
     classified = [ (oe, lookupExport deps (oeExpected oe) (oeName oe) env)
                  | oe <- outside
@@ -507,11 +503,9 @@ componentModules
   -> [FilePath]
   -> IO [ModuleSource]
 componentModules plan pid kind srcDirs =
-  case componentInfoFor plan pid kind of
+  case componentInfoFor plan (pkgName pid) kind of
     Just ci
-      | not (null (Comp.ciExposedModules ci) && null (Comp.ciOtherModules ci)) ->
-          load ([ (m, Exposed)    | m <- Comp.ciExposedModules ci ]
-                  ++ [ (m, Internal) | m <- Comp.ciOtherModules ci ])
+      | not (null (stanzaModules ci)) -> load (stanzaModules ci)
     _ -> do
       hPutStrLn stderr $
         "hypha index: " <> Text.unpack (unPackageName (pkgName pid))
@@ -548,32 +542,54 @@ loadModuleSources srcDirs = fmap catMaybes . mapM loadOne
       ok <- Dir.doesFileExist candidate
       if ok then pure (Just candidate) else firstExistingModule rs modPath
 
+-- | The modules a cabal stanza names, with the visibility it gives them.
+stanzaModules :: Comp.ComponentInfo -> [(Text, Visibility)]
+stanzaModules ci =
+  [ (m, Exposed)  | m <- Comp.ciExposedModules ci ]
+    ++ [ (m, Internal) | m <- Comp.ciOtherModules ci ]
+
 -- | Every library component of a package, read straight from its cabal
 -- file without a build plan.
 --
 -- The CLI's @hypha source@ has a package directory and no plan, but still
 -- needs the component's module list to resolve a re-export: without it the
 -- only option is the package-wide sweep, which is a guess.
+--
+-- An empty result is always announced: 'Comp.parseLibComponents' returns
+-- @[]@ both for a cabal file we cannot read and for one that names no
+-- library, and a caller told only "no components" would silently fall
+-- back to the sweep it was written to avoid.
 packageSources :: FilePath -> IO [(Comp.ComponentInfo, [ModuleSource])]
 packageSources pkgRoot = do
   mCabal <- Comp.findCabalFile pkgRoot
   case mCabal of
-    Nothing    -> pure []
+    Nothing    -> do
+      report "has no cabal file"
+      pure []
     Just cabal -> do
       comps <- Comp.parseLibComponents cabal pkgRoot
-      mapM withSources comps
+      if null comps
+        then do
+          report ("cabal file " <> cabal <> " named no library component")
+          pure []
+        else mapM withSources comps
   where
+    report why = hPutStrLn stderr $
+      "hypha: " <> pkgRoot <> " " <> why
+        <> "; a symbol can only be located by sweeping the package"
+
     withSources ci = do
-      srcs <- loadModuleSources (Comp.ciHsSourceDirs ci)
-        ([ (m, Exposed)  | m <- Comp.ciExposedModules ci ]
-           ++ [ (m, Internal) | m <- Comp.ciOtherModules ci ])
+      srcs <- loadModuleSources (Comp.ciHsSourceDirs ci) (stanzaModules ci)
       pure (ci, srcs)
 
 -- | The parsed cabal component matching a kind, when we have one.
+--
+-- Keyed on the package /name/: 'lookupUnit' is, and a caller holding only
+-- a component key (the server, from a URL) has no version to offer.
 componentInfoFor
-  :: BuildPlan -> PackageId -> Comp.ComponentKind -> Maybe Comp.ComponentInfo
-componentInfoFor plan pid kind = do
-  pu <- lookupUnit (pkgName pid) plan
+  :: BuildPlan -> PackageName -> Comp.ComponentKind -> Maybe Comp.ComponentInfo
+componentInfoFor plan pkg kind = do
+  pu <- lookupUnit pkg plan
   case [ c | c <- puLibComponents pu, Comp.ciKind c == kind ] of
     (c : _) -> Just c
     []      -> Nothing
@@ -581,10 +597,14 @@ componentInfoFor plan pid kind = do
 -- | The language settings a component fixes for its modules.  Without them
 -- a module relying on a stanza-wide extension parses differently for us
 -- than for the compiler.
+--
+-- The server calls this too, on the way to a module page: two derivations
+-- would mean the page could parse a module differently from the way the
+-- index did, which is the divergence this layer exists to remove.
 languageSettingsFor
-  :: BuildPlan -> PackageId -> Comp.ComponentKind -> LanguageSettings
-languageSettingsFor plan pid kind =
-  case componentInfoFor plan pid kind of
+  :: BuildPlan -> PackageName -> Comp.ComponentKind -> LanguageSettings
+languageSettingsFor plan pkg kind =
+  case componentInfoFor plan pkg kind of
     Just ci -> Comp.ciLanguageSettings ci
     Nothing -> Extensions.defaultLanguageSettings
 
@@ -610,12 +630,3 @@ publishRows ref rows = do
   n <- Exception.evaluate (length rows)
   n `seq` IORef.atomicModifyIORef' ref (\old -> (rows ++ old, ()))
 
--- | Parse one module, catching the exception cpphs raises for macros only
--- a real compiler defines.  One module loses its rows; the pass continues.
-parseGuarded
-  :: LanguageSettings
-  -> ModuleSource
-  -> IO (ModuleSource, Either Parser.ParseError ModuleInterface)
-parseGuarded langs ms = do
-  r <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
-  pure (ms, r)

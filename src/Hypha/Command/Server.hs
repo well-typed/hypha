@@ -612,14 +612,9 @@ importedSourcesFor cache resolver pkgT asking = do
         <> "; those entries will have no signature"
 
 -- | The language settings the component fixes for its modules, so the
--- module page parses them the way the indexer did.
+-- module page parses them the way the indexer did — the indexer's own
+-- derivation, not a copy of it.
 componentLanguageSettings :: BuildPlan -> Text -> Extensions.LanguageSettings
 componentLanguageSettings plan rawName =
   let cn = parseComponentName rawName
-  in case lookupUnit (cnPackage cn) plan of
-       Just pu ->
-         case [ Comp.ciLanguageSettings c
-              | c <- puLibComponents pu, Comp.ciKind c == cnKind cn ] of
-           (ls : _) -> ls
-           []       -> Extensions.defaultLanguageSettings
-       Nothing -> Extensions.defaultLanguageSettings
+  in Indexer.languageSettingsFor plan (cnPackage cn) (cnKind cn)

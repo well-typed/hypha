@@ -19,12 +19,13 @@
 --   @module N@ re-export form entirely — the form @containers@' public
 --   modules are largely built from.
 module Hypha.Source.Interface
-  ( SrcLine (..)
-  , ModuleInterface (..)
+  ( ModuleInterface (..)
   , ExportItem (..)
   , ImportItem (..)
   , parseInterface
   , parseInterfaceIO
+  , parseSource
+  , parseSources
   , interfaceExportedNames
   , declaredNames
   ) where
@@ -37,14 +38,11 @@ import Data.Text qualified as Text
 import GHC.Hs
 import GHC.Types.SrcLoc (unLoc)
 
+import Hypha.Search.Index (ModuleSource (..))
 import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Source.Parser (Decl)
 import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
-
--- | A 1-based line in a source file.
-newtype SrcLine = SrcLine { unSrcLine :: Int }
-  deriving stock (Show, Eq, Ord)
 
 -- | Everything one parse of a module tells us.
 data ModuleInterface = ModuleInterface
@@ -131,6 +129,30 @@ parseInterfaceIO ls path src = do
       Right i -> Right i
 
     firstLine = Text.strip . Text.takeWhile (/= '\n')
+
+-- | 'parseInterfaceIO' on a source we already hold, keeping the source
+-- alongside its outcome so a caller can report a failure against the
+-- module it belongs to.
+--
+-- One helper rather than one per caller: the indexer, the symbol card and
+-- the module page each had their own copy of this three-line wrapper, and
+-- the module page's copy was the pure 'parseInterface' -- which is how an
+-- unpreprocessable module came to answer a page with a 500.
+parseSource
+  :: Extensions.LanguageSettings
+  -> ModuleSource
+  -> IO (ModuleSource, Either Parser.ParseError ModuleInterface)
+parseSource ls ms = do
+  r <- parseInterfaceIO ls (msPath ms) (msContent ms)
+  pure (ms, r)
+
+-- | 'parseSource' over a component's modules.  Per module, never
+-- all-or-nothing: one unparseable sibling must not cost the others.
+parseSources
+  :: Extensions.LanguageSettings
+  -> [ModuleSource]
+  -> IO [(ModuleSource, Either Parser.ParseError ModuleInterface)]
+parseSources ls = mapM (parseSource ls)
 
 -- | A module with no @module … where@ header is an implicit @Main@ —
 -- what GHC assumes, and what a bare script under a source dir is.

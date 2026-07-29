@@ -13,6 +13,6 @@ library
                     , Fixture.Other
                     , Fixture.Internal
   other-modules:      Fixture.StrictInternal
-                    , Fixture.Declared
+                    , Fixture.Renamed
   default-language:   GHC2021
   build-depends:      base

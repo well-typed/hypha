@@ -13,7 +13,6 @@ module Hypha.Source.Locate
     -- * Testing
   , parseExports
   , modulePathToFile
-  , scanFile
   ) where
 
 import Control.Monad (filterM)
@@ -292,12 +291,6 @@ locateSymbolDefinitionInDir d modPath sym = do
         Right (Just loc) -> pure (Just loc)
         Right Nothing    -> findInTree d modPath sym
 
--- | 'scanFileE' with the symbol name typed, for callers outside this
--- module.
-scanFile
-  :: SymbolName -> FilePath -> IO (Either Parser.ParseError (Maybe SourceLocation))
-scanFile = scanFileE . unSymbolName
-
 -- | Where a symbol is declared, and how confident we are about it.
 data LocatedDefinition = LocatedDefinition
   { ldLocation   :: !SourceLocation
@@ -364,7 +357,7 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
       pure (def, ms)
 
     byResolution = do
-      parsed <- mapM parseOne sources
+      parsed <- Interface.parseSources langs sources
       mapM_ reportParseFailure [ (ms, e) | (ms, Left e) <- parsed ]
       let ifaces     = [ i | (_, Right i) <- parsed ]
           resolution = Reexport.resolveComponent ifaces
@@ -417,13 +410,6 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
             , ldDecl       = decl
             , ldContent    = msContent ms
             }
-
-    -- Guarded: cpphs signals an undefined build-time macro by calling
-    -- 'error' from pure code, and an unhandled one here would 500 the
-    -- symbol card.
-    parseOne ms = do
-      r <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
-      pure (ms, r)
 
     reportParseFailure (ms, e) = hPutStrLn stderr $
       "hypha: " <> msPath ms <> " could not be parsed: "
