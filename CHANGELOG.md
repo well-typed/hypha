@@ -98,6 +98,12 @@ loosely follows [Semantic Versioning](https://semver.org/).
   failed. A module `cpphs` cannot preprocess — an `#error` guarded on a
   macro only a real compiler defines — is skipped rather than answering
   the request with a 500.
+- **A module page no longer presents a guess as a definition site.** An
+  entry whose definition could not be resolved is listed as "re-exported,
+  origin unresolved" rather than attributed to the nearest candidate
+  import: `base/Prelude` had been telling the reader that `Bool`, `True`,
+  `Just` and `map` are all defined in `GHC.Internal.Control.Monad`, with a
+  link there, while the index knew `Bool` is `ghc-prim`'s.
 - **Signatures are read at the definition site**, never matched by name,
   so `Data.IntMap` symbols no longer show `Map k a` signatures.
 - **Module names come from the parse tree**, not from file paths, so a

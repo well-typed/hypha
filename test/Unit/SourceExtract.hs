@@ -306,6 +306,13 @@ tests = testGroup "Unit.SourceExtract"
         Right info -> do
           map deName (mdiEntries info)      @?= ["depThing"]
           map deSignature (mdiEntries info) @?= [Nothing]
+          -- And it says so.  Sharing EntryReexport with a resolved entry
+          -- made the page claim the nearest candidate import as the
+          -- definition site: base's Prelude told the reader that Bool,
+          -- True, Just and map are all defined in
+          -- GHC.Internal.Control.Monad, and linked there.
+          map deOrigin (mdiEntries info)
+            @?= [EntryUnplaced (ModulePath "Dep.Facade")]
 
   , testCase "an entry whose owner is unknown is listed, not dropped" $ do
       -- No imported sources at all: the page must still name depThing.
@@ -318,6 +325,8 @@ tests = testGroup "Unit.SourceExtract"
         Right info -> do
           map deName (mdiEntries info) @?= ["depThing"]
           map deSignature (mdiEntries info) @?= [Nothing]
+          map deOrigin (mdiEntries info)
+            @?= [EntryUnplaced (ModulePath "Dep.Internal")]
   ]
   where
     safeHead []      = Nothing

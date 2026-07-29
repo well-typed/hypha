@@ -97,3 +97,29 @@ no rows of its own" — is a cross-row invariant no unit test can make. It
 is the `IndexHealth` surface the 07-27 design specified and that was never
 implemented; put it there rather than in a shell script that shells out to
 `sqlite3`.
+
+## 9. Measured on a live rebuild, 2026-07-29
+
+A cold rebuild of this project's plan (252 units, ~38s with sources already
+extracted) then driving the real handlers shows what the CPP tail costs on
+the pages that matter most:
+
+| page | entries | of which unresolved |
+|---|---|---|
+| `base/Data.List` | 121 | 13 |
+| `base/Data.Traversable` | 9 | 0 |
+| `containers/Data.Map.Strict` | 127 | 0 |
+| **`base/Prelude`** | 259 | **253** |
+
+`Prelude` is almost entirely unresolved because its chain runs through
+modules that need CPP preprocessing, and because `Just` / `True` are
+constructors (see issue 043 — `Just` has **zero** rows anywhere in the
+index). The names are listed and honestly marked, but the page carries no
+signature for any of them. Fixing either issue 043 or the CPP synthesis
+(07-27 design §7) would move this number a long way.
+
+Also seen: `async`'s `concurrently` renders as
+`concurrently :: CALLSTACK IO a -> IO b -> IO (a,b)` — `CALLSTACK` is a CPP
+macro the source `#define`s and we do not expand, so it reaches the
+signature slice verbatim. Cosmetic, and the same fix (macro synthesis)
+covers it.

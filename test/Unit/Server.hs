@@ -16,10 +16,15 @@ import Lucid (renderText)
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
 import Hypha.Search.Collapse (collapseRows)
+import Hypha.Search.Index (DefinitionRef (..))
+import Hypha.Source.Extract
+  ( DocEntry (..), EntryOrigin (..), ModuleDocInfo (..) )
+import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Search.Fuzzy (mkSymbolRow)
 import Hypha.Search.Index (Visibility (..))
 import Hypha.Search.Reexport (DefinitionSite (..))
-import Hypha.Server.ModuleDoc (SymbolCardData (..))
+import Hypha.Server.ModuleDoc
+  ( ModuleDocView (..), SourceDoc (..), SymbolCardData (..) )
 import Hypha.Server.Ui.Doc (symbolCard)
 import Hypha.Source.Locate (Provenance (..))
 import Hypha.Source.Parser (DeclKind (..))
@@ -27,6 +32,7 @@ import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
 import Util.Row (rowIn)
 import Hypha.Server.App (mimeFor, sanitizeSegments)
+import Hypha.Server.Ui.ModuleDoc (modulePage)
 import Hypha.Server.Ui.Search (highlightTokens, resultsFragment)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
@@ -48,6 +54,7 @@ tests = testGroup "Unit.Server"
   , testGroup "Doc.symbolCard" symbolCardTests
   , testGroup "Search.highlightTokens" highlightTokensTests
   , testGroup "Search.resultsFragment" resultsFragmentTests
+  , testGroup "ModuleDoc.modulePage" modulePageTests
   ]
 
 sanitizeSegmentsTests :: [TestTree]
@@ -143,6 +150,46 @@ highlightTokensTests =
 -- flagship case shipped listing the defining module twice: the definition
 -- is usually a presentation as well, so it was in 'srAlternates' /and/ in
 -- a prepended "defines it" row.
+-- | What a module page /claims/, which is a different question from what
+-- the extractor returned.
+modulePageTests :: [TestTree]
+modulePageTests =
+  [ testCase "an entry we could not place makes no claim and no link" $ do
+      -- The live server said "from base:GHC.Internal.Control.Monad" for
+      -- Bool, True, Just and map on base/Prelude -- one guess, presented
+      -- as fact and linked, for every name it failed to resolve.
+      let html = renderPage (entry (EntryUnplaced (ModulePath "GHC.Internal.Control.Monad")))
+      assertBool "hedges instead of naming a definition site"
+        ("re-exported, origin unresolved" `Text.isInfixOf` html)
+      assertBool "does not present the guess as the origin"
+        (not ("from GHC.Internal.Control.Monad" `Text.isInfixOf` html))
+      assertBool "and does not link anywhere for it"
+        (not ("/pkg/base/GHC.Internal.Control.Monad" `Text.isInfixOf` html))
+
+  , testCase "a resolved re-export still names its definition site" $ do
+      let def  = DefinitionRef (ComponentKey "ghc-internal")
+                               (ModulePath "GHC.Internal.Data.Traversable")
+          html = renderPage (entry (EntryReexport def))
+      assertBool "names the defining component and module"
+        ("from ghc-internal:GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "and links there"
+        ("/pkg/ghc-internal/GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+  ]
+  where
+    entry origin = DocEntry
+      { deName      = "mapAccumL"
+      , deKind      = DkFunction
+      , deSignature = Nothing
+      , deHaddock   = Nothing
+      , deSigLine   = Nothing
+      , deDefLine   = Nothing
+      , deOrigin    = origin
+      }
+
+    renderPage e = LText.toStrict . renderText $
+      modulePage "base" "Prelude"
+        (ViewFromSource (SourceDoc (ModuleDocInfo Nothing [e] []) Nothing))
+
 resultsFragmentTests :: [TestTree]
 resultsFragmentTests =
   [ testCase "the defining module is listed once, tagged, not repeated" $ do

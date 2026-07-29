@@ -194,6 +194,12 @@ section.decl:hover .decl-anchor { opacity: 1; }
   font-family: var(--mono);
 }
 .decl-origin:hover { color: var(--accent); }
+/* An entry whose definition we could not resolve: no link, and italic so
+   it does not read as a resolved provenance note. */
+.decl-unplaced {
+  font-style: italic;
+  cursor: help;
+}
 section.decl .signature { margin: 0.5rem 0; }
 section.decl .haddock   { margin: 0.5rem 0 0; }
 

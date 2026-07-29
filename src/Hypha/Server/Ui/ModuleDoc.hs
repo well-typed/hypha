@@ -128,6 +128,16 @@ entrySection pkgT modT e =
     -- lives here.
     reexportNote = case deOrigin e of
       EntryLocal        -> mempty
+      -- No link and no claim: we do not know where this is defined, and
+      -- the module that came closest is a guess.  Linking it sent the
+      -- reader to a page that does not have the symbol.
+      EntryUnplaced believed ->
+        span_ [ class_ "decl-origin decl-unplaced"
+              , title_ ("Re-exported. hypha could not resolve where this is"
+                          <> " defined; the nearest candidate import is "
+                          <> unModulePath believed)
+              ]
+              (toHtml ("re-exported, origin unresolved" :: Text))
       EntryReexport def ->
         a_ [ class_ "decl-origin"
            , href_ ("/pkg/" <> unComponentKey (drComponent def)
@@ -149,20 +159,23 @@ entrySection pkgT modT e =
     -- The source link follows the definition, because that is where the
     -- lines this entry reports actually are — including into another
     -- package.
-    (srcComponent, srcModule) = case deOrigin e of
-      EntryLocal        -> (pkgT, modT)
-      EntryReexport def -> ( unComponentKey (drComponent def)
-                           , unModulePath (drModule def) )
+    -- 'Nothing' for an entry we could not place: there is no module we
+    -- can honestly send the reader to.
+    srcTarget = case deOrigin e of
+      EntryLocal        -> Just (pkgT, modT)
+      EntryReexport def -> Just ( unComponentKey (drComponent def)
+                                , unModulePath (drModule def) )
+      EntryUnplaced _   -> Nothing
 
-    srcLink = case anchorLine of
-      Nothing -> mempty
-      Just n  ->
+    srcLink = case (srcTarget, anchorLine) of
+      (Just (srcComponent, srcModule), Just n) ->
         a_ [ class_ "decl-src"
            , href_ ("/source/" <> srcComponent <> "/" <> srcModule
                      <> "?line=" <> tshow n <> "#L" <> tshow n)
            , title_ "Jump to source"
            ]
            "src"
+      _ -> mempty
     anchorLine = case deSigLine e of
       Just n  -> Just n
       Nothing -> deDefLine e

@@ -130,6 +130,17 @@ data ModuleDocInfo = ModuleDocInfo
 data EntryOrigin
   = EntryLocal
   | EntryReexport !DefinitionRef
+  | EntryUnplaced !ModulePath
+    -- ^ The module exports this name and we could not find out where it
+    -- is defined — the index has no row for it and the component's own
+    -- modules do not declare it.  The 'ModulePath' is the import we
+    -- believed supplies it, which is a guess and must not be rendered as
+    -- a definition site.
+    --
+    -- It had shared 'EntryReexport', so a page presented the guess as
+    -- fact: @base@'s @Prelude@ told the reader that @Bool@, @True@,
+    -- @Just@ and @map@ are all defined in @GHC.Internal.Control.Monad@,
+    -- and linked there, while the index knew @Bool@ is @ghc-prim@'s.
   deriving stock (Show, Eq)
 
 -- | A single top-level declaration, ready for rendering.
@@ -276,7 +287,7 @@ resolveModuleEntries langs compKey sources imported asking = do
                 -- Everything we can still say: the name, and where it came
                 -- from.  Dropping it would leave no trace of a symbol the
                 -- module genuinely exports.
-                Nothing -> Just (placeholder name (DefinitionRef compKey m))
+                Nothing -> Just (placeholder name m)
           _ -> do
             let defMod = Reexport.definitionModule asking site
             defIface <- Map.lookup defMod byName
@@ -302,15 +313,16 @@ resolveModuleEntries langs compKey sources imported asking = do
       pure (docEntryFrom ls decl (EntryReexport (DefinitionRef c m)))
 
     -- Everything we know when the defining source is out of reach: the
-    -- name, and where it came from.
-    placeholder name def = DocEntry
+    -- name, and the import we believed supplies it -- carried as a guess,
+    -- because that is what it is.
+    placeholder name believed = DocEntry
       { deName      = unSymbolName name
       , deKind      = Parser.DkFunction
       , deSignature = Nothing
       , deHaddock   = Nothing
       , deSigLine   = Nothing
       , deDefLine   = Nothing
-      , deOrigin    = EntryReexport def
+      , deOrigin    = EntryUnplaced believed
       }
 
 -- | A URL can name a module the component does not have.  That is a
