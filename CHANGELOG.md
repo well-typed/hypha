@@ -29,6 +29,30 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Cross-package re-exports are indexed.** A façade module now
+  contributes rows for what it re-exports from a dependency, resolved
+  transitively through that dependency's own already-resolved rows.
+  `base` went from 308 index rows to 1450; `Data.Traversable`,
+  `Control.Monad`, `Data.Foldable`, `Data.List`, `Data.Maybe` and
+  `Prelude` had contributed none.
+- **Search results collapse to one hit per definition**, with the most
+  public presentation winning. A `+N` disclosure names every package and
+  module folded in, each a link, with the defining one tagged; scoping to
+  a package applies before the fold, so a definition two packages present
+  still appears under either. Package and module names are results in
+  their own right, ranked above the symbols beneath them.
+- **Module pages list re-exported entries** with real signatures and
+  Haddock, tagged with the defining module — and the defining package
+  when it differs. Source links follow the definition across the package
+  boundary.
+- **Language extensions are read, not guessed.** A module is parsed under
+  its own `{-# LANGUAGE #-}` pragmas plus its cabal stanza's
+  `default-extensions` / `default-language`, resolved through GHC's own
+  flag table, instead of a hand-written whitelist that failed on the
+  first construct nobody had thought to add (`type role`, `MagicHash`).
+- Boot libraries shipped with GHC now get a "view on Hackage" link; they
+  are published there at the version the plan pins.
+
 - **`hypha server` module pages now show real documentation** instead
   of a bare export list, resolved through a typed priority chain:
   prebuilt Haddock (hypha cache → local dist-dir → cabal store) is
@@ -64,6 +88,29 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A symbol card or module page resolves a re-export through the index**
+  rather than one hop of imports, so a two-hop chain (`Data.List` →
+  `GHC.Internal.Data.List` → `GHC.Internal.Data.Traversable`) no longer
+  reports "symbol not found". `base/Data.List` renders 121 entries where
+  it rendered none.
+- **One unparseable module no longer degrades a whole component.** Every
+  other module page keeps its entries, and the page names the module that
+  failed. A module `cpphs` cannot preprocess — an `#error` guarded on a
+  macro only a real compiler defines — is skipped rather than answering
+  the request with a 500.
+- **Signatures are read at the definition site**, never matched by name,
+  so `Data.IntMap` symbols no longer show `Map k a` signatures.
+- **Module names come from the parse tree**, not from file paths, so a
+  stray `examples/race.hs` no longer becomes a module called `race`, and
+  module enumeration comes from the cabal stanza.
+- `hypha source pkg/Mod/sym` resolves through the component's exports
+  instead of scanning the package for a same-named binding;
+  `Data.Map.Strict.insertWith` used to resolve to
+  `Data/IntMap/Internal.hs`.
+- Haddock now comes from the GHC parse tree rather than a line scanner:
+  `haddock_raw` in `hypha symbol` output no longer carries `-- |` comment
+  markers, and a doc block separated from its declaration by a blank line
+  binds correctly.
 - `hypha lookup` no longer aborts with a misleading `NETWORK_ERROR`
   when the local Hoogle tier cannot run `haddock` (e.g. when the
   binary is genuinely missing, or when Claude Code's sandbox hides
@@ -76,6 +123,23 @@ loosely follows [Semantic Versioning](https://semver.org/).
 - `ensureProjectHoogle` is now actually best-effort (matching its
   docstring): any failure regenerating the project Hoogle DB is
   swallowed so the lookup cascade continues to the remote tier.
+
+### Known limitations
+
+- **An existing `hypha.db` is cleared on first open** and rebuilt in the
+  background: index rows now carry a definition site and a visibility, and
+  old rows may hold path-derived module names or signatures matched by
+  name — defects that are not detectable row by row. See
+  [Caching](website/src/guide/caching.md) for what to expect.
+- **Class methods and data constructors are not indexed.**
+  `Traversable` has a row; `traverse`, `fmap`, `Just` and `mempty` have
+  none. Declaration scanning sees top-level declarations only, and a
+  class's methods are not top-level. `hypha lookup` still answers for
+  these through Hoogle.
+- **159 modules of a 283-package plan do not parse without CPP
+  preprocessing**, and every module re-exporting from one loses exactly
+  what it re-exported — which is why `Prelude` is sparse. Each is
+  reported on stderr with GHC's own message.
 
 ## [0.2.0] — unreleased
 
