@@ -88,4 +88,41 @@ tests = testGroup "Unit.SourceExtensions"
         , "module M where"
         ])
       assertBool "diagnostic recorded" (not (null (psDiagnostics scan)))
+
+  , testCase "a Safe Haskell pragma costs the module none of its others" $ do
+      -- Safe, Trustworthy and Unsafe are accepted in a LANGUAGE pragma but
+      -- live outside xFlags, so a name list built from xFlags alone made
+      -- getOptions throw and took every other pragma in the module with
+      -- it.  async's Control.Concurrent.Async.Internal is Trustworthy and
+      -- needs MagicHash and UnboxedTuples to parse at all; 1837 modules of
+      -- a 283-package plan carry one of the three.
+      let src = Text.unlines
+            [ "{-# LANGUAGE MagicHash, UnboxedTuples #-}"
+            , "{-# LANGUAGE Trustworthy #-}"
+            , "module M where"
+            ]
+      scan <- scanPragmas "M.hs" src
+      psDiagnostics scan @?= []
+      let (exts, unknown) =
+            resolveExtensions defaultLanguageSettings (psExtensionNames scan)
+      unknown @?= []
+      assertBool "MagicHash survived"    (EnumSet.member LangExt.MagicHash exts)
+      assertBool "UnboxedTuples survived" (EnumSet.member LangExt.UnboxedTuples exts)
+
+  , testCase "a Safe Haskell mode resolves to no extension at all" $
+      -- It constrains what the module may import, not what its syntax
+      -- means, so it must neither enable anything nor be reported unknown.
+      mapM_ (\n -> extensionFromFlagName n @?= Right [])
+        ["Safe", "Trustworthy", "Unsafe"]
+
+  , testCase "the names before a bad pragma are still recovered" $ do
+      -- getOptions throws from inside the list it is building, so forcing
+      -- the whole list would lose the good names ahead of the bad one.
+      scan <- scanPragmas "M.hs" (Text.unlines
+        [ "{-# LANGUAGE RoleAnnotations #-}"
+        , "{-# LANGUAGE NoSuchExtensionAtAll #-}"
+        , "module M where"
+        ])
+      psExtensionNames scan @?= ["RoleAnnotations"]
+      assertBool "and the failure is reported" (not (null (psDiagnostics scan)))
   ]

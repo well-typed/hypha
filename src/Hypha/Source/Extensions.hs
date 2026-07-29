@@ -32,10 +32,15 @@ module Hypha.Source.Extensions
 
 import Control.Exception (evaluate)
 import Control.Exception.Safe (SomeException, displayException, try)
+import Data.Containers.ListUtils (nubOrd)
+import Data.Either (partitionEithers)
 -- Qualified because base only re-exports @foldl'@ from Prelude at 4.20+,
 -- and we still build against GHC 9.6 (base 4.18) where it does not.
 import Data.Foldable qualified as Foldable
+import Data.List (uncons)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (maybeToList)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 
@@ -43,8 +48,10 @@ import GHC.Data.Bag qualified as Bag
 import GHC.Data.EnumSet qualified as EnumSet
 import GHC.Data.StringBuffer qualified as SB
 import GHC.Driver.Session
-  (Language (..), flagSpecFlag, flagSpecName, languageExtensions, xFlags)
+  ( Language (..), flagSpecFlag, flagSpecName, languageExtensions
+  , supportedLanguagesAndExtensions, xFlags )
 import GHC.LanguageExtensions.Type (Extension)
+import GHC.Platform.ArchOS (Arch (..), ArchOS (..), OS (..))
 import GHC.Parser.Header qualified as Header
 import GHC.Parser.Lexer qualified as L
 import GHC.Types.Error
@@ -100,9 +107,26 @@ languageTable = Map.fromList
   , ("GHC2024",     GHC2024)
   ]
 
+-- | Names GHC accepts in a @LANGUAGE@ pragma that name no extension.
+--
+-- The Safe Haskell modes — @Safe@, @Trustworthy@, @Unsafe@ — constrain
+-- what a module may import, not what its syntax means, so they are
+-- parse-irrelevant.  Derived by difference rather than listed here:
+-- 'supportedLanguagesAndExtensions' is languages ++ overlays ++
+-- extensions, and 'extensionFlagNames' is that last part, so what
+-- remains is the language selectors ('languageTable', matched first
+-- below) and the overlays.  GHC keeps the overlays in a table
+-- @ghc-lib-parser@ does not export, and a curated list is the shape
+-- this module exists to avoid.
+parseIrrelevantNames :: Set.Set Text
+parseIrrelevantNames =
+  Set.difference
+    (Set.fromList (map Text.pack (ghcAcceptedNames ++ ["No" <> n | n <- ghcAcceptedNames])))
+    (Set.fromList (map Text.pack extensionFlagNames))
+
 -- | Resolve one pragma name to the @(extension, enabled)@ pairs it
 -- implies.  A @No@ prefix flips the flag; a language name expands to its
--- whole set.
+-- whole set; a Safe Haskell mode implies nothing.
 extensionFromFlagName :: Text -> Either UnknownExtension [(Extension, Bool)]
 extensionFromFlagName raw
   | Just lang <- Map.lookup raw languageTable
@@ -112,6 +136,8 @@ extensionFromFlagName raw
   | Just bare <- Text.stripPrefix "No" raw
   , Just ext  <- Map.lookup bare flagTable
   = Right [(ext, False)]
+  | raw `Set.member` parseIrrelevantNames
+  = Right []
   | otherwise
   = Left (UnknownExtension raw)
 
@@ -144,20 +170,11 @@ resolveExtensions ls names =
   in (applied, unknown)
   where
     apply acc (x, True)  = EnumSet.insert x acc
-    apply acc (x, False) = enumSetDelete x acc
+    apply acc (x, False) = EnumSet.delete x acc
 
-    partitionResolved = Foldable.foldl' step ([], [])
-      where
-        step (bad, good) n = case extensionFromFlagName n of
-          Left  e  -> (bad ++ [e], good)
-          Right xs -> (bad, good ++ xs)
-
--- | 'EnumSet' has no delete, so rebuild without the member.  The sets
--- are tiny (bounded by the extension count) and this runs once per
--- module, not per token.
-enumSetDelete :: Extension -> EnumSet.EnumSet Extension -> EnumSet.EnumSet Extension
-enumSetDelete x s =
-  EnumSet.fromList [ e | e <- [minBound .. maxBound], e /= x, EnumSet.member e s ]
+    partitionResolved ns =
+      let (bad, good) = partitionEithers (map extensionFromFlagName ns)
+      in (bad, concat good)
 
 -- | What one pass over a module's pragma block found.
 --
@@ -187,30 +204,50 @@ data PragmaScan = PragmaScan
 -- so one bad pragma costs us that pragma rather than the whole module.
 scanPragmas :: FilePath -> Text -> IO PragmaScan
 scanPragmas path src = do
-  r <- try $ do
-    let (msgs, located) = Header.getOptions opts buf path
-        names = [ name
-                | opt <- map unLoc located
-                , Just name <- [Text.stripPrefix "-X" (Text.pack opt)]
-                ]
-        diags = renderDiagnostics msgs
-    -- Both fields are lazy thunks over 'getOptions', which throws rather
-    -- than returning: force them here or the exception escapes this
-    -- 'try' and surfaces in whatever reads the record.
-    _ <- evaluate (forceTexts names + forceTexts diags)
-    pure (PragmaScan names diags)
-  pure $ case r of
-    Right scan                -> scan
-    Left (e :: SomeException) -> PragmaScan
-      { psExtensionNames = []
-      , psDiagnostics    = [firstLine (Text.pack (displayException e))]
-      }
+  let (msgs, located) = Header.getOptions opts buf path
+  (diags, diagFailure) <- forcedPrefix (renderDiagnostics msgs)
+  (names, nameFailure) <- forcedPrefix
+    [ name
+    | opt <- map unLoc located
+    , Just name <- [Text.stripPrefix "-X" (Text.pack opt)]
+    ]
+  pure PragmaScan
+    { psExtensionNames = names
+    , psDiagnostics    = diags ++ maybeToList diagFailure
+                               ++ maybeToList nameFailure
+    }
   where
     (floorExts, _) = resolveExtensions defaultLanguageSettings []
     opts = parserOptsFor floorExts
     buf  = SB.stringToStringBuffer (Text.unpack src)
 
-    forceTexts = sum . map Text.length
+-- | Force a lazily produced list one cell at a time, stopping at the
+-- first cell that throws and reporting why.
+--
+-- 'Header.getOptions' builds its result with @fmap (args ++)@ over a
+-- recursive walk of the token stream, and validates each @LANGUAGE@ name
+-- as that walk reaches it.  So an unrecognised name throws from /inside/
+-- the list — forcing the whole list at once would lose the names before
+-- it too, which is the difference between one bad pragma costing us that
+-- pragma and it costing us the module.
+forcedPrefix :: [Text] -> IO ([Text], Maybe Text)
+forcedPrefix = go []
+  where
+    go acc xs = do
+      -- 'uncons' forces the cell, not the element: the throw can come
+      -- from either, so both are attempted separately.
+      cell <- try (evaluate (uncons xs))
+      case cell of
+        Left e                  -> pure (reverse acc, Just (describe e))
+        Right Nothing           -> pure (reverse acc, Nothing)
+        Right (Just (y, rest))  -> do
+          forced <- try (evaluate (Text.length y))
+          case forced of
+            Left e  -> pure (reverse acc, Just (describe e))
+            Right _ -> go (y : acc) rest
+
+    describe :: SomeException -> Text
+    describe = firstLine . Text.pack . displayException
 
     firstLine = Text.strip . Text.takeWhile (/= '\n')
 
@@ -229,16 +266,35 @@ renderDiagnostics = map render . Bag.bagToList . getMessages
                (diagnosticMessage (defaultDiagnosticOpts @e) (errMsgDiagnostic msg))
       ]
 
--- | Every @-X@ name GHC accepts, both polarities, plus the language
--- selectors.
+-- | Every name GHC accepts in a @LANGUAGE@ pragma or an @OPTIONS_GHC -X@
+-- entry.
 --
--- 'Header.getOptions' validates each @LANGUAGE@ entry against this list
--- and throws on anything absent, so passing @[]@ (as the whitelist-era
--- code did) rejects every pragma in the language — including @CPP@.
+-- 'Header.getOptions' validates each entry against this list and throws
+-- on anything absent, so passing @[]@ (as the whitelist-era code did)
+-- rejects every pragma in the language — including @CPP@.
+--
+-- Union of two sources, because neither alone is complete for a reader.
+-- 'xFlags' has every extension but neither the language selectors nor
+-- the Safe Haskell modes, and omitting the latter cost us every pragma
+-- in 1837 modules of a real build plan: one @{-\# LANGUAGE Trustworthy
+-- \#-}@ made 'scanPragmas' throw, and @async@'s @MagicHash@ and
+-- @UnboxedTuples@ went down with it.  'supportedLanguagesAndExtensions'
+-- has all three groups but filters the extensions by platform — off a
+-- JavaScript backend it drops @JavaScriptFFI@, and we still have to read
+-- a module that names it — so we take the union and lose no spelling.
 supportedExtensionNames :: [String]
-supportedExtensionNames =
+supportedExtensionNames = nubOrd (extensionFlagNames ++ ghcAcceptedNames)
+
+-- | Every @-X@ extension name, both polarities, unfiltered by platform.
+extensionFlagNames :: [String]
+extensionFlagNames =
   concat [ [n, "No" <> n] | n <- map flagSpecName xFlags ]
-    ++ map Text.unpack (Map.keys languageTable)
+
+-- | GHC's own answer to @ghc --supported-extensions@: languages, Safe
+-- Haskell overlays and extensions.  The 'ArchOS' only narrows the
+-- extension half, which 'extensionFlagNames' supplies in full anyway.
+ghcAcceptedNames :: [String]
+ghcAcceptedNames = supportedLanguagesAndExtensions (ArchOS ArchUnknown OSUnknown)
 
 -- | The parser options hypha parses under, given a resolved extension
 -- set.  Single definition so the pragma-reading pass and the real parse
