@@ -13,14 +13,18 @@ import qualified Data.Map.Strict as Map
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
+import qualified GHC.LanguageExtensions as LangExt
+
 import qualified Hypha.Source.Locate as Locate
 import           Hypha.Search.Index
                    ( DefinitionRef (..), ImportedDefinitions (..)
-                   , ModuleSource (..), noImportedDefinitions )
-import           Hypha.Source.Extensions (defaultLanguageSettings)
+                   , ModuleSource (..), Visibility (..)
+                   , noImportedDefinitions )
+import           Hypha.Source.Extensions
+                   (LanguageSettings (..), defaultLanguageSettings)
 import           Hypha.Types.ComponentName (ComponentKey (..))
 import           Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
-import           Util.Fixture (depSources, fixtureSources)
+import           Util.Fixture (depSources, fixtureSources, sourcesFor)
 
 -- | What the server hands a browsing pass: the definition site the index
 -- resolved for each name, plus the dependency modules those sites name.
@@ -82,5 +86,33 @@ tests = testGroup "Unit.SourceLocate"
       mLd  <- Locate.locateDefinitionInComponent defaultLanguageSettings
                 (ComponentKey "reexport") srcs noImportedDefinitions
                 (ModulePath "Fixture.Imported") (SymbolName "depThing")
+      mLd @?= Nothing
+
+  , testCase "the located definition is read under the component's own extensions" $ do
+      -- Fixture.Unboxed needs MagicHash and declares no pragma, so only the
+      -- cabal stanza's default-extensions make it readable.  Resolution used
+      -- these settings and the final step re-read the file under the GHC2021
+      -- floor, so the card answered "not found" for a definition it had just
+      -- located.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/Unboxed.hs", "Fixture.Unboxed", Exposed) ]
+      let magicHash = defaultLanguageSettings
+            { lsDefaultOn = [LangExt.MagicHash, LangExt.UnboxedTuples] }
+      mLd <- Locate.locateDefinitionInComponent magicHash
+               (ComponentKey "reexport") srcs noImportedDefinitions
+               (ModulePath "Fixture.Unboxed") (SymbolName "unboxedAdd")
+      case mLd of
+        Just ld -> Locate.ldModule ld @?= ModulePath "Fixture.Unboxed"
+        Nothing -> fail "expected to locate unboxedAdd under the stanza's extensions"
+
+  , testCase "without those extensions the module is unreadable, not empty" $ do
+      -- The other half of the pair: absent MagicHash the module does not
+      -- parse, and \"could not read it\" must not present as \"no such
+      -- symbol\" -- the failure is reported on stderr by the locator.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/Unboxed.hs", "Fixture.Unboxed", Exposed) ]
+      mLd <- Locate.locateDefinitionInComponent defaultLanguageSettings
+               (ComponentKey "reexport") srcs noImportedDefinitions
+               (ModulePath "Fixture.Unboxed") (SymbolName "unboxedAdd")
       mLd @?= Nothing
   ]

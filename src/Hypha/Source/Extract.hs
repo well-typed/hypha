@@ -11,7 +11,10 @@
 -- by the line numbers the parser reports.
 module Hypha.Source.Extract
   ( SymbolInfo (..)
+  , noSymbolInfo
   , extractSymbolInfo
+  , symbolInfoFromDecl
+  , numberedLines
     -- * Batch module extraction
   , ModuleDocInfo (..)
   , DocEntry (..)
@@ -59,25 +62,35 @@ data SymbolInfo = SymbolInfo
   deriving stock (Show, Eq)
 
 -- | Extract 'SymbolInfo' for a symbol from the source text of a module.
-extractSymbolInfo :: Text -> Text -> SymbolInfo
-extractSymbolInfo src sym =
-  let numbered = numberedLines src
-      decls    = either (const []) id (Parser.parseDecls "<source>" src)
-      mDecl    = Parser.findDecl sym decls
-  in case mDecl of
-       Nothing ->
-         SymbolInfo Nothing Nothing Nothing Nothing Nothing
-       Just d  ->
-         let defL = Parser.declDefLine d
-         in SymbolInfo
-              { siSignature = sigText numbered d
-              , siHaddock   = DocText <$> Parser.declDoc d
-              , siKind      = Just (Parser.declKind d)
-              , siSigLine   = Parser.declSigLine d
-              , siLine      = case defL of
-                                 Just _  -> defL
-                                 Nothing -> Parser.declSigLine d
-              }
+--
+-- For callers that hold only bytes and a name.  A caller that already has
+-- the declaration — because it resolved the symbol to it — should use
+-- 'symbolInfoFromDecl' instead: this parses under
+-- 'Extensions.defaultLanguageSettings', which is honest only outside a
+-- component context.
+extractSymbolInfo :: Text -> Text -> Either Parser.ParseError SymbolInfo
+extractSymbolInfo src sym = do
+  decls <- Parser.parseDecls "<source>" src
+  pure $ case Parser.findDecl sym decls of
+    Nothing -> noSymbolInfo
+    Just d  -> symbolInfoFromDecl (numberedLines src) d
+
+-- | Nothing known about the symbol: the module parsed and does not
+-- declare it.  Distinct from a parse failure, which is a 'Left'.
+noSymbolInfo :: SymbolInfo
+noSymbolInfo = SymbolInfo Nothing Nothing Nothing Nothing Nothing
+
+-- | 'SymbolInfo' for a declaration already in hand.
+symbolInfoFromDecl :: [(Int, Text)] -> Parser.Decl -> SymbolInfo
+symbolInfoFromDecl numbered d = SymbolInfo
+  { siSignature = sigText numbered d
+  , siHaddock   = DocText <$> Parser.declDoc d
+  , siKind      = Just (Parser.declKind d)
+  , siSigLine   = Parser.declSigLine d
+  , siLine      = case Parser.declDefLine d of
+      Just l  -> Just l
+      Nothing -> Parser.declSigLine d
+  }
 
 -- Batch module extraction -------------------------------------------
 
@@ -189,55 +202,67 @@ docEntryFrom ls d origin = DocEntry
 -- one we cannot describe at all is still listed with its origin and no
 -- signature: a name without a signature is worth more to the reader than a
 -- silently shorter page.
+-- Lives in 'IO' for one reason: @cpphs@ signals an undefined build-time
+-- macro by calling 'error' from pure code, so the only way to parse a
+-- module without risking the whole request is
+-- 'Interface.parseInterfaceIO'.  This used to call the pure sibling and
+-- an unhandled @#error \"CURRENT_PACKAGE_KEY undefined\"@ answered the
+-- page with a 500.
 resolveModuleEntries
   :: Extensions.LanguageSettings
   -> ComponentKey                                  -- ^ the asking component
   -> [ModuleSource]
   -> ImportedDefinitions                           -- ^ what the index resolved
   -> ModulePath
-  -> Either Parser.ParseError ModuleDocInfo
+  -> IO (Either Parser.ParseError ModuleDocInfo)
 resolveModuleEntries langs compKey sources imported asking = do
-  -- Per module, not all-or-nothing: 'traverse' here made one unparseable
-  -- sibling degrade every page in the component to an export list.
-  let attempted = [ (ms, parseOne ms) | ms <- sources ]
-      ok        = [ (ms, i) | (ms, Right i) <- attempted ]
-      ifaces    = map snd ok
-      skipped   = [ (msDeclaredName ms, e) | (ms, Left e) <- attempted ]
-  importedParsed <- traverse parseImported (Map.toList (idSources imported))
-  let byName  = Map.fromList [ (miName i, i) | i <- ifaces ]
+  -- Per module, not all-or-nothing, for the component's own modules /and/
+  -- for the ones borrowed from a dependency: 'traverse' over either made
+  -- one unparseable sibling degrade every page to an export list.
+  attempted      <- mapM parseOne sources
+  importedParsed <- mapM parseImported (Map.toList (idSources imported))
+  let ok      = [ (ms, i) | (ms, Right i) <- attempted ]
+      ifaces  = map snd ok
+      skipped = [ (msDeclaredName ms, e) | (ms, Left e) <- attempted ]
+                  ++ [ (msDeclaredName ms, e)
+                     | (_, (_, ms, Left e)) <- importedParsed ]
+      byName  = Map.fromList [ (miName i, i) | i <- ifaces ]
       linesOf = Map.fromList
         [ (miName i, numberedLines (msContent ms)) | (ms, i) <- ok ]
       -- Keyed on the module name the caller asked for, not on the parsed
       -- name: that is how the resolution refers to it.
       outsideOf = Map.fromList
         [ (m, (c, i, numberedLines (msContent ms)))
-        | (m, (c, ms, i)) <- importedParsed
+        | (m, (c, ms, Right i)) <- importedParsed
         ]
       resolution = Reexport.resolveComponent ifaces
   -- The module the page is about is the one failure that is fatal: with no
   -- parse of it there is no export list to walk.  Its own error beats the
   -- generic absence when we have one.
-  asked <- case Map.lookup asking byName of
-    Just i  -> Right i
-    Nothing -> Left (case lookup asking skipped of
-      Just e  -> e
-      Nothing -> missingModule asking)
-  pure ModuleDocInfo
-    { mdiHeader  = DocText <$> miHeaderDoc asked
-    , mdiSkipped = skipped
-    , mdiEntries =
-        [ entry
-        | name <- Reexport.expandedExportNames ifaces asking
-        , Just res <- [Map.lookup (asking, name) resolution]
-        , Just entry <-
-            [entryFor byName linesOf outsideOf name (Reexport.resSite res)]
-        ]
-    }
+  pure $ do
+    asked <- case Map.lookup asking byName of
+      Just i  -> Right i
+      Nothing -> Left (case lookup asking skipped of
+        Just e  -> e
+        Nothing -> missingModule asking)
+    pure ModuleDocInfo
+      { mdiHeader  = DocText <$> miHeaderDoc asked
+      , mdiSkipped = skipped
+      , mdiEntries =
+          [ entry
+          | name <- Reexport.expandedExportNames ifaces asking
+          , Just res <- [Map.lookup (asking, name) resolution]
+          , Just entry <-
+              [entryFor byName linesOf outsideOf name (Reexport.resSite res)]
+          ]
+      }
   where
-    parseOne ms = Interface.parseInterface langs (msPath ms) (msContent ms)
+    parseOne ms = do
+      i <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
+      pure (ms, i)
 
     parseImported (m, (c, ms)) = do
-      i <- Interface.parseInterface langs (msPath ms) (msContent ms)
+      i <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
       pure (m, (c, ms, i))
 
     -- The index's answer first, because it is the only transitively resolved

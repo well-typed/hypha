@@ -27,8 +27,11 @@ import Hypha.Error (HyphaError (..), NotFoundReason (..), UserErrorReason (..))
 import Hypha.Output.Outcome (Outcome (..), tagOutsidePlan)
 import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..), resolveRef )
-import Hypha.Source.Extract (SymbolInfo (..), extractSymbolInfo)
+import Hypha.Prelude (warnOnLeft)
+import Hypha.Source.Extract
+  (SymbolInfo (..), extractSymbolInfo, noSymbolInfo)
 import Hypha.Source.Locate (findModuleFile, modulePathToFile)
+import Hypha.Source.Parser (parseErrorMessage)
 import Hypha.Types.BuildPlan (BuildPlan, lookupPackage)
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), PackageRef (..), Version (..) )
@@ -93,7 +96,7 @@ runSymbol env plan rawArg = runExceptT $ do
   ok        <- liftIO (doesFileExist f)
   unless ok (throwE (NotFound (NotFoundModuleFile pid modTxt f)))
   src       <- liftIO (TIO.readFile f)
-  let info = extractSymbolInfo src sym
+  info      <- liftIO (symbolInfoOf f src sym)
   pure (mkOutcome pkgName ver modTxt sym f info)
 
 -- | Execute the @symbol@ command using the package resolver instead of a raw build plan.
@@ -122,9 +125,18 @@ runSymbolWith _env resolver rawArg = runExceptT $ do
                  Nothing -> throwE
                    (NotFound (NotFoundModuleFileUnder d modTxt))
   src       <- liftIO (TIO.readFile f)
-  let info = extractSymbolInfo src sym
-      outcome = mkOutcome pkgName ver modTxt sym f info
+  info      <- liftIO (symbolInfoOf f src sym)
+  let outcome = mkOutcome pkgName ver modTxt sym f info
   pure (tagOutsidePlan outcome (rpIsOutsidePlan rp))
+
+-- | Extract the symbol's information, announcing a parse failure rather
+-- than presenting an empty card as if the module simply had nothing to
+-- say about the symbol.
+symbolInfoOf :: FilePath -> Text -> Text -> IO SymbolInfo
+symbolInfoOf f src sym =
+  warnOnLeft render noSymbolInfo (pure (extractSymbolInfo src sym))
+  where
+    render e = Text.pack f <> " could not be parsed: " <> parseErrorMessage e
 
 -- | Convert a 'SymbolPath' parse failure into a 'UserError'.
 liftParseError :: Text -> Either e SymbolPath -> ExceptT HyphaError IO SymbolPath

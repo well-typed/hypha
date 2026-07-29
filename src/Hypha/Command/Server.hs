@@ -260,8 +260,13 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
             case mLd of
               Nothing -> pure Nothing
               Just ld -> do
-                src <- TIO.readFile (Locate.slPath (Locate.ldLocation ld))
-                let info = Extract.extractSymbolInfo src symT
+                -- The parse that located the symbol, not a fresh one: this
+                -- used to re-read the file and re-parse it under the
+                -- GHC2021 floor, discarding both the component's
+                -- default-extensions and the parse error.
+                let info = Extract.symbolInfoFromDecl
+                             (Extract.numberedLines (Locate.ldContent ld))
+                             (Locate.ldDecl ld)
                     mLine = case (Extract.siSigLine info, Extract.siLine info) of
                       (Just n, _)       -> Just n
                       (Nothing, Just n) -> Just n
@@ -391,8 +396,9 @@ moduleDocFor cacheRoot plan env resolver cache pkgT modT = do
         imported <- lift (importedSourcesFor cache resolver pkgT (ModulePath modT))
         let langs   = componentLanguageSettings plan pkgT
             compKey = componentKeyOf (cnPackage cn) (cnKind cn)
-        case Extract.resolveModuleEntries langs compKey sources imported
-               (ModulePath modT) of
+        resolved <- lift (Extract.resolveModuleEntries langs compKey sources
+                            imported (ModulePath modT))
+        case resolved of
           Left perr -> do
             f <- liftMaybeReason
                    ("module " <> modT <> " has no source file in the package")

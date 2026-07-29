@@ -54,6 +54,7 @@ import Hypha.Logging (LogEvent (..))
 import Hypha.Output.Json
 import Hypha.Output.Outcome
 import Hypha.Package.Resolver
+import Hypha.Prelude (warnOnLeft)
 import Hypha.Project.Components qualified as Comp
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
@@ -132,23 +133,6 @@ mkHackageClientForOpts = do
     else do
       mgr <- newManager tlsManagerSettings
       mkHackageClient mgr hackCache
-
--- | Run an 'IO' action returning 'Either'; on 'Left', emit a single
--- warning line to @stderr@ and substitute the supplied fallback.  Use
--- at the seams where degraded behaviour is intentional but the
--- underlying failure MUST be visible to the user.  See the
--- "Well-Typed Ethos" entry in @CLAUDE.md@: silent error-branch swallow
--- is banished.
-warnOnLeft
-  :: (err -> Text)   -- ^ render the error for the warning line
-  -> a               -- ^ fallback value substituted on 'Left'
-  -> IO (Either err a)
-  -> IO a
-warnOnLeft renderErr fallback action = action >>= \case
-  Right x  -> pure x
-  Left err -> do
-    hPutStrLn stderr ("warning: " <> Text.unpack (renderErr err))
-    pure fallback
 
 -- | Best-effort project + plan loader.  Each failure is announced on
 -- @stderr@ before the degraded fallback kicks in — no @Left _ -> ...@

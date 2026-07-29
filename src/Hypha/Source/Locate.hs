@@ -307,6 +307,14 @@ data LocatedDefinition = LocatedDefinition
     -- package boundary, and a card reporting only the module would send the
     -- reader to a module the page's package does not have.
   , ldProvenance :: !Provenance
+  , ldDecl       :: !Parser.Decl
+    -- ^ The declaration itself, so a caller building a symbol card reads
+    -- the signature and Haddock off the parse that located it rather than
+    -- reading and parsing the file a second time — which is what the card
+    -- used to do, under the wrong language settings and discarding the
+    -- parse error.
+  , ldContent    :: !Text
+    -- ^ The defining module's bytes, for slicing the declaration's text.
   }
   deriving stock (Show, Eq)
 
@@ -347,7 +355,7 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
   -- scanning it reported the symbol absent.
   case resolvedSite of
     Just (def, ms) -> scanned (drComponent def) (drModule def)
-                        (DefinedOutside (drModule def)) ms
+                        (DefinedOutside (drModule def)) ms Nothing
     Nothing        -> byResolution
   where
     resolvedSite = do
@@ -376,26 +384,39 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
                     <> Text.unpack (unModulePath m)
                     <> ", whose source was not supplied"
                 pure Nothing
-              Just (comp, ms) -> scanned comp m (resSite res) ms
+              Just (comp, ms) -> scanned comp m (resSite res) ms Nothing
           site -> do
             let target = Reexport.definitionModule asking site
-            case [ ms | (ms, Right i) <- parsed, Interface.miName i == target ] of
-              []       -> pure Nothing
-              (ms : _) -> scanned ownComponent target site ms
+            case [ (ms, i)
+                 | (ms, Right i) <- parsed, Interface.miName i == target ] of
+              []            -> pure Nothing
+              ((ms, i) : _) -> scanned ownComponent target site ms (Just i)
 
-    scanned comp target site ms = do
-      r <- scanFileE (unSymbolName sym) (msPath ms)
+    -- The parse we already have, or one made under this component's own
+    -- language settings -- never 'scanFileE', which re-reads the file and
+    -- parses it under the GHC2021 floor.  That discarded the cabal
+    -- stanza's default-extensions at the last hop, so a component with
+    -- @default-extensions: LambdaCase@ resolved the symbol and then failed
+    -- to read the module it had resolved it to.
+    scanned comp target site ms mIface = do
+      r <- case mIface of
+             Just i  -> pure (Right i)
+             Nothing -> Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
       case r of
         Left e -> do
           reportParseFailure (ms, e)
           pure Nothing
-        Right Nothing    -> pure Nothing
-        Right (Just loc) -> pure (Just LocatedDefinition
-          { ldLocation   = loc
-          , ldModule     = target
-          , ldComponent  = comp
-          , ldProvenance = Resolved site
-          })
+        Right iface -> pure $ do
+          decl <- Parser.findDecl (unSymbolName sym) (Interface.miDecls iface)
+          ln   <- declAnchor decl
+          pure LocatedDefinition
+            { ldLocation   = SourceLocation (msPath ms) ln
+            , ldModule     = target
+            , ldComponent  = comp
+            , ldProvenance = Resolved site
+            , ldDecl       = decl
+            , ldContent    = msContent ms
+            }
 
     -- Guarded: cpphs signals an undefined build-time macro by calling
     -- 'error' from pure code, and an unhandled one here would 500 the
@@ -501,8 +522,14 @@ scanFileE sym f = do
   pure $ case Parser.parseDecls f src of
     Left e      -> Left e
     Right decls -> Right $ do
-      d <- Parser.findDecl sym decls
-      ln <- case Parser.declDefLine d of
-              Just l  -> Just l
-              Nothing -> Parser.declSigLine d
+      d  <- Parser.findDecl sym decls
+      ln <- declAnchor d
       Just (SourceLocation f ln)
+
+-- | The line a declaration is anchored at: its body when it has one, its
+-- signature otherwise.  Callers prefer the binding body for source
+-- snippets, and a re-export module's entry has only a signature.
+declAnchor :: Parser.Decl -> Maybe Int
+declAnchor d = case Parser.declDefLine d of
+  Just l  -> Just l
+  Nothing -> Parser.declSigLine d

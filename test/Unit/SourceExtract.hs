@@ -14,7 +14,8 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 import           Hypha.Search.Index
                    ( DefinitionRef (..), ImportedDefinitions (..)
-                   , ModuleSource (..), noImportedDefinitions )
+                   , ModuleSource (..), Visibility (..)
+                   , noImportedDefinitions )
 import qualified Hypha.Source.Extract as Extract
 import           Hypha.Source.Extract
                    ( DocEntry (..), EntryOrigin (..), ModuleDocInfo (..)
@@ -25,7 +26,7 @@ import           Hypha.Source.Parser  (parseErrorMessage)
 import           Hypha.Types.ComponentName (ComponentKey (..))
 import           Hypha.Types.Doc      (DocText (..))
 import           Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
-import           Util.Fixture (depSources, fixtureSources)
+import           Util.Fixture (depSources, fixtureSources, sourcesFor)
 
 -- | What the server hands a module page: the definition site the index
 -- resolved per name, plus the dependency modules those sites name.
@@ -150,7 +151,8 @@ tests = testGroup "Unit.SourceExtract"
             , "insertWith :: Int -> Int"
             , "insertWith = id"
             ]
-          info = Extract.extractSymbolInfo src "insertWith"
+      info <- either (assertFailure . show) pure
+                (Extract.extractSymbolInfo src "insertWith")
       fmap unDocText (Extract.siHaddock info)
         @?= Just " Insert with a function."
 
@@ -168,7 +170,8 @@ tests = testGroup "Unit.SourceExtract"
             , "insertWithKey :: Int -> Int"
             , "insertWithKey = id"
             ]
-          info = Extract.extractSymbolInfo src "insertWithKey"
+      info <- either (assertFailure . show) pure
+                (Extract.extractSymbolInfo src "insertWithKey")
       fmap unDocText (Extract.siHaddock info) @?= Just " The real doc."
 
   , testCase "function bodies are never sliced into the signature slot" $ do
@@ -181,12 +184,33 @@ tests = testGroup "Unit.SourceExtract"
         Left e  -> assertFailure (show e)
         Right d -> (deSignature =<< safeHead (mdiEntries d)) @?= Nothing
 
+  , testCase "a module cpphs cannot preprocess is skipped, not thrown" $ do
+      -- Fixture.CppError is guarded on CURRENT_PACKAGE_KEY, which only a
+      -- real GHC invocation defines.  cpphs signals the #error by calling
+      -- 'error' from pure code, so parsing it outside parseInterfaceIO
+      -- raises an exception rather than returning Left -- which took down
+      -- an index pass, and later answered the module page with a 500.
+      srcs <- fixtureSources
+      cpp  <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/CppError.hs"
+          , "Fixture.CppError", Exposed) ]
+      resolved <- resolveModuleEntries defaultLanguageSettings
+                    (ComponentKey "reexport") (srcs ++ cpp)
+                    noImportedDefinitions (ModulePath "Fixture.Wrapper")
+      case resolved of
+        Left e     -> assertFailure ("the page went down with it: " <> show e)
+        Right info -> do
+          map fst (mdiSkipped info) @?= [ModulePath "Fixture.CppError"]
+          sort (map deName (mdiEntries info))
+            @?= ["Bag", "insertBag", "otherOnly", "sizeBag"]
+
   , testCase "a wrapper module's entries include its re-exports" $ do
       -- Data.Map.Strict's page was empty because entries came only from
       -- local declarations, and that module declares almost nothing.
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
-             noImportedDefinitions (ModulePath "Fixture.Wrapper") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             noImportedDefinitions (ModulePath "Fixture.Wrapper")
+      case resolved of
         Left e     -> assertFailure (show e)
         Right info -> do
           sort (map deName (mdiEntries info))
@@ -200,8 +224,9 @@ tests = testGroup "Unit.SourceExtract"
 
   , testCase "a re-exported entry carries the definition's haddock" $ do
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
-             noImportedDefinitions (ModulePath "Fixture.Wrapper") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             noImportedDefinitions (ModulePath "Fixture.Wrapper")
+      case resolved of
         Left e     -> assertFailure (show e)
         Right info ->
           assertBool "insertBag has documentation"
@@ -210,8 +235,9 @@ tests = testGroup "Unit.SourceExtract"
 
   , testCase "a definition module's entries are all local" $ do
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
-             noImportedDefinitions (ModulePath "Fixture.Internal") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             noImportedDefinitions (ModulePath "Fixture.Internal")
+      case resolved of
         Left e     -> assertFailure (show e)
         Right info ->
           assertBool "all local"
@@ -219,8 +245,9 @@ tests = testGroup "Unit.SourceExtract"
 
   , testCase "a module the component does not have is a reportable absence" $ do
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
-             noImportedDefinitions (ModulePath "Fixture.Nope") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport") srcs
+             noImportedDefinitions (ModulePath "Fixture.Nope")
+      case resolved of
         Right _ -> assertFailure "expected an error for an unknown module"
         Left e  -> assertBool "names the module"
           ("Fixture.Nope" `Text.isInfixOf` parseErrorMessage e)
@@ -228,8 +255,9 @@ tests = testGroup "Unit.SourceExtract"
   , testCase "a facade page shows its dependency's entry, with haddock" $ do
       srcs <- fixtureSources
       dep  <- depSources
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
-             srcs (depDefinitions dep) (ModulePath "Fixture.Imported") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
+             srcs (depDefinitions dep) (ModulePath "Fixture.Imported")
+      case resolved of
         Left e     -> assertFailure (show e)
         Right info -> do
           [ deOrigin e | e <- mdiEntries info, deName e == "depThing" ]
@@ -247,8 +275,9 @@ tests = testGroup "Unit.SourceExtract"
       -- the same root cause that made the symbol card 404.
       srcs <- fixtureSources
       dep  <- depSources
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
-             srcs (depDefinitions dep) (ModulePath "Fixture.TwoHop") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
+             srcs (depDefinitions dep) (ModulePath "Fixture.TwoHop")
+      case resolved of
         Left e     -> assertFailure (show e)
         Right info -> do
           map deName (mdiEntries info) @?= ["depThing"]
@@ -270,8 +299,9 @@ tests = testGroup "Unit.SourceExtract"
                 | d <- dep, msDeclaredName d == ModulePath "Dep.Facade"
                 ]
             }
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
-             srcs facadeOnly (ModulePath "Fixture.TwoHop") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
+             srcs facadeOnly (ModulePath "Fixture.TwoHop")
+      case resolved of
         Left e     -> assertFailure (show e)
         Right info -> do
           map deName (mdiEntries info)      @?= ["depThing"]
@@ -281,8 +311,9 @@ tests = testGroup "Unit.SourceExtract"
       -- No imported sources at all: the page must still name depThing.
       -- Omitting it leaves the reader with no way to know it exists.
       srcs <- fixtureSources
-      case resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
-             srcs noImportedDefinitions (ModulePath "Fixture.Imported") of
+      resolved <- resolveModuleEntries defaultLanguageSettings (ComponentKey "reexport")
+             srcs noImportedDefinitions (ModulePath "Fixture.Imported")
+      case resolved of
         Left e     -> assertFailure (show e)
         Right info -> do
           map deName (mdiEntries info) @?= ["depThing"]
