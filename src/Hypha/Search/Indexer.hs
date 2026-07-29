@@ -32,6 +32,7 @@ module Hypha.Search.Indexer
   , chooseSourceRoots
   ) where
 
+import Control.Exception qualified as Exception
 import Control.Monad (foldM, void)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
@@ -133,15 +134,15 @@ hydrateFromCache plan cache pids ref = go Exports.emptyEnv [] pids
           hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
           if and hits
             then do
-              env' <- foldM (loadKey pid verT) env keys
+              env' <- foldM (loadKey verT) env keys
+              -- Once per unit, not once per component key.
+              publishRows ref [Fuzzy.mkPackageRow (pkgName pid) (pkgVersion pid)]
               go env' missing rest
             else go env (pid : missing) rest
 
-    loadKey pid verT env k = do
+    loadKey verT env k = do
       rows <- Cache.readCachedIndex cache k verT
-      let indexed = scorerRows (pkgName pid) (pkgVersion pid) rows
-      indexed `seq`
-        IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+      publishRows ref (componentScorerRows rows)
       pure (Exports.extendEnv rows env)
 
     -- | Just the component kinds for a unit, mirroring the
@@ -202,6 +203,7 @@ buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
         Right d -> do
           comps <- componentsForUnit plan pid d
           env'  <- foldM (indexComponent pid) env comps
+          publishRows ref [Fuzzy.mkPackageRow (pkgName pid) (pkgVersion pid)]
           bump
           pure env'
 
@@ -214,14 +216,12 @@ buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
       parsed   <- mapM (parseGuarded langs) sources
       let ci       = indexParsedComponent compKey (dependencySet plan pid) env parsed
           flatRows = ciRows ci
-          indexed  = scorerRows (pkgName pid) (pkgVersion pid) flatRows
       reportComponentIndex compKey ci
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
       Cache.writeCachedIndex cache (originFor pid)
         (unComponentKey compKey) verT flatRows
-      indexed `seq`
-        IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
+      publishRows ref (componentScorerRows flatRows)
       pure (Exports.extendEnv flatRows env)
 
 -- | The packages a unit may resolve a re-export through: its dependencies,
@@ -588,15 +588,27 @@ languageSettingsFor plan pid kind =
     Just ci -> Comp.ciLanguageSettings ci
     Nothing -> Extensions.defaultLanguageSettings
 
--- | Everything a package's rows contribute to the in-memory scorer: one
--- row per symbol, plus the package and module rows they imply.
+-- | Everything one /component's/ rows contribute to the in-memory scorer:
+-- one row per symbol, plus the module rows they imply.
 --
 -- Both the build path and the hydrate-from-cache path go through here, so
 -- a warm cache and a fresh index cannot disagree about which entities are
--- searchable.
-scorerRows :: PackageName -> Version -> [IndexRow] -> [Fuzzy.IndexedRow]
-scorerRows pkg ver rows =
-  Fuzzy.entityRows pkg ver rows ++ map Fuzzy.mkSymbolRow rows
+-- searchable.  The package row is published once per unit by the caller,
+-- since a package is not a per-component fact.
+componentScorerRows :: [IndexRow] -> [Fuzzy.IndexedRow]
+componentScorerRows rows =
+  Fuzzy.moduleRows rows ++ map Fuzzy.mkSymbolRow rows
+
+-- | Publish rows into the scorer's shared view.
+--
+-- The spine is forced before the critical section, not after: the rows are
+-- built per module and 'seq' on the list only forced its first cell, so the
+-- lowercasing every 'Fuzzy.indexedRow' does was still a thunk the /search/
+-- thread paid for on the first query.
+publishRows :: IORef.IORef [Fuzzy.IndexedRow] -> [Fuzzy.IndexedRow] -> IO ()
+publishRows ref rows = do
+  n <- Exception.evaluate (length rows)
+  n `seq` IORef.atomicModifyIORef' ref (\old -> (rows ++ old, ()))
 
 -- | Parse one module, catching the exception cpphs raises for macros only
 -- a real compiler defines.  One module loses its rows; the pass continues.

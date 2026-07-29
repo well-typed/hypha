@@ -16,11 +16,9 @@ module Hypha.Search.Collapse
   , rankRows
   , collapseRows
   , resultHref
-  , definitionHref
   , presentationHref
   , presentationLabel
-  , definitionLabel
-  , resultComponent
+  , definitionPresentation
   ) where
 
 import Data.Containers.ListUtils (nubOrd)
@@ -115,10 +113,11 @@ collapseRows rows = go Map.empty rows
                let group  = Map.findWithDefault (row :| []) k grouped
                    ranked = NE.sortWith presentationRank group
                    winner = NE.head ranked
-                   -- nubOrd because one presentation can reach the scorer
-                   -- twice — a unit hydrated from cache and then rebuilt
-                   -- prepends its rows again — and a count that double-counts
-                   -- is exactly the kind of lie the list replaced.
+                   -- The winner's own presentation is excluded by taking
+                   -- the tail; nubOrd because a module can reach the scorer
+                   -- under two rows (a symbol and its sibling constructor
+                   -- both name it), and a count that double-counts is
+                   -- exactly the kind of lie the list replaced.
                    others = nubOrd (map presentationOf (NE.tail ranked))
                in ResultSymbol (symbolResult winner others)
                     : go (Map.insert k () seen) rest
@@ -180,25 +179,29 @@ resultHref = \case
                           <> "/" <> unModulePath (srModule s)
                           <> "/" <> unSymbolName (srName s)
 
--- | Where the @+N@ affordance points: the definition site, so the escape
--- hatch out of a collapsed group is one click.
---
--- The component comes from the definition, not from the presentation: a
--- re-export can cross a package boundary, and @\/pkg\/base\/GHC.Internal…@
--- is a module @base@ does not have.
-definitionHref :: SymbolResult -> Text
-definitionHref s =
-  "/pkg/" <> unComponentKey (drComponent (srDefinition s))
-    <> "/" <> unModulePath (drModule (srDefinition s))
-    <> "/" <> unSymbolName (srName s)
-
 -- | Where one folded-in presentation lives, so an alternate can be reached
 -- and not merely counted.
+--
+-- Also how the defining module is linked, via 'definitionPresentation':
+-- the component comes from the presentation either way, and a re-export
+-- can cross a package boundary — @\/pkg\/base\/GHC.Internal…@ is a module
+-- @base@ does not have.
 presentationHref :: SymbolName -> Presentation -> Text
 presentationHref name p =
   "/pkg/" <> unComponentKey (prComponent p)
     <> "/" <> unModulePath (prModule p)
     <> "/" <> unSymbolName name
+
+-- | The definition site seen as a presentation, so a renderer can ask
+-- whether one of the folded-in modules /is/ the defining one.
+--
+-- It usually is: @Data.Map.Strict@ wins the group and
+-- @Data.Map.Strict.Internal@ both defines @insertWith@ and exposes it, so
+-- it appears in 'srAlternates' too.  A renderer that emitted a separate
+-- "defines it" row alongside the alternates therefore listed that module
+-- twice, and opened @N+1@ rows behind a @+N@ badge.
+definitionPresentation :: DefinitionRef -> Presentation
+definitionPresentation d = Presentation (drComponent d) (drModule d)
 
 -- | @component:module@ — the form the UI shows a folded-in presentation in.
 --
@@ -210,14 +213,3 @@ presentationLabel :: Presentation -> Text
 presentationLabel p =
   unComponentKey (prComponent p) <> ":" <> unModulePath (prModule p)
 
--- | @component:module@ for a definition site.
-definitionLabel :: DefinitionRef -> Text
-definitionLabel d =
-  unComponentKey (drComponent d) <> ":" <> unModulePath (drModule d)
-
--- | The component a result belongs to, for the search bar's scope chip.
-resultComponent :: SearchResult -> Text
-resultComponent = \case
-  ResultPackage p _  -> unPackageName p
-  ResultModule c _ _ -> unComponentKey c
-  ResultSymbol s     -> unComponentKey (srComponent s)

@@ -15,6 +15,9 @@ import Lucid (renderText)
 
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
+import Hypha.Search.Collapse (collapseRows)
+import Hypha.Search.Fuzzy (mkSymbolRow)
+import Hypha.Search.Index (Visibility (..))
 import Hypha.Search.Reexport (DefinitionSite (..))
 import Hypha.Server.ModuleDoc (SymbolCardData (..))
 import Hypha.Server.Ui.Doc (symbolCard)
@@ -22,8 +25,9 @@ import Hypha.Source.Locate (Provenance (..))
 import Hypha.Source.Parser (DeclKind (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
+import Util.Row (rowIn)
 import Hypha.Server.App (mimeFor, sanitizeSegments)
-import Hypha.Server.Ui.Search (highlightTokens)
+import Hypha.Server.Ui.Search (highlightTokens, resultsFragment)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 
@@ -43,6 +47,7 @@ tests = testGroup "Unit.Server"
   , testGroup "Tree.hackageLink" hackageLinkTests
   , testGroup "Doc.symbolCard" symbolCardTests
   , testGroup "Search.highlightTokens" highlightTokensTests
+  , testGroup "Search.resultsFragment" resultsFragmentTests
   ]
 
 sanitizeSegmentsTests :: [TestTree]
@@ -131,6 +136,70 @@ highlightTokensTests =
   ]
   where
     renderHl toks t = LText.toStrict (renderText (highlightTokens toks t))
+
+-- | What the reader actually sees behind a @+N@ badge.
+--
+-- The collapse model was tested and the renderer was not, which is how a
+-- flagship case shipped listing the defining module twice: the definition
+-- is usually a presentation as well, so it was in 'srAlternates' /and/ in
+-- a prepended "defines it" row.
+resultsFragmentTests :: [TestTree]
+resultsFragmentTests =
+  [ testCase "the defining module is listed once, tagged, not repeated" $ do
+      -- The whole group: Data.Map.Strict presents insertWith and wins,
+      -- Data.Map.Strict.Internal both defines and exposes it.  So the
+      -- definition is in srAlternates, and a separate "defines it" row
+      -- listed it twice behind a badge that said "+1".
+      let opened = altList (renderResults ["insertwith"]
+            [ mapRow "Data.Map.Strict"          "Data.Map.Strict.Internal"
+            , mapRow "Data.Map.Strict.Internal" "Data.Map.Strict.Internal"
+            ])
+      countOf "containers:Data.Map.Strict.Internal" opened @?= 1
+      countOf "alt-tag" opened @?= 1
+      countOf "<li>" opened @?= 1
+
+  , testCase "the badge counts the rows it opens" $ do
+      let html = renderResults ["insertwith"]
+            [ mapRow "Data.Map.Strict"          "Data.Map.Strict.Internal"
+            , mapRow "Data.Map.Strict.Internal" "Data.Map.Strict.Internal"
+            ]
+      assertBool ("expected +1 in " <> show html) ("+1" `Text.isInfixOf` html)
+
+  , testCase "a definition that is no presentation is still named" $ do
+      -- base's Data.List and Data.Traversable both expose mapAccumL; the
+      -- module that defines it exposes nothing the search indexed, so the
+      -- disclosure has to append it rather than find it among the folded-in
+      -- presentations.
+      let opened = altList (renderResults ["mapaccuml"]
+            [ rowIn "base" "Data.Traversable" "mapAccumL" "sig"
+                    "GHC.Internal.Data.Traversable" Exposed
+            , rowIn "base" "Data.List" "mapAccumL" "sig"
+                    "GHC.Internal.Data.Traversable" Exposed
+            ])
+      countOf "base:Data.Traversable" opened             @?= 1
+      countOf "base:GHC.Internal.Data.Traversable" opened @?= 1
+      countOf "alt-tag" opened                           @?= 1
+      countOf "<li>" opened                              @?= 2
+
+  , testCase "a result with nothing folded in gets no disclosure" $ do
+      let html = renderResults ["insertwith"]
+                   [ mapRow "Data.Map.Strict" "Data.Map.Strict" ]
+      countOf "alt-group" html @?= 0
+  ]
+  where
+    mapRow presented defined =
+      rowIn "containers" presented "insertWith"
+        "insertWith :: Ord k => k -> a -> Map k a -> Map k a" defined Exposed
+
+    renderResults tokens =
+      LText.toStrict . renderText . resultsFragment tokens
+        . collapseRows . map mkSymbolRow
+
+    -- Only what the disclosure opens: the badge's tooltip names the same
+    -- modules, and counting both would not say which side listed one twice.
+    altList = snd . Text.breakOn "<ul class=\"alt-list\">"
+
+    countOf needle = length . Text.breakOnAll needle
 
 parseBindTests :: [TestTree]
 parseBindTests =

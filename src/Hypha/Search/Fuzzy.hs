@@ -28,7 +28,7 @@ module Hypha.Search.Fuzzy
   , mkSymbolRow
   , mkPackageRow
   , mkModuleRow
-  , entityRows
+  , moduleRows
   , entityComponent
   , scopeRows
   , scoreRow
@@ -120,20 +120,25 @@ indexedRow ent pkg modPath name =
        , irNameLen = Text.length name
        }
 
--- | The package and module rows a set of symbol rows implies.
+-- | The module rows a set of symbol rows implies.
 --
 -- Synthesised rather than stored: they are a projection of rows we already
 -- have, and deriving them in one place is what stops the freshly-built
 -- index and the hydrated-from-cache index from disagreeing about which
 -- entities exist.  A module contributes one row however many of its
 -- symbols do.
-entityRows :: PackageName -> Version -> [IndexRow] -> [IndexedRow]
-entityRows pkg ver rows =
-  mkPackageRow pkg ver
-    : [ mkModuleRow c m v
-      | (c, m, v) <- nubOrd
-          [ (rowComponent r, rowModule r, rowVisibility r) | r <- rows ]
-      ]
+--
+-- The package row is /not/ here, because these rows are built per
+-- component and a package is not: emitting one alongside each component's
+-- modules put the package into the results once per component, so a
+-- project whose own package has a library and two executables answered
+-- its own name three times.
+moduleRows :: [IndexRow] -> [IndexedRow]
+moduleRows rows =
+  [ mkModuleRow c m v
+  | (c, m, v) <- nubOrd
+      [ (rowComponent r, rowModule r, rowVisibility r) | r <- rows ]
+  ]
 
 -- | Which component a row belongs to — the package itself for a package
 -- row, the owning component for a module or symbol row.

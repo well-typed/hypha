@@ -9,8 +9,8 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Collapse
-  ( SearchResult (..), SymbolResult (..), collapseRows, definitionHref
-  , definitionLabel, presentationLabel, resultHref )
+  ( SearchResult (..), SymbolResult (..), collapseRows, definitionPresentation
+  , presentationHref, presentationLabel, resultHref )
 import Hypha.Search.Fuzzy (mkSymbolRow, scopeRows)
 import Hypha.Search.Index (DefinitionRef (..), IndexRow, Visibility (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
@@ -139,7 +139,7 @@ tests = testGroup "Unit.SearchCollapse"
                  Exposed
              ] of
         [ResultSymbol s] ->
-          definitionLabel (srDefinition s)
+          presentationLabel (definitionPresentation (srDefinition s))
             @?= "ghc-internal:GHC.Internal.Data.Traversable"
         _ -> fail "expected one result"
 
@@ -217,7 +217,8 @@ tests = testGroup "Unit.SearchCollapse"
                         Exposed
                     ] of
         [ResultSymbol s] ->
-          definitionHref s
+          presentationHref (srName s)
+              (definitionPresentation (srDefinition s))
             @?= "/pkg/ghc-internal/GHC.Internal.Data.Traversable/mapAccumL"
         _ -> fail "expected one result"
   ]

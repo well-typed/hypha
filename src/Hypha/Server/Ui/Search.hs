@@ -16,8 +16,9 @@ import Lucid
 import Lucid.Base (makeAttributes)
 
 import Hypha.Search.Collapse
-  ( Presentation, SearchResult (..), SymbolResult (..), definitionHref
-  , definitionLabel, presentationHref, presentationLabel, resultHref )
+  ( Presentation (..), SearchResult (..), SymbolResult (..)
+  , definitionPresentation, presentationHref, presentationLabel
+  , resultHref )
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
@@ -115,25 +116,39 @@ resultsFragment tokens results = ul_ [class_ "results", id_ "results"] $
       summary_ [ class_ "alt-count"
                , title_ (altSummary s)
                ]
-               (toHtml ("+" <> tshow (length (srAlternates s))))
-      ul_ [class_ "alt-list"] $ do
-        li_ $ do
-          a_ [href_ (definitionHref s)]
-             (toHtml (definitionLabel (srDefinition s)))
-          span_ [class_ "alt-tag"] "defines it"
-        mapM_ (altItem s) (srAlternates s)
+               (toHtml ("+" <> tshow (length (altRows s))))
+      ul_ [class_ "alt-list"] $ mapM_ (altItem s) (altRows s)
 
-    altItem :: SymbolResult -> Presentation -> Html ()
-    altItem s p = li_ $
+    -- One row per module the reader might have expected to find this
+    -- under, with the defining one tagged rather than repeated: the
+    -- definition module is usually a presentation as well, so emitting a
+    -- separate row for it listed it twice and opened N+1 rows behind
+    -- "+N".  It is appended only when it is neither the presentation the
+    -- reader landed on nor one of the folded-in ones -- which is the
+    -- re-export case, where the defining module is not indexed as a
+    -- presentation at all.
+    altRows :: SymbolResult -> [(Presentation, Bool)]
+    altRows s =
+      [ (p, p == defined) | p <- srAlternates s ]
+        ++ [ (defined, True) | defined /= landed, defined `notElem` srAlternates s ]
+      where
+        defined = definitionPresentation (srDefinition s)
+        landed  = Presentation (srComponent s) (srModule s)
+
+    altItem :: SymbolResult -> (Presentation, Bool) -> Html ()
+    altItem s (p, defines) = li_ $ do
       a_ [href_ (presentationHref (srName s) p)]
          (toHtml (presentationLabel p))
+      if defines then span_ [class_ "alt-tag"] "defines it" else mempty
 
-    -- Duplicated into the tooltip so hovering answers the question too,
-    -- without having to open the list.
-    altSummary s =
-      "also exposed by " <> Text.intercalate ", "
-        (map presentationLabel (srAlternates s))
-        <> "; defined in " <> definitionLabel (srDefinition s)
+    -- The same rows in the tooltip, so hovering answers the question
+    -- without opening the list -- and each module named once, which the
+    -- previous "also exposed by X; defined in X" could not manage when
+    -- the defining module was itself a presentation.
+    altSummary s = "also under " <> Text.intercalate ", "
+      [ presentationLabel p <> if defines then " (defines it)" else ""
+      | (p, defines) <- altRows s
+      ]
 
     tshow :: Int -> Text
     tshow = Text.pack . show
