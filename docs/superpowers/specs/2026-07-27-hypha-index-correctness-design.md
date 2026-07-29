@@ -1,7 +1,10 @@
 # Hypha Server — Index, Parse and Search Correctness
 
 - **Date:** 2026-07-27
-- **Status:** Draft (design)
+- **Status:** Implemented on `adinapoli/more-server-improvements`.  The
+  row type and the collapse affordance were superseded in part by
+  `2026-07-28-cross-package-reexports-design.md`; the notes at the end of
+  this file record what shipped.
 - **Author:** Alfredo Di Napoli (with Claude Code)
 - **Branch:** `adinapoli/more-server-improvements`
 
@@ -414,7 +417,9 @@ data IndexRow = IndexRow
   , rowModule     :: !ModulePath
   , rowName       :: !SymbolName
   , rowSignature  :: !Signature
-  , rowDefModule  :: !ModulePath    -- ^ == rowModule when declared here
+  , rowDefinition :: !DefinitionRef -- ^ component + module; see the
+                                    --   07-28 spec, which widened this
+                                    --   from a bare ModulePath
   , rowVisibility :: !Visibility
   }
 
@@ -423,10 +428,13 @@ data Visibility = Exposed | Internal   -- ^ cabal exposed- vs other-modules
 
 `pkg_index` gains `def_mod TEXT NOT NULL` and `visibility TEXT NOT
 NULL`. `readIndex`/`writeIndex` swap their four-tuples for `IndexRow`.
+The 07-28 work added a third column, `def_pkg`, when a definition site
+became a component as well as a module.
 
 ### 3.4 Cache invalidation
 
-A `kv` entry `index_format` records the row-format generation. On
+A `kv` entry `index_format` records the row-format generation — `3` as
+shipped. On
 `openIndexCache`: ensure schema, read the key, and when it is absent or
 older than the current generation, delete every row from `pkg_index`
 and `pkg_index_meta`, then write the key. One wipe, one re-index, no
@@ -471,8 +479,11 @@ data SymbolResult = SymbolResult
   , srModule     :: !ModulePath      -- ^ the presentation module
   , srName       :: !SymbolName
   , srSignature  :: !Signature
-  , srDefModule  :: !ModulePath
-  , srAlternates :: !Int             -- ^ collapsed siblings
+  , srDefinition :: !DefinitionRef
+  , srAlternates :: ![Presentation]  -- ^ the folded-in presentations.  A
+                                     --   count was enough until a group
+                                     --   could span packages; see the
+                                     --   07-28 spec.
   }
 
 resultHref :: SearchResult -> Text
@@ -483,12 +494,15 @@ resultHref :: SearchResult -> Text
 per-keystroke scoring allocation-free; `SearchResult` is the rendering
 type, built once per response.
 
-Symbol hits group by `(component, defModule, name)`. The winner is the
-most public presentation: `Exposed` before `Internal`, then a path with
-no `Internal` segment, then fewer segments, then lexicographic. The
-group's size becomes `srAlternates`, rendered as a small `+2` affordance
-that links the definition site, so nothing is hidden — item 4's
-requested behaviour with an escape hatch.
+Symbol hits group by `(definition, name)`. The winner is the most public
+presentation: `Exposed` before `Internal`, then a path with no
+`Internal` segment, then fewer segments, then lexicographic. The
+folded-in presentations become `srAlternates`, rendered as a `+N`
+disclosure that names each one and links it, with the defining module
+tagged — so nothing is hidden, which is item 4's requested behaviour
+with an escape hatch.  (A bare count shipped first and was replaced once
+a group could span packages: "+1" on a `base` result tells the reader
+nothing about the `ghc-internal` module it folded in.)
 
 Grouping on the *definition* is what makes this safe.
 `Data.Map.Strict.insertWith` and `Data.Map.Lazy.insertWith` have
@@ -616,3 +630,63 @@ zero rows whose module name contains a source-dir segment, and
   `Search.Index` touches a 817-line module that also owns the server
   wiring. Mechanical extraction first, behaviour changes after, so the
   diff stays reviewable.
+
+---
+
+## Implementation notes
+
+Filled in from the execution log after the branch landed; the per-task
+plan the log came from is not kept.
+
+**Measurement, 2026-07-27, this project's 282-package plan:**
+
+```
+61531 rows, 282 packages      (58223 before this branch)
+0     aborted index passes
+159   modules skipped (parse failures), each reported with GHC's message
+0     cabal-module-list fallbacks
+0     path/header name mismatches
+```
+
+Taken from the indexer's stderr during a full re-index.  The
+`IndexHealth` blob and the `doctor` section of §1.4 were **not**
+implemented: the number the section gates on was obtainable without
+them, so what remains is a UI convenience rather than a correctness fix.
+Worth doing; not done here.  The whole-index invariant it would own —
+a component with rows attributed to it but no rows of its own — is the
+one check no unit test can make.
+
+**CPP macro synthesis (§7) is not implemented, and the measurement says
+it is warranted.** The 159 failures are CPP-shaped:
+
+```
+48  parse error on input `#'            (unexpanded directives)
+ 6  #  error This code isn't being built with GHC
+ 4  parse error on input `CALLCONV'     (undefined macro)
+ 5  #s'   4  #s1   5  parse error on input `$'
+```
+
+`CALLCONV` and `CURRENT_PACKAGE_KEY` are exactly the macros §7 proposes
+to synthesise from the build plan.  Deferred rather than skipped: 159
+modules out of ~62 000 rows is a tail, and the indexer reports each one
+instead of aborting.
+
+**Deviations, all forced by what the libraries actually do:**
+
+1. `Header.getOptions` validates `LANGUAGE` names against the list
+   `mkParserOpts` was given and *throws* on anything absent — with the
+   `[]` the old code passed, even `{-# LANGUAGE CPP #-}` aborts.  Hence
+   `scanPragmas` in `IO`.  The list has to be the union of `xFlags` and
+   `supportedLanguagesAndExtensions`: the first knows no Safe Haskell
+   mode, the second filters extensions by platform.
+2. `RecordPuns` is the alias and `NamedFieldPuns` the extension, not the
+   other way round as the design had it.
+3. §3's single module became two — `Search.Index` for the types,
+   `Search.Indexer` for the building — because one module for both is an
+   import cycle with `Search.Cache`.
+4. `resolveComponent` is a fixpoint, not the memoised recursion sketched
+   here: the recursive version was unusable on real packages.
+5. Two defects were found by dogfooding rather than by the planned
+   tests: resolution returned the first hop rather than the definition
+   (`Data.Map` → `Data.Map.Lazy` → `Data.Map.Internal`), and `hypha
+   source` still swept.  Both have tests now.

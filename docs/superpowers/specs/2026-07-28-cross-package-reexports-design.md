@@ -238,43 +238,54 @@ definition and fold into one result.
 It gains `unComponentKey` as a final tiebreak so the order stays total
 now that one group can span components.
 
-`definitionHref` is corrected to build the link from
-`drComponent (srDefinition s)`, not from the presentation's component.
+A folded-in presentation is linked from its own component, and the
+defining module from `drComponent (srDefinition s)` — never from the
+presentation the reader landed on, since a re-export crosses package
+boundaries and `/pkg/base/GHC.Internal…` is a module `base` does not
+have.  As shipped this is one function, `presentationHref`, applied to
+the definition seen as a presentation.
 
 The `+N` affordance keeps its existing meaning: nothing is hidden, the
-definition site is one click away.
+definition site is one click away.  The disclosure lists one row per
+folded-in presentation and tags the defining one rather than repeating
+it — the defining module is usually a presentation as well, so a
+separate "defines it" row named it twice and opened `N+1` rows.
 
 ### Browsing (module page, symbol card)
 
-Pure → IO → pure, so `Extract` and `Locate` stay free of IO:
+Browsing asks the index, because the index holds the only *transitively*
+resolved answer.  This section originally proposed deriving the owner
+from the plan — `Reexport.outsideModulesFor` plus a
+`BuildPlan.moduleOwner` walking `puDeps` → `puLibComponents` →
+`ciExposedModules`.  Both were written and then deleted: `puLibComponents`
+is filled from a unit's unpacked `.cabal`, which only local units have, so
+**every dependency's component list is empty** and `moduleOwner` could
+never resolve one.  Measured on the real plan: `hypha` has 81 exposed
+modules, `base` / `ghc-internal` / `containers` have `[]`.
 
-1. **Pure.** Resolve the component and collect the outside modules the
-   asked-for module's exports actually need:
+What ships instead:
 
-   ```haskell
-   -- Hypha.Search.Reexport
-   outsideModulesFor :: [ModuleInterface] -> ModulePath -> [ModulePath]
-   ```
+1. **IO** (server layer).  `Cache.lookupRowsInModule` returns the rows
+   the index already holds for the asked-for module, each carrying a
+   resolved `DefinitionRef`.  For every definition in another component,
+   resolve that component's source directory and load just the module
+   named.  The result is an `ImportedDefinitions` — the sites, plus the
+   sources that answer them.
 
-2. **IO** (server layer). For each such module, find its owner from the
-   plan alone — no source reads:
+2. **IO.** `resolveModuleEntries` and `locateDefinitionInComponent` take
+   it, parse each module once under the component's own language
+   settings, and build entries identically to local ones — real haddock,
+   real signature — tagged `EntryReexport` with the defining component.
 
-   ```haskell
-   moduleOwner :: BuildPlan -> PackageId -> ModulePath
-              -> Maybe (PackageId, Comp.ComponentKind)
-   ```
+Both parse in `IO` rather than purely, because `cpphs` reports an
+undefined build-time macro by calling `error` from pure code: unguarded,
+one such module answers the page with a 500.  One parse per module per
+page view, and the definition the symbol card renders comes from that
+parse rather than from a second read of the same file.
 
-   walking `puDeps` → each dependency's `puLibComponents` →
-   `ciExposedModules`. Then load and read just those modules.
-
-3. **Pure.** `resolveModuleEntries` takes the extra sources keyed by
-   module and builds their entries identically to local ones — real
-   haddock, real signature — tagged `EntryReexport` with the owning
-   component.
-
-One extra parse per page view, not per index pass. `Source.Locate` takes
-the same extra sources so the symbol card finds the snippet in the
-owning package's tree.
+An index miss is not an absence: the index may still be building, and
+class methods have no rows at all (see the notes below), so both callers
+fall back to resolving within the component.
 
 ## Error handling
 
@@ -296,9 +307,10 @@ has no other way to find out.
   ```
 - **Ambiguous env hit** after dependency filtering — deterministic
   lexicographic winner, reported through `Ambiguity`.
-- **`moduleOwner` miss on a page** — the entry is still listed, with its
-  origin and without a signature, plus a page-level note. Listing a name
-  we cannot describe beats omitting it.
+- **No definition site for an entry** — the index has no row for it and
+  the component cannot resolve it either.  The entry is still listed,
+  with its origin and without a signature.  Listing a name we cannot
+  describe beats omitting it.
 - **No build plan** (`hypha module` / `hypha source` on a bare package
   directory) — there is no dependency graph, so cross-package entries
   report that the definition lives in another package instead of
@@ -325,7 +337,7 @@ has no other way to find out.
   input.
 - **Golden.** Search result and module page for a cross-package
   re-export.
-- **Real re-index plus `scripts/index-audit.sh`.** Not optional. The
+- **Real re-index, driving the real handlers.** Not optional. The
   previous round of this work had 273 green tests and two bugs that only
   a real pass exposed: an exponential resolver, and `cpphs` raising
   `error` from pure code. Success criteria:
@@ -348,3 +360,93 @@ has no other way to find out.
   because a dependency's rows already carry their resolved
   `DefinitionRef`. No explicit multi-hop search is implemented, and none
   is needed for the façade shape this issue is about.
+
+---
+
+## Implementation notes
+
+Filled in from the execution log after the branch landed; the per-task
+plan the log came from is not kept.
+
+### Measurement, 2026-07-28
+
+Full re-index of this project's plan on GHC 9.10.3, row format 2 → 3.
+
+| | before | after |
+|---|---|---|
+| total rows | 61 531 | **63 146** |
+| packages | 282 | **283** |
+| `base` | 308 | **1450** |
+| `ghc-internal` | 1240 | 1245 |
+| cross-package rows (`def_pkg <> pkg`) | 0 (unrepresentable) | **1615**, across 33 packages |
+
+Top cross-package consumers: `base` 1142, `serialise` 76, `time-compat`
+74, `base-compat` 68, `os-string` 68, `conduit-extra` 35,
+`ansi-terminal` 31, `filepath` 26, `tls` 24.  `Data.Traversable`,
+`Control.Monad`, `Data.Foldable`, `Data.List`, `Data.Maybe` and
+`Prelude` had contributed **zero** rows before this work.
+
+Every one of the ~7200 unresolved-export reports traces back to a module
+that does not parse without CPP preprocessing: the module contributes no
+rows, and every module re-exporting from it loses exactly what it
+re-exported.  That is the tail the 07-27 spec's §7 addresses, and it is
+still open.
+
+### The process failure worth recording
+
+The first two attempts at the browsing fix shipped green, on tests that
+injected `ImportedDefinitions` directly and therefore never exercised
+`moduleOwner` — the one link that was broken.  **Pure-function tests
+cannot verify a path whose IO they replace.** Any future change to a
+browsing path should be verified by driving `buildServerConfig` and
+calling `scSymbolLookup` / `scModuleDoc`, and should leave behind a test
+that exercises the producer of the definition-site map, not only its
+consumers.
+
+### Found while verifying, NOT fixed: class methods and constructors are never indexed
+
+Pre-existing and unrelated to this work, but larger than the defect this
+design set out to fix, so it should not stay unrecorded.
+
+| symbol | rows in the whole index |
+|---|---|
+| `traverse` | 4 (none in `base` or `ghc-internal`) |
+| `fmap`, `Just`, `mempty`, `liftA2` | **0** |
+
+`GHC.Internal.Data.Traversable` yields a row for `Traversable` — the
+class — and none for `traverse` or `sequenceA`.  `Parser.findDecl`
+matches top-level declarations, and a class's methods and a data type's
+constructors are not top-level declarations, so the indexer has no
+declaration to read a signature from and writes no row.  The export side
+already knows about them: `Traversable(..)` is recorded with its
+subordinates.  Fixing it means teaching `Hypha.Source.Parser` to emit
+class methods and constructors as declarations of their own, with the
+signatures GHC already attaches.
+
+### Deviations from the design
+
+- `lookupExport` returns `Maybe ExportChoice`, not
+  `Maybe (Export, Ambiguity)`: here the rejected candidates differ by
+  *component*, and a module path alone cannot name them.
+- `locateDefinitionInComponent` takes a `ComponentKey` beyond what this
+  design described.  It has to report which component the definition is
+  in, and deriving that from a module path is the precise mistake the
+  change exists to remove.
+- `Hypha.Command.Source` was an unplanned second caller.  It gets a
+  `ComponentKey` built from the cabal file name and an empty
+  imported-module map — a bare package directory has no plan, so no
+  dependency graph — and reports the cross-package case rather than
+  leaving it silently unresolved.
+- `foldl'` is imported qualified from `Data.Foldable`: base 4.20 added it
+  to the `Prelude`, so an unqualified import is redundant on 9.10 and
+  required on 9.6, and `-Werror` rejects either choice.
+
+### Open risk, flagged rather than designed around
+
+`presentationRank` picks the winner from the shape of the module path, so
+a façade package with shorter module names than the package it wraps
+would out-rank it.  The tests pin the `base`/`ghc-internal` case and the
+determinism, not the general question; the `+N` disclosure is the escape
+hatch.  Ranking by whether the project depends on a package directly was
+considered and rejected, because it makes search results depend on the
+asking project's plan.
