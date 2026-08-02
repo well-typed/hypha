@@ -66,12 +66,29 @@ componentFingerprint roots = do
       entries <- listDirectory d
       fmap concat $ mapM (visit d) entries
 
+    -- Build output and VCS metadata are not the component's sources, and
+    -- including them makes the fingerprint change for reasons that do not
+    -- change a single row.  @dist-newstyle@ holds cabal's generated
+    -- @Paths_pkg.hs@ and @PackageInfo_pkg.hs@, rewritten on every build,
+    -- so a project package re-indexed after each @cabal build@; and this
+    -- repo keeps agent checkouts under @.worktrees@, which tied one
+    -- checkout's fingerprint to every other one.
+    --
+    -- Deliberately narrower than the indexer's skip list, which also
+    -- drops @test@ and @bench@: over-invalidating costs a rebuild,
+    -- under-invalidating serves stale rows.
+    skipDir :: FilePath -> Bool
+    skipDir name = name `elem`
+      [ "dist", "dist-newstyle", ".stack-work", ".worktrees"
+      , ".git", ".hypha", ".cabal-store"
+      ]
+
     visit :: FilePath -> FilePath -> IO [(FilePath, String, Integer)]
     visit parent name = do
       let p = parent </> name
       isDir <- doesDirectoryExist p
       if isDir
-        then walkDir p
+        then if skipDir name then pure [] else walkDir p
         else if takeExtension p `elem` [".hs", ".lhs"]
                then do
                  mt <- show <$> getModificationTime p
