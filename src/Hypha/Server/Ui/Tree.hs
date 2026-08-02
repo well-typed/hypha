@@ -2,9 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.Ui.Tree
   ( sidebar
-  , packageTree
   , splitByOrigin
-  , originBadge
   , originBadgeFull
   , hackageLink
   ) where

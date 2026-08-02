@@ -19,9 +19,7 @@ module Hypha.Source.Parser
   , ParseError (..)
   , parseErrorMessage
   , parseDecls
-  , parseDeclsWith
   , parseModuleDoc
-  , parseModuleDocWith
   , parseModuleWith
   , findDecl
   , declSigText
@@ -127,14 +125,9 @@ parseErrorMessage = peMessage
 -- defensible is that 'parseModuleIO' catches the preprocessor's failures,
 -- so this is total: it returns a 'ParseError', never a thrown 'ErrorCall'.
 parseDecls :: FilePath -> Text -> Either ParseError [Decl]
-parseDecls = parseDeclsWith Extensions.defaultLanguageSettings
-
--- | 'parseDecls' with the component's cabal-declared language settings,
--- for callers that know which component the module belongs to.
-parseDeclsWith
-  :: Extensions.LanguageSettings -> FilePath -> Text -> Either ParseError [Decl]
-parseDeclsWith ls path source = unsafePerformIO (parseDeclsIO ls path source)
-{-# NOINLINE parseDeclsWith #-}
+parseDecls path source =
+  unsafePerformIO (parseDeclsIO Extensions.defaultLanguageSettings path source)
+{-# NOINLINE parseDecls #-}
 
 -- | 'IO' variant of 'parseDecls' for callers that already live in
 -- 'IO' and would prefer not to thread an 'unsafePerformIO' through
@@ -150,14 +143,9 @@ parseDeclsIO ls path source =
 -- the parse tree, so this is the single authoritative doc source — no
 -- line scanning anywhere.
 parseModuleDoc :: FilePath -> Text -> Either ParseError (Maybe Text, [Decl])
-parseModuleDoc = parseModuleDocWith Extensions.defaultLanguageSettings
-
--- | 'parseModuleDoc' under a component's language settings.
-parseModuleDocWith
-  :: Extensions.LanguageSettings -> FilePath -> Text
-  -> Either ParseError (Maybe Text, [Decl])
-parseModuleDocWith ls path source =
-  fmap (\(_, hdr, ds) -> (hdr, ds)) (parseModuleWith ls path source)
+parseModuleDoc path source =
+  fmap (\(_, hdr, ds) -> (hdr, ds))
+       (parseModuleWith Extensions.defaultLanguageSettings path source)
 
 -- | Parse a module and hand back the whole parse tree alongside the
 -- header doc and declarations.  "Hypha.Source.Interface" needs the tree
@@ -252,12 +240,18 @@ moduleHeaderDoc m = docTextOf <$> hsmodHaddockModHeader (hsmodExt m)
 -- the preprocessor pass is non-trivial.
 needsCpp :: Text -> Bool
 needsCpp src =
-     "{-# LANGUAGE CPP" `Text.isInfixOf` src
-  || "\n#if"    `Text.isInfixOf` src
-  || "\n#ifdef" `Text.isInfixOf` src
-  || "\n#ifndef" `Text.isInfixOf` src
-  || "\n#define" `Text.isInfixOf` src
-  || "\n#include" `Text.isInfixOf` src
+     "CPP" `Text.isInfixOf` pragmaHead
+  || any (`Text.isInfixOf` src) directives
+  where
+    -- @{-# LANGUAGE CPP #-}@ is one spelling; @{-# LANGUAGE
+    -- ScopedTypeVariables, CPP #-}@ is another, and matching the literal
+    -- @{-# LANGUAGE CPP@ missed it.  Pragmas precede the module header,
+    -- so there is no need to scan a 5000-line file for one.
+    pragmaHead = Text.take 4096 src
+
+    -- @#ifdef@ and @#ifndef@ need no probes of their own: both start
+    -- with @#if@.
+    directives = ["\n#if", "\n#define", "\n#include"]
 
 -- | cpphs configuration: behave like ghc -E, expand the conditional
 -- branches reachable under no externally-supplied symbol table, and

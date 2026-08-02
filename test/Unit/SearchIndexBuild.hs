@@ -18,7 +18,7 @@ import qualified Data.Text as Text
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-import Hypha.Search.Exports (emptyEnv, envFromRows)
+import Hypha.Search.Exports (emptyEnv)
 import Hypha.Search.Fuzzy (Entity (..), IndexedRow (..))
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Search.Indexer
@@ -29,6 +29,7 @@ import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import Util.Fixture (depSources, fixtureSources, sourcesFor)
+import Util.Row (envFromRows)
 
 -- | The packages the fixture component may resolve a re-export through:
 -- itself, and the neighbouring fixture package it re-exports from.

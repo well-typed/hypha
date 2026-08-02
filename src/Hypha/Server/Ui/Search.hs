@@ -2,7 +2,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.Ui.Search
   ( searchInput
-  , searchPanel
   , resultsFragment
   , emptyResults
   , buildingFragment
@@ -22,13 +21,6 @@ import Hypha.Search.Collapse
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
-
--- | Search input + empty results container. HTMX swaps content into
--- @#results@ as the user types.
-searchPanel :: Html ()
-searchPanel = do
-  searchInput
-  ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | Search input bar with HTMX live-search attributes and an inline
 -- progress spinner controlled by the @htmx-request@ class.

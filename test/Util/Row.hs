@@ -8,10 +8,12 @@ module Util.Row
   ( row
   , rowIn
   , rowFrom
+  , envFromRows
   ) where
 
 import Data.Text (Text)
 
+import Hypha.Search.Exports (ExportEnv, emptyEnv, extendEnv)
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
@@ -36,3 +38,11 @@ rowFrom comp modPath name sig def vis = IndexRow
   , rowDefinition = def
   , rowVisibility = vis
   }
+
+-- | An 'ExportEnv' holding exactly these rows.
+--
+-- Lives here rather than in the library: 'emptyEnv' and 'extendEnv' are
+-- the API, and a one-line composition of them with no production caller
+-- was library surface the tests were keeping alive.
+envFromRows :: [IndexRow] -> ExportEnv
+envFromRows rows = extendEnv rows emptyEnv

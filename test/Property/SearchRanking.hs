@@ -17,7 +17,7 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import Hypha.Search.Collapse
   ( SearchResult (..), SymbolResult (..), collapseRows, rankRows )
 import Hypha.Search.Fuzzy
-  ( ResultKind (..), mkPackageRow, mkSymbolRow, tokenize )
+  ( mkPackageRow, mkSymbolRow, tokenize )
 import Hypha.Search.Index (IndexRow, Visibility (..))
 import Hypha.Search.Indexer (componentScorerRows)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
@@ -26,6 +26,12 @@ import Util.Row (row, rowIn)
 
 symbolRow :: Text.Text -> Text.Text -> Text.Text -> IndexRow
 symbolRow pkg modPath name = row pkg modPath name (name <> " :: Int")
+
+-- | Which shape of result came first.  Declared here because the
+-- library's equivalent is a scoring internal with no observable
+-- constructor.
+data ResultKind = KindPackage | KindModule | KindSymbol
+  deriving (Eq, Show)
 
 firstKind :: [SearchResult] -> Maybe ResultKind
 firstKind results = case results of

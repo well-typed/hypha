@@ -22,11 +22,9 @@ import Hypha.Source.Extract
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Search.Fuzzy (mkSymbolRow)
 import Hypha.Search.Index (Visibility (..))
-import Hypha.Search.Reexport (DefinitionSite (..))
 import Hypha.Server.ModuleDoc
   ( ModuleDocView (..), SourceDoc (..), SymbolCardData (..) )
 import Hypha.Server.Ui.Doc (symbolCard)
-import Hypha.Source.Locate (Provenance (..))
 import Hypha.Source.Parser (DeclKind (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
@@ -357,7 +355,6 @@ symbolCardTests =
             , scdModule     = "Data.Map.Strict.Internal"
             , scdComponent  = "containers"
             , scdRequested  = "Data.Map.Strict"
-            , scdProvenance = Resolved (DefinedIn (ModulePath "Data.Map.Strict.Internal"))
             , scdLine       = Just 552
             , scdKind       = Just DkFunction
             }
@@ -375,7 +372,6 @@ symbolCardTests =
             , scdModule     = "Data.Map.Internal"
             , scdComponent  = "containers"
             , scdRequested  = "Data.Map.Internal"
-            , scdProvenance = Resolved DefinedHere
             , scdLine       = Just 552
             , scdKind       = Just DkFunction
             }
@@ -389,28 +385,11 @@ symbolCardTests =
             , scdModule     = "Data.Map.Internal"
             , scdComponent  = "containers"
             , scdRequested  = "Data.Map.Internal"
-            , scdProvenance = Resolved DefinedHere
             , scdLine       = Nothing
             , scdKind       = Nothing
             }
       assertBool "explains the absence"
         ("no signature" `Text.isInfixOf` Text.toLower html)
-
-  , testCase "a swept location is labelled as a guess" $ do
-      -- Before this, a swept location rendered identically to a resolved
-      -- one -- which is how Data/Set/Internal.hs came to look like fact.
-      let html = renderCard SymbolCardData
-            { scdSignature  = Just "balanceL :: a"
-            , scdHaddock    = Nothing
-            , scdModule     = "Data.Set.Internal"
-            , scdComponent  = "containers"
-            , scdRequested  = "Data.Map.Internal"
-            , scdProvenance = GuessedBySweep "package cabal could not be parsed"
-            , scdLine       = Just 1746
-            , scdKind       = Just DkFunction
-            }
-      assertBool "surfaces the uncertainty"
-        ("best guess" `Text.isInfixOf` Text.toLower html)
 
   , testCase "a cross-package definition names and links the owning package" $ do
       -- base's Data.Traversable documents mapAccumL; ghc-internal declares
@@ -422,8 +401,6 @@ symbolCardTests =
             , scdModule     = "GHC.Internal.Data.Traversable"
             , scdComponent  = "ghc-internal"
             , scdRequested  = "Data.Traversable"
-            , scdProvenance =
-                Resolved (DefinedOutside (ModulePath "GHC.Internal.Data.Traversable"))
             , scdLine       = Just 120
             , scdKind       = Just DkFunction
             }

@@ -20,7 +20,6 @@ module Hypha.Search.Exports
   , ExportChoice (..)
   , ExportEnv
   , emptyEnv
-  , envFromRows
   , extendEnv
   , lookupExport
   ) where
@@ -75,9 +74,6 @@ newtype ExportEnv = ExportEnv (Map (ModulePath, SymbolName) (NonEmpty Export))
 
 emptyEnv :: ExportEnv
 emptyEnv = ExportEnv Map.empty
-
-envFromRows :: [IndexRow] -> ExportEnv
-envFromRows rows = extendEnv rows emptyEnv
 
 -- | Add one component's rows.  Called once per component per pass, so the
 -- 'NonEmpty' lists grow with the number of components exposing a module

@@ -19,8 +19,6 @@
 -- module would otherwise not have.
 module Hypha.Search.Reexport
   ( DefinitionSite (..)
-  , Ambiguity (..)
-  , Resolution (..)
   , resolveComponent
   , expandedExportNames
   , expandedExportNamesIn
@@ -31,8 +29,6 @@ module Hypha.Search.Reexport
 
 import Data.Foldable qualified as Foldable
 import Data.List (sortOn)
-import Data.List.NonEmpty (NonEmpty)
-import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -56,20 +52,6 @@ data DefinitionSite
     -- another index entry.
   deriving stock (Show, Eq)
 
--- | Why a definition site was chosen, when more than one could have been.
-data Ambiguity
-  = Unambiguous
-  | ResolvedAmongst !(NonEmpty ModulePath)
-    -- ^ The candidates we rejected, kept so the choice is testable and
-    -- reportable instead of an accident of list order.
-  deriving stock (Show, Eq)
-
-data Resolution = Resolution
-  { resSite      :: !DefinitionSite
-  , resAmbiguity :: !Ambiguity
-  }
-  deriving stock (Show, Eq)
-
 -- | Fold 'DefinedHere' back to the asking module, so callers that only
 -- want a 'ModulePath' need not case-split to get one.
 definitionModule :: ModulePath -> DefinitionSite -> ModulePath
@@ -91,7 +73,7 @@ definitionModule asking = \case
 -- Termination is structural: a round that resolves nothing stops the loop,
 -- so a pair of modules re-exporting each other simply never resolves and
 -- falls through to 'DefinedOutside'.  No visited set, no depth limit.
-resolveComponent :: [ModuleInterface] -> Map (ModulePath, SymbolName) Resolution
+resolveComponent :: [ModuleInterface] -> Map (ModulePath, SymbolName) DefinitionSite
 resolveComponent ifaces = fixpoint seeded
   where
     byName :: Map ModulePath ModuleInterface
@@ -111,7 +93,7 @@ resolveComponent ifaces = fixpoint seeded
 
     -- Round zero: everything a module declares itself.
     seeded = Map.fromList
-      [ ((miName i, n), Resolution DefinedHere Unambiguous)
+      [ ((miName i, n), DefinedHere)
       | (i, n) <- wanted
       , declaresIn (miName i) n
       ]
@@ -124,10 +106,7 @@ resolveComponent ifaces = fixpoint seeded
       | Map.member (miName i, n) acc = acc
       | otherwise = case rankedCandidates acc i n of
           []                  -> acc
-          (winner : rejected) -> Map.insert (miName i, n)
-            (Resolution (throughTo acc winner n)
-                        (maybe Unambiguous ResolvedAmongst (NE.nonEmpty rejected)))
-            acc
+          (winner : _) -> Map.insert (miName i, n) (throughTo acc winner n) acc
 
     -- A candidate qualifies once we know it can supply the name: it
     -- declares it, or an earlier round resolved it there.
@@ -145,9 +124,9 @@ resolveComponent ifaces = fixpoint seeded
       ]
 
     resolvedInside r = case r of
-      Just (Resolution DefinedHere _)  -> True
-      Just (Resolution (DefinedIn _) _) -> True
-      _                                 -> False
+      Just DefinedHere   -> True
+      Just (DefinedIn _) -> True
+      _                  -> False
 
     -- Follow the chain to the module that actually declares the name.
     -- Stopping at the first hop names a module that only passes the symbol
@@ -157,8 +136,8 @@ resolveComponent ifaces = fixpoint seeded
     throughTo acc winner n
       | declaresIn winner n = DefinedIn winner
       | otherwise = case Map.lookup (winner, n) acc of
-          Just (Resolution (DefinedIn m) _) -> DefinedIn m
-          _                                 -> DefinedIn winner
+          Just (DefinedIn m) -> DefinedIn m
+          _                  -> DefinedIn winner
 
     -- Nothing inside the component supplies it: name the first import that
     -- plausibly does, so the module page can still list the symbol and say
@@ -170,8 +149,7 @@ resolveComponent ifaces = fixpoint seeded
       where
         addOutside m (i, n)
           | Map.member (miName i, n) m = m
-          | otherwise = Map.insert (miName i, n)
-              (Resolution (outsideFor i n) Unambiguous) m
+          | otherwise = Map.insert (miName i, n) (outsideFor i n) m
 
     outsideFor i n = case [ iiModule ii
                           | ii <- miImports i

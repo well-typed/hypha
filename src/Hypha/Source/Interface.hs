@@ -27,6 +27,7 @@ module Hypha.Source.Interface
   , parseSource
   , parseSources
   , interfaceExportedNames
+  , exportedNamesIO
   , declaredNames
   ) where
 
@@ -229,3 +230,19 @@ declaredNames i =
   | d <- miDecls i
   , n <- Parser.declName d : Parser.declSiblings d
   ]
+
+-- | The names a module's export list carries, read from its parse tree.
+--
+-- Its predecessor scraped the @module ... ( ... ) where@ header with a
+-- hand-rolled scanner, which could not tell @Map(..)@ from @Map@ and
+-- dropped the @module N@ re-export form entirely.  That scanner outlived
+-- its replacement by two call sites, one of them the server's degraded
+-- module page -- so the fallback view was populated by exactly the code
+-- this module was written to remove.
+exportedNamesIO
+  :: Extensions.LanguageSettings
+  -> FilePath
+  -> Text
+  -> IO (Either Parser.ParseError [SymbolName])
+exportedNamesIO ls path src =
+  fmap (fmap interfaceExportedNames) (parseInterfaceIO ls path src)

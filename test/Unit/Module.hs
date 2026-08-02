@@ -6,7 +6,8 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Source.Locate (listExportedSymbols, parseExports, SourceLocation (..), locateSymbolDefinition)
+import Hypha.Source.Extensions (defaultLanguageSettings)
+import Hypha.Source.Locate (exportedNamesOf, listExportedSymbols, SourceLocation (..), locateSymbolDefinition)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import qualified Data.Set as Set
 
@@ -25,7 +26,7 @@ testPkg = PackageId (PackageName "async") (Version "2.2.5")
 
 tests :: TestTree
 tests = testGroup "Module"
-  [ testCase "parseExports extracts symbols from module header" $ do
+  [ testCase "the export list is read from the parse tree" $ do
       let src = Text.unlines
             [ "module Control.Concurrent.Async"
             , "  ( Async"
@@ -36,15 +37,25 @@ tests = testGroup "Module"
             , "  , race"
             , "  ) where"
             ]
-      parseExports src @?= ["Async", "async", "wait", "cancel", "concurrently", "race"]
+      ns <- exportedNamesOf defaultLanguageSettings "Async.hs" src
+      ns @?= ["Async", "async", "wait", "cancel", "concurrently", "race"]
 
-  , testCase "parseExports handles single-line exports" $ do
-      let src = "module Foo (bar, baz) where"
-      parseExports src @?= ["bar", "baz"]
+  , testCase "a single-line export list is read too" $ do
+      ns <- exportedNamesOf defaultLanguageSettings "Foo.hs"
+              "module Foo (bar, baz) where"
+      ns @?= ["bar", "baz"]
 
-  , testCase "parseExports returns empty for no exports" $ do
-      let src = "module Foo where"
-      parseExports src @?= []
+  , testCase "no export list and nothing declared means no names" $ do
+      ns <- exportedNamesOf defaultLanguageSettings "Foo.hs" "module Foo where"
+      ns @?= []
+
+  , testCase "a constructor wildcard is not mistaken for a bare name" $ do
+      -- The header scraper this replaced could not tell @Map(..)@ from
+      -- @Map@, so a type's constructors were lost from every export list
+      -- that used the wildcard form.
+      ns <- exportedNamesOf defaultLanguageSettings "Bag.hs"
+              "module Bag (Bag(..), empty) where\ndata Bag a = Bag [a]\nempty :: Bag a\nempty = Bag []"
+      ns @?= ["Bag", "empty"]
 
   , testCase "listExportedSymbols reads fixture file" $ do
       let env = mockBuildEnv "test/fixtures/fake-cabal-store/ghc-9.6.7/async-2.2.5-abc123456789/share/async"

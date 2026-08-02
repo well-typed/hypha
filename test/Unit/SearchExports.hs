@@ -12,12 +12,12 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Exports
-  ( Export (..), ExportChoice (..), envFromRows, lookupExport )
+  ( Export (..), ExportChoice (..), lookupExport )
 import Hypha.Search.Index (DefinitionRef (..), IndexRow, Visibility (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
-import Util.Row (row, rowFrom)
+import Util.Row (envFromRows, row, rowFrom)
 
 -- | What ghc-internal contributes: mapAccumL declared where it is shown.
 ghcInternalRows :: [IndexRow]

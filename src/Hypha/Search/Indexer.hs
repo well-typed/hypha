@@ -32,10 +32,10 @@ module Hypha.Search.Indexer
   ) where
 
 import Control.Exception qualified as Exception
-import Control.Monad (foldM, void)
+import Control.Monad (filterM, foldM, void)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
-import Data.List (partition, sort, sortOn)
+import Data.List (intercalate, partition, sort, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Maybe (catMaybes, fromMaybe, isJust)
@@ -58,7 +58,7 @@ import Hypha.Search.Exports
 import Hypha.Search.Exports qualified as Exports
 import Hypha.Search.Index
   (DefinitionRef (..), IndexRow (..), ModuleSource (..), Visibility (..))
-import Hypha.Search.Reexport (DefinitionSite (..), Resolution (..))
+import Hypha.Search.Reexport (DefinitionSite (..))
 import Hypha.Search.Reexport qualified as Reexport
 import Hypha.Source.Extensions (LanguageSettings)
 import Hypha.Source.Extensions qualified as Extensions
@@ -327,15 +327,8 @@ chooseSourceRoots :: FilePath -> IO [FilePath]
 chooseSourceRoots d = do
   let candidates = [ d FP.</> sub
                    | sub <- ["src", "library", "lib", "Library", "source", "Source"] ]
-  existingSubs <- filterExisting candidates
+  existingSubs <- filterM Dir.doesDirectoryExist candidates
   pure (if null existingSubs then [d] else existingSubs)
-
-filterExisting :: [FilePath] -> IO [FilePath]
-filterExisting [] = pure []
-filterExisting (p : ps) = do
-  ok <- Dir.doesDirectoryExist p
-  rest <- filterExisting ps
-  pure (if ok then p : rest else rest)
 
 findHs :: FilePath -> Int -> IO [FilePath]
 findHs _ depth | depth < 0 = pure []
@@ -365,13 +358,14 @@ findHs dir depth = do
       "Setup" -> True
       _ -> False
 
+-- | A source-relative path to the module name it would hold.
+--
+-- Through 'System.FilePath' rather than by rewriting @\'\/\'@ to
+-- @\'.\'@: the hand-rolled version knew only the POSIX separator, which
+-- is the shape of the Windows bug in issue #10.
 hsToModule :: FilePath -> String
-hsToModule fp =
-  let stripped = case Text.stripSuffix ".hs" (Text.pack fp) of
-                   Just t  -> Text.unpack t
-                   Nothing -> fp
-      dotted   = map (\c -> if c == '/' then '.' else c) stripped
-  in dotted
+hsToModule =
+  intercalate "." . FP.splitDirectories . FP.dropExtension
 
 -- The pure core ------------------------------------------------------
 
@@ -502,8 +496,8 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
           , rowDefinition = DefinitionRef compKey defMod
           , rowVisibility = visibilityFor presented
           }
-      | ((presented, name), res) <- resolved
-      , defMod <- insideSite presented (resSite res)
+      | ((presented, name), site) <- resolved
+      , defMod <- insideSite presented site
       , Just (_, defIface) <- [Map.lookup defMod byModule]
       , Just decl <- [Parser.findDecl (unSymbolName name) (miDecls defIface)]
       ]
@@ -518,7 +512,7 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
     (selfNamed, outside) =
       partition (\oe -> oeModule oe == oeExpected oe)
         [ OutsideExport presented name m
-        | ((presented, name), DefinedOutside m) <- map (fmap resSite) resolved
+        | ((presented, name), DefinedOutside m) <- resolved
         ]
 
     classified = [ (oe, lookupExport deps (oeExpected oe) (oeName oe) env)
@@ -650,7 +644,9 @@ loadModuleSources srcDirs = fmap catMaybes . mapM loadOne
 
     firstExistingModule [] _ = pure Nothing
     firstExistingModule (r : rs) modPath = do
-      let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
+      let candidate =
+            r FP.</> FP.joinPath (map Text.unpack (Text.splitOn "." modPath))
+              FP.<.> "hs"
       ok <- Dir.doesFileExist candidate
       if ok then pure (Just candidate) else firstExistingModule rs modPath
 

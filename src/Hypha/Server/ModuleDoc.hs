@@ -16,7 +16,6 @@ module Hypha.Server.ModuleDoc
 import Data.Text (Text)
 
 import qualified Hypha.Source.Extract as Extract
-import           Hypha.Source.Locate  (Provenance)
 import           Hypha.Source.Parser  (DeclKind)
 
 -- | What the module page renders, in priority order.
@@ -74,8 +73,6 @@ data SymbolCardData = SymbolCardData
     -- ^ The module the URL asked for.  Kept alongside 'scdModule' so the
     -- card can say \"re-exported by X, defined in Y\" instead of silently
     -- swapping one for the other.
-  , scdProvenance :: !Provenance
-    -- ^ Whether the definition was resolved or guessed by a package
     -- sweep.  A guess that renders like a fact is worse than no answer.
   , scdLine       :: !(Maybe Int)
     -- ^ Source line when a faithful anchor exists.

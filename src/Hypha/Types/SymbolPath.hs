@@ -10,6 +10,7 @@ module Hypha.Types.SymbolPath
   , renderSymbolPath
   ) where
 
+import Control.Monad (when)
 import Data.Text (Text)
 import qualified Data.Text as Text
 
@@ -102,9 +103,6 @@ parseSymbolPath t
         case (mm, ms) of
           (Nothing, Just _) -> Left SymbolWithoutModule
           _                 -> Right (SymbolPath pkg mv mm ms)
-  where
-    when True  e = e
-    when False _ = Right ()
 
 renderSymbolPath :: SymbolPath -> Text
 renderSymbolPath (SymbolPath (PackageName p) mv mm ms) =

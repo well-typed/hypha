@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.App
   ( appWith
-  , cspMiddleware
   , ServerConfig (..)
     -- * Pure helpers (exported for tests)
   , sanitizeSegments

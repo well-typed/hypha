@@ -18,7 +18,6 @@ module Hypha.Types.ComponentName
   , renderComponentName
   , ComponentKey (..)
   , componentKeyOf
-  , parseComponentKey
   ) where
 
 import Data.Text (Text)
@@ -80,23 +79,3 @@ newtype ComponentKey = ComponentKey { unComponentKey :: Text }
 componentKeyOf :: PackageName -> ComponentKind -> ComponentKey
 componentKeyOf pkg kind = ComponentKey (renderComponentName (ComponentName pkg kind))
 
--- | Strict inverse of 'componentKeyOf'.
---
--- Distinct from 'parseComponentName', which is deliberately lenient
--- because it reads user-supplied URLs and must always produce something.
--- This one validates: an empty segment or a segment count the encoding
--- cannot produce yields 'Nothing' rather than a component reference
--- nobody meant.
---
--- Note a sub-library may legitimately be called @exe@: two segments are
--- always a sub-library, and only a three-segment key with @exe@ in the
--- middle is an executable, so @pkg:exe@ and @pkg:exe:name@ stay
--- distinguishable.
-parseComponentKey :: Text -> Maybe (Text, ComponentKind)
-parseComponentKey raw = case Text.splitOn ":" raw of
-  [pkg]              | nonEmpty [pkg]       -> Just (pkg, MainLib)
-  [pkg, sub]         | nonEmpty [pkg, sub]  -> Just (pkg, SubLib sub)
-  [pkg, "exe", name] | nonEmpty [pkg, name] -> Just (pkg, Exe name)
-  _                                         -> Nothing
-  where
-    nonEmpty = all (not . Text.null)

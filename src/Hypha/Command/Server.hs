@@ -278,7 +278,6 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
                   , scdModule     = unModulePath (Locate.ldModule ld)
                   , scdComponent  = unComponentKey (Locate.ldComponent ld)
                   , scdRequested  = modT
-                  , scdProvenance = Locate.ldProvenance ld
                   , scdLine       = mLine
                   , scdKind       = Extract.siKind info
                   })
@@ -403,11 +402,16 @@ moduleDocFor cacheRoot plan env resolver cache pkgT modT = do
             f <- liftMaybeReason
                    ("module " <> modT <> " has no source file in the package")
                    (Locate.findModuleFileIn dirs modT)
-            src <- lift (TIO.readFile f)
+            src   <- lift (TIO.readFile f)
+            -- Through the parse tree, like every other view: the header
+            -- scraper this replaced could not tell @Map(..)@ from @Map@,
+            -- and it was the degraded page -- the one a reader reaches
+            -- only when something already went wrong -- still using it.
+            names <- lift (Locate.exportedNamesOf langs f src)
             throwE
               ( "module docs could not be resolved: "
                   <> Parser.parseErrorMessage perr
-              , Locate.parseExports src
+              , names
               )
           Right info -> pure info
       case r of
@@ -472,17 +476,6 @@ resolveComponentDirs plan resolver raw = do
               pure (Just (d, roots))
             Nothing -> pure Nothing
 
--- | Compute the cache key for one library or executable component.
---
---   * 'MainLib' → bare package name.
---   * 'SubLib s' → @pkg:s@.
---   * 'Exe s'    → @pkg:exe:s@.
-componentKey :: Text -> Comp.ComponentKind -> Text
-componentKey pkgT Comp.MainLib    = pkgT
-componentKey pkgT (Comp.SubLib s) = pkgT <> ":" <> s
-componentKey pkgT (Comp.Exe    s) = pkgT <> ":exe:" <> s
-
-
 -- | Every renderable component name for a unit.  Falls back to a
 -- single @pkg@ entry when no components were parsed.
 componentNames :: BuildPlan -> PackageId -> [(Text, PackageOrigin)]
@@ -494,7 +487,8 @@ componentNames plan pid =
       tag t  = (t, origin)
   in case lookupUnit (pkgName pid) plan of
        Just pu | not (null (puLibComponents pu)) ->
-         [ tag (componentKey pkgT (Comp.ciKind c)) | c <- puLibComponents pu ]
+         [ tag (unComponentKey (componentKeyOf (pkgName pid) (Comp.ciKind c)))
+         | c <- puLibComponents pu ]
        _ -> [tag pkgT]
 
 projectName :: BuildPlan -> Text

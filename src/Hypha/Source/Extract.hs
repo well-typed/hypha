@@ -268,9 +268,9 @@ resolveModuleEntries langs compKey sources imported asking = do
       , mdiEntries =
           [ entry
           | name <- Reexport.expandedExportNames ifaces asking
-          , Just res <- [Map.lookup (asking, name) resolution]
+          , Just site <- [Map.lookup (asking, name) resolution]
           , Just entry <-
-              [entryFor byName linesOf outsideOf name (Reexport.resSite res)]
+              [entryFor byName linesOf outsideOf name site]
           ]
       }
   where
@@ -357,8 +357,3 @@ declSlice ls s e =
       let clamped = take declSliceLimit slice
           suffix  = [ "\x2026" | length slice > declSliceLimit ]
       in Just (Text.stripEnd (Text.unlines (clamped <> suffix)))
-
--- Internals --------------------------------------------------------
-
--- | Pair each line with its 1-based index.
-

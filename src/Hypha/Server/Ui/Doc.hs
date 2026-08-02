@@ -10,7 +10,6 @@ import Lucid.Base (makeAttributes)
 
 import qualified Hypha.Server.Ui.Haddock as Haddock
 import           Hypha.Server.ModuleDoc (SymbolCardData (..))
-import           Hypha.Source.Locate (Provenance (..))
 import           Hypha.Server.Ui.ModuleDoc (anchorFor, kindBadge)
 import           Hypha.Types.Route qualified as Route
 
@@ -44,7 +43,6 @@ symbolCard name pkg card = div_ [class_ "doc"] $ do
     Nothing  -> p_ [class_ "hint"]
       (toHtml ("No signature in the source for this binding." :: Text))
   reexportNote
-  provenanceNote
   case scdHaddock card of
     Just hd -> div_ [class_ "haddock"] (Haddock.renderHaddockHtml hd)
     Nothing -> mempty
@@ -94,12 +92,3 @@ symbolCard name pkg card = div_ [class_ "doc"] $ do
       | defPkg == pkg = scdModule card
       | otherwise     = defPkg <> ":" <> scdModule card
 
-    -- A swept location is a guess.  Rendering it identically to a resolved
-    -- one is how the wrong file came to look like fact.
-    provenanceNote = case scdProvenance card of
-      Resolved _         -> mempty
-      GuessedBySweep why -> p_ [class_ "warn"] $ do
-        toHtml ("Best guess: this location was found by scanning the package, \
-                \not resolved from its exports (" :: Text)
-        toHtml why
-        toHtml (")." :: Text)

@@ -27,12 +27,11 @@ import Hypha.Output.Outcome (Outcome, successOutcome)
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Index (ModuleSource (..), noImportedDefinitions)
 import Hypha.Search.Indexer qualified as Indexer
-import Hypha.Types.ComponentName (ComponentKey, componentKeyOf)
+import Hypha.Types.ComponentName (componentKeyOf)
 import Hypha.Source.Locate
   ( LocatedDefinition (..), SourceLocation (..), findModuleFile
   , locateDefinitionInComponent, locateSymbolDefinitionInDir )
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
-import System.FilePath qualified as FP
 import System.IO (hPutStrLn, stderr)
 import Hypha.Types.BuildPlan (BuildPlan (..))
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
@@ -97,13 +96,21 @@ sourceFromDirE
   :: PackageId -> FilePath -> Text -> Maybe Text
   -> ExceptT HyphaError IO (Outcome Value)
 sourceFromDirE pid srcDir modPath mSym = do
-  filePath <- liftMaybe
-    (NotFound (NotFoundModuleFileUnder srcDir modPath))
-    =<< liftIO (findModuleFile srcDir modPath)
-  loc <- liftMaybe
-    (NotFound
-      (NotFoundSymbol pid modPath (maybe "" id mSym)))
-    =<< liftIO (locateSourceLoc filePath srcDir modPath mSym)
+  -- Split, because the two cases fail differently and the merged version
+  -- could build a 'NotFoundSymbol' carrying an empty symbol name -- a
+  -- value no caller could ever produce.  It also stopped locating a
+  -- module the component list would have found: 'findModuleFile' skips
+  -- @test\/@ and @bench\/@, so a symbol in a test-suite module failed
+  -- before the cabal-driven lookup ran at all.
+  loc <- case mSym of
+    Nothing -> do
+      filePath <- liftMaybe
+        (NotFound (NotFoundModuleFileUnder srcDir modPath))
+        =<< liftIO (findModuleFile srcDir modPath)
+      pure (SourceLocation filePath 1)
+    Just sym -> liftMaybe
+      (NotFound (NotFoundSymbol pid modPath sym))
+      =<< liftIO (locateSymbolLoc pid srcDir modPath sym)
   content <- liftIO (TIO.readFile (slPath loc))
   let snippet = extractSnippet (slLine loc) (Text.lines content)
       result = SourceResult
@@ -117,8 +124,7 @@ sourceFromDirE pid srcDir modPath mSym = do
         }
   pure (successOutcome SourceCmd (sourceResultToJSON result))
 
--- | When a symbol is provided, locate its definition inside the module;
--- otherwise pin to line 1 of the resolved module file.
+-- | Locate a symbol's definition inside its module.
 --
 -- With a parsable cabal file we resolve the symbol through the component's
 -- exports, which is the only way to answer correctly for a re-export: the
@@ -133,13 +139,17 @@ sourceFromDirE pid srcDir modPath mSym = do
 -- cross-package re-export in.  'locateDefinitionInComponent' reports those
 -- rather than guessing — @hypha server@, which does have a plan, resolves
 -- them.
-locateSourceLoc
-  :: FilePath -> FilePath -> Text -> Maybe Text -> IO (Maybe SourceLocation)
-locateSourceLoc filePath _ _ Nothing = pure (Just (SourceLocation filePath 1))
-locateSourceLoc _ srcDir modPath (Just sym) = do
-  comps   <- Indexer.packageSources srcDir
-  compKey <- componentKeyFor srcDir
-  let matching =
+locateSymbolLoc
+  :: PackageId -> FilePath -> Text -> Text -> IO (Maybe SourceLocation)
+locateSymbolLoc pid srcDir modPath sym = do
+  comps <- Indexer.packageSources srcDir
+  -- The component key comes from the 'PackageId' the caller already
+  -- holds.  Deriving it from the cabal file's basename was a second,
+  -- weaker answer to a question that was already settled -- and for a
+  -- store path with no cabal file it produced @containers-0.6.7@ as the
+  -- package name.
+  let compKey = componentKeyOf (pkgName pid)
+      matching =
         [ (Comp.ciLanguageSettings ci, Comp.ciKind ci, sources)
         | (ci, sources) <- comps
         , any ((== ModulePath modPath) . msDeclaredName) sources
@@ -156,22 +166,6 @@ locateSourceLoc _ srcDir modPath (Just sym) = do
         "hypha: no cabal component of " <> srcDir <> " lists "
           <> Text.unpack modPath <> "; falling back to a package scan"
       locateSymbolDefinitionInDir srcDir modPath sym
-
--- | The component-key builder for a package directory, from the name of
--- its cabal file.
---
--- The file name /is/ the package name — cabal requires it — and this call
--- site has no build plan to ask instead.  A directory with no cabal file
--- falls back to its own basename, which is what the sweep would have
--- assumed anyway; the key only labels the definition's component, and the
--- caller of this function reads only the location.
-componentKeyFor :: FilePath -> IO (Comp.ComponentKind -> ComponentKey)
-componentKeyFor srcDir = do
-  mCabal <- Comp.findCabalFile srcDir
-  let name = case mCabal of
-        Just cabal -> FP.takeBaseName cabal
-        Nothing    -> FP.takeBaseName (FP.dropTrailingPathSeparator srcDir)
-  pure (componentKeyOf (PackageName (Text.pack name)))
 
 -- | Lift a 'Maybe' into 'ExceptT' with a typed error on 'Nothing'.
 liftMaybe :: Monad m => HyphaError -> Maybe a -> ExceptT HyphaError m a

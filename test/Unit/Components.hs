@@ -2,7 +2,6 @@
 module Unit.Components (tests) where
 
 import Data.Containers.ListUtils (nubOrd)
-import Data.Foldable (for_)
 import Data.List (sort)
 import qualified Data.Text as Text
 import System.FilePath ((</>))
@@ -15,9 +14,6 @@ import qualified GHC.LanguageExtensions as LangExt
 import Hypha.Project.Components
   ( ComponentInfo (..), ComponentKind (..), parseLibComponents )
 import Hypha.Source.Extensions (LanguageSettings (..))
-import Hypha.Types.ComponentName
-  ( ComponentKey (..), componentKeyOf, parseComponentKey )
-import Hypha.Types.PackageId (PackageName (..))
 
 tests :: TestTree
 tests = testGroup "Unit.Components"
@@ -90,20 +86,6 @@ tests = testGroup "Unit.Components"
           let mods = ciExposedModules c ++ ciOtherModules c
           length mods @?= length (nubOrd mods)
         _ -> fail "expected exactly one component"
-
-  , testCase "component keys round-trip through their rendering" $
-      for_ [ (PackageName "containers", MainLib)
-           , (PackageName "hypha",      SubLib "hypha-internal")
-           , (PackageName "hypha",      Exe "hypha-mcp")
-           ] $ \(pkg, kind) -> do
-        let key = componentKeyOf pkg kind
-        parseComponentKey (unComponentKey key) @?= Just (unPackageName pkg, kind)
-
-  , testCase "a key with too many colons is rejected, not mis-parsed" $
-      -- The encoding is @pkg@ / @pkg:sub@ / @pkg:exe:name@, so a further
-      -- colon would make it ambiguous.  Cabal forbids one in a component
-      -- name; assert we do not silently accept it either.
-      parseComponentKey "hypha:a:b:c" @?= Nothing
 
   ]
   where

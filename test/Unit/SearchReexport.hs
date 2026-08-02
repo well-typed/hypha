@@ -9,7 +9,6 @@
 module Unit.SearchReexport (tests) where
 
 import           Data.Text (Text)
-import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict    as Map
 import qualified Data.Text          as Text
 import qualified Data.Text.IO       as TIO
@@ -18,7 +17,7 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Reexport
-  ( Ambiguity (..), DefinitionSite (..), Resolution (..), resolveComponent
+  ( DefinitionSite (..), resolveComponent
   , sharedSegments )
 import Hypha.Source.Extensions (defaultLanguageSettings)
 import Hypha.Source.Interface
@@ -51,11 +50,10 @@ inline name src =
     Right i -> pure i
 
 siteOf
-  :: Map.Map (ModulePath, SymbolName) Resolution
+  :: Map.Map (ModulePath, SymbolName) DefinitionSite
   -> (ModulePath, SymbolName)
   -> IO DefinitionSite
-siteOf m k =
-  maybe (fail ("no resolution for " <> show k)) (pure . resSite) (Map.lookup k m)
+siteOf m k = maybe (fail ("no resolution for " <> show k)) pure (Map.lookup k m)
 
 tests :: TestTree
 tests = testGroup "Unit.SearchReexport"
@@ -126,16 +124,11 @@ tests = testGroup "Unit.SearchReexport"
         , defines "Data.Set.Internal"
         , defines "Data.Map.Strict.Internal"
         ]
-      let r = resolveComponent ifaces
-      case Map.lookup (ModulePath "Data.Map.Strict", SymbolName "insertWith") r of
-        Nothing  -> fail "no resolution for Data.Map.Strict.insertWith"
-        Just res -> do
-          resSite res @?= DefinedIn (ModulePath "Data.Map.Strict.Internal")
-          case resAmbiguity res of
-            ResolvedAmongst rejected ->
-              NE.toList rejected @?= [ModulePath "Data.Set.Internal"]
-            Unambiguous ->
-              fail "expected the rejected candidate to be recorded"
+      site <- siteOf (resolveComponent ifaces)
+                (ModulePath "Data.Map.Strict", SymbolName "insertWith")
+      -- Proximity decides: Data.Map.Strict.Internal shares two segments
+      -- with the asking module, Data.Set.Internal one.
+      site @?= DefinedIn (ModulePath "Data.Map.Strict.Internal")
 
   , testCase "a mutual re-export cycle terminates instead of diverging" $ do
       -- A re-exports x from B while B re-exports x from A.  Neither
@@ -150,9 +143,9 @@ tests = testGroup "Unit.SearchReexport"
             , miHeaderDoc = Nothing
             }
           r = resolveComponent [mkIface "A" "B", mkIface "B" "A"]
-      resSite <$> Map.lookup (ModulePath "A", SymbolName "x") r
+      Map.lookup (ModulePath "A", SymbolName "x") r
         @?= Just (DefinedOutside (ModulePath "B"))
-      resSite <$> Map.lookup (ModulePath "B", SymbolName "x") r
+      Map.lookup (ModulePath "B", SymbolName "x") r
         @?= Just (DefinedOutside (ModulePath "A"))
 
   , testCase "shared segments count segments, not characters" $ do

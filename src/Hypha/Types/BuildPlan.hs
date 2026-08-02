@@ -6,17 +6,14 @@ module Hypha.Types.BuildPlan
     BuildPlan (..)
   , PlannedUnit (..)
   , PackageOrigin (..)
-  , PlanPackage (..)
   , ProjectRoot (..)
   , CompilerId (..)
-  , PlanHash (..)
   , PackageOverride (..)
     -- * Construction
   , emptyBuildPlan
     -- * Queries
   , lookupPackage
   , lookupUnit
-  , planPackages
   , applyOverrides
   , forwardDepsOf
   , reverseDepsOf
@@ -36,7 +33,7 @@ import Hypha.Project.Components (ComponentInfo)
 import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
 
 -- | Absolute path to the project root (directory containing @cabal.project@).
-newtype ProjectRoot = ProjectRoot { unProjectRoot :: FilePath }
+newtype ProjectRoot = ProjectRoot FilePath
   deriving stock   (Show, Eq, Ord)
   deriving newtype (Read)
 
@@ -45,22 +42,10 @@ newtype CompilerId = CompilerId { unCompilerId :: Text }
   deriving stock   (Show, Eq, Ord)
   deriving newtype (Read)
 
--- | Hash of @plan.json@ used to detect staleness.
-newtype PlanHash = PlanHash { unPlanHash :: Text }
-  deriving stock   (Show, Eq, Ord)
-  deriving newtype (Read)
-
 -- | A user-supplied version override, e.g. @async=2.2.6@.
 data PackageOverride = PackageOverride
   { poName    :: !PackageName
   , poVersion :: !Version
-  }
-  deriving stock (Show, Eq, Ord)
-
--- | A single package entry in the build plan (legacy type; prefer 'PlannedUnit').
-data PlanPackage = PlanPackage
-  { ppName    :: !PackageName
-  , ppVersion :: !Version
   }
   deriving stock (Show, Eq, Ord)
 
@@ -136,13 +121,6 @@ lookupPackage name bp = pkgVersion . puId <$> Map.lookup name (bpUnits bp)
 -- | Look up a planned unit in the plan.
 lookupUnit :: PackageName -> BuildPlan -> Maybe PlannedUnit
 lookupUnit name = Map.lookup name . bpUnits
-
--- | All packages in the plan, as a list.
-planPackages :: BuildPlan -> [PlanPackage]
-planPackages bp =
-  [ PlanPackage (pkgName (puId u)) (pkgVersion (puId u))
-  | u <- Map.elems (bpUnits bp)
-  ]
 
 -- | Apply overrides to a build plan.
 --   Each override replaces (or inserts) the pinned version for its package.

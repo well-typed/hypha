@@ -22,7 +22,6 @@
 -- 'Text.isPrefixOf' calls — no per-query 'Text.toLower' allocations.
 module Hypha.Search.Fuzzy
   ( Entity (..)
-  , ResultKind (..)
   , IndexedRow (..)
   , mkSymbolRow
   , mkPackageRow
