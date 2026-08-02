@@ -19,6 +19,7 @@ module Hypha.Project.Components
 
 import Control.Exception.Safe (IOException, displayException, try)
 import Data.ByteString qualified as BS
+import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate)
 import Data.Text qualified as T
 import Data.Text qualified as Text
@@ -114,16 +115,16 @@ parseLibComponents cabalPath pkgRoot = do
         pure []
       Just gpd ->
         let mainComp =
-              [ toComponent MainLib (PD.condTreeData ct)
+              [ toComponent MainLib (flattenCondTree ct)
               | ct <- maybe [] (:[]) (PD.condLibrary gpd)
               ]
             subComps =
-              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n))) (PD.condTreeData ct)
+              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n))) (flattenCondTree ct)
               | (n, ct) <- PD.condSubLibraries gpd
               ]
             exeComps =
               [ toComponent (Exe (Text.pack (UC.unUnqualComponentName n)))
-                  (PD.emptyLibrary { PD.libBuildInfo = (PD.buildInfo (PD.condTreeData ct)) })
+                  (PD.emptyLibrary { PD.libBuildInfo = PD.buildInfo (flattenCondTree ct) })
               | (n, ct) <- PD.condExecutables gpd
               ]
             comps    = mainComp ++ subComps ++ exeComps
@@ -156,7 +157,7 @@ parseLibComponents cabalPath pkgRoot = do
 
     toComponent kind lib =
       let bi   = PD.libBuildInfo lib
-          raw  = map UP.getSymbolicPath (PD.hsSourceDirs bi)
+          raw  = nubOrd (map UP.getSymbolicPath (PD.hsSourceDirs bi))
           dirs = if null raw
                    then [pkgRoot]
                    else map (pkgRoot </>) raw
@@ -164,8 +165,8 @@ parseLibComponents cabalPath pkgRoot = do
       in ComponentInfo {
            ciKind         = kind
          , ciHsSourceDirs = dirs
-         , ciExposedModules = map renderModule (PD.exposedModules lib)
-         , ciOtherModules   = map renderModule (PD.otherModules bi)
+         , ciExposedModules = nubOrd (map renderModule (PD.exposedModules lib))
+         , ciOtherModules   = nubOrd (map renderModule (PD.otherModules bi))
          , ciLanguageSettings = LanguageSettings
              { lsLanguage   = ghcLanguageOf =<< PD.defaultLanguage bi
              , lsDefaultOn  = on
@@ -175,6 +176,29 @@ parseLibComponents cabalPath pkgRoot = do
          }
 
     renderModule = T.pack . render . pretty
+
+    -- Every branch of a conditional stanza, unioned with the
+    -- unconditional node.
+    --
+    -- @condTreeData@ alone is only the unconditional part, and cabal files
+    -- put real module lists behind conditions: @base@ declares
+    -- @GHC.Event@ solely in the @else@ of @if os(windows)@, and
+    -- @System.CPUTime.Posix.*@ solely in the @else@ of an @elif@ chain.
+    -- Reading only the unconditional node left those modules out of the
+    -- component's list, and since the indexer treats a non-empty list as
+    -- authoritative, they were never indexed at all.
+    --
+    -- The union is the right answer rather than resolving the flags: we
+    -- cannot know the flag assignment the package was built with, and
+    -- 'loadModuleSources' already drops a name whose file is not on disk,
+    -- so a Windows-only module simply does not resolve on Linux.
+    flattenCondTree :: Monoid a => PD.CondTree v c a -> a
+    flattenCondTree ct =
+      mconcat (PD.condTreeData ct : concatMap branch (PD.condTreeComponents ct))
+      where
+        branch b =
+          flattenCondTree (PD.condBranchIfTrue b)
+            : maybe [] (pure . flattenCondTree) (PD.condBranchIfFalse b)
 
     -- cabal models an extension as (name, enabled), and the name it
     -- carries can itself be negated (@NoImplicitPrelude@), so the two

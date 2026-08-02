@@ -41,7 +41,13 @@ import Hypha.Types.SymbolPath (ModulePath, Signature, SymbolName)
 
 -- | One component's answer for a @(module, name)@ pair.
 data Export = Export
-  { exDefinition :: !DefinitionRef
+  { exPresenter  :: !ComponentKey
+    -- ^ The component whose module the asking component names in its
+    -- import.  Distinct from the definition's component whenever the
+    -- presenter is itself a facade, which is the ordinary case: 'base'
+    -- presents @Data.Foldable.foldl'@ whose definition lives in
+    -- @ghc-internal@.
+  , exDefinition :: !DefinitionRef
   , exSignature  :: !Signature
   }
   deriving stock (Show, Eq)
@@ -83,7 +89,8 @@ extendEnv rows (ExportEnv env) = ExportEnv (Map.unionWith (<>) added env)
       [ ((rowModule r, rowName r), exportOf r :| []) | r <- rows ]
 
     exportOf r = Export
-      { exDefinition = rowDefinition r
+      { exPresenter  = rowComponent r
+      , exDefinition = rowDefinition r
       , exSignature  = rowSignature r
       }
 
@@ -94,6 +101,18 @@ extendEnv rows (ExportEnv env) = ExportEnv (Map.unionWith (<>) added env)
 -- module of the same name from resolving against each other.  A package
 -- may also re-export from its own sub-libraries, so the caller is expected
 -- to include the asking unit's own package name in the set.
+--
+-- The filter tests the /presenting/ component, not the definition's.  The
+-- asking module names a module of a direct dependency; where that
+-- dependency's own re-export chain ends is none of its business, and
+-- filtering on the definition made a facade over a facade unresolvable.
+-- Since GHC 9.10 that is the common case rather than an exotic one: a
+-- package re-exporting @Data.Foldable.foldl'@ from @base@ would be told
+-- the definition lives in @ghc-internal@, which it does not depend on,
+-- and the row would be dropped.  Widening the dependency set to its
+-- transitive closure would have resolved it too, and would have thrown
+-- away the guard: the point is that the /import/ names a direct
+-- dependency.
 --
 -- Ties break lexicographically on the component, so the winner never
 -- depends on the order components were indexed in.
@@ -113,5 +132,5 @@ lookupExport deps m n (ExportEnv env) = do
       , ecRejected = map exDefinition es
       }
   where
-    fromDep e = packageOf (drComponent (exDefinition e)) `Set.member` deps
+    fromDep e = packageOf (exPresenter e) `Set.member` deps
     packageOf = cnPackage . parseComponentName . unComponentKey

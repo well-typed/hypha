@@ -16,7 +16,7 @@ module Hypha.Search.PackageCache
   , CacheOrigin (..)
   , openPackageCache
   , openPackageCacheAt
-  , haveCachedIndex
+  , haveFreshIndex
   , readCachedIndex
   , lookupByName
   , lookupInModule
@@ -35,7 +35,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Search.Cache
-  ( IndexCache, defaultCachePath, haveIndex, lookupRowsByName, lookupRowsInModule
+  ( IndexCache, defaultCachePath, lookupRowsByName, lookupRowsInModule
   , openIndexCache, readBlob, readFingerprint, readIndex
   , writeBlob, writeFingerprint, writeIndex )
 import Hypha.Search.Index (IndexRow (..))
@@ -81,14 +81,26 @@ openPackageCacheAt globalPath mProjectPath = do
 projectCachePath :: ProjectRoot -> FilePath
 projectCachePath (ProjectRoot r) = r </> ".hypha" </> "cache.db"
 
--- | Project hit beats global hit.
-haveCachedIndex :: HyphaPackageCache -> Text -> Text -> IO Bool
-haveCachedIndex c pkg ver =
-  case hpcProject c of
+-- | Is there a cached index for @(pkg, version)@ built from the same
+-- inputs we would use now?  Project hit beats global hit.
+--
+-- Presence of a row used to be the whole test, and @(pkg, version)@ was
+-- the whole key.  Neither holds: a local package keeps its version across
+-- every edit, so the project's own symbols froze after the first run; and
+-- the global DB is shared by every project on the host while the rows
+-- depend on the compiler and the resolved language settings, so one
+-- project served another's answers.  The fingerprint closes both — a
+-- pre-fingerprint row stores @NULL@, matches nothing, and is rebuilt once.
+haveFreshIndex :: HyphaPackageCache -> Text -> Text -> Text -> IO Bool
+haveFreshIndex c pkg ver fp = case hpcProject c of
     Just p -> do
-      here <- haveIndex p pkg ver
-      if here then pure True else haveIndex (hpcGlobal c) pkg ver
-    Nothing -> haveIndex (hpcGlobal c) pkg ver
+      here <- matches p
+      if here then pure True else matches (hpcGlobal c)
+    Nothing -> matches (hpcGlobal c)
+  where
+    matches db = do
+      stored <- readFingerprint db pkg ver
+      pure (stored == Just fp)
 
 -- | Read indexed rows for @(pkg, ver)@.  If the project DB has *any*
 -- rows for the pair, they shadow the global DB completely — we never

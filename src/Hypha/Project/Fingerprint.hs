@@ -9,6 +9,7 @@
 -- dependency via @cryptohash-sha256@.
 module Hypha.Project.Fingerprint
   ( componentFingerprint
+  , hashParts
   ) where
 
 import qualified Crypto.Hash.SHA256 as SHA256
@@ -22,6 +23,17 @@ import System.Directory
   ( doesDirectoryExist, getModificationTime, listDirectory )
 import System.FilePath ((</>), takeExtension)
 import System.IO (IOMode (ReadMode), hFileSize, withFile)
+
+-- | A digest over an ordered list of parts, for callers whose inputs are
+-- not a source tree.
+--
+-- Order is significant and the separator cannot occur in a part, so
+-- @["a","bc"]@ and @["ab","c"]@ do not collide.
+hashParts :: [Text] -> Text
+hashParts parts =
+  Text.decodeUtf8 (Base16.encode (SHA256.hash payload))
+  where
+    payload = BS.concat [ Text.encodeUtf8 p <> "\0" | p <- parts ]
 
 -- | Compute a fingerprint over every Haskell source file under the
 -- given roots.  Reordering the roots does not change the result.

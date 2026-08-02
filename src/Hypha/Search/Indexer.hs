@@ -24,6 +24,7 @@ module Hypha.Search.Indexer
     -- * Component discovery
   , componentModules
   , languageSettingsFor
+  , indexInputsFingerprint
   , packageSources
   , enumModulesIn
   , chooseSourceRoots
@@ -33,10 +34,11 @@ import Control.Exception qualified as Exception
 import Control.Monad (foldM, void)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
-import Data.List (partition)
+import Data.Either (partitionEithers)
+import Data.List (partition, sort, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -46,7 +48,9 @@ import System.Directory qualified as Dir
 import System.FilePath qualified as FP
 import System.IO (hPutStrLn, stderr)
 
+import Hypha.Error (errorMessage)
 import Hypha.Package.Resolver (PackageResolver (..))
+import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.Exports
@@ -136,10 +140,14 @@ hydrateFromCache plan cache pids ref = go Exports.emptyEnv [] pids
       , hyMissing = reverse missing
       }
     go env missing (pid : rest) = do
-      let verT = unVersion (pkgVersion pid)
-          keys = [ unComponentKey (componentKeyOf (pkgName pid) k)
-                 | k <- NE.toList (componentKindsOf plan pid) ]
-      hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
+      let verT  = unVersion (pkgVersion pid)
+          kinds = NE.toList (componentKindsOf plan pid)
+          keys  = [ unComponentKey (componentKeyOf (pkgName pid) k) | k <- kinds ]
+      -- The same digest the build pass stamped.  A component whose inputs
+      -- moved -- a source edit, a new compiler, a cabal file we can read
+      -- this time and could not last time -- reports as missing and is
+      -- rebuilt, which is the whole point.
+      hits <- mapM (freshFor verT pid) kinds
       if and hits
         then do
           env' <- foldM (loadKey verT) env keys
@@ -147,6 +155,11 @@ hydrateFromCache plan cache pids ref = go Exports.emptyEnv [] pids
           publishRows ref [Fuzzy.mkPackageRow (pkgName pid) (pkgVersion pid)]
           go env' missing rest
         else go env (pid : missing) rest
+
+    freshFor verT pid kind = do
+      fp <- indexInputsFingerprint plan pid kind
+      Cache.haveFreshIndex cache
+        (unComponentKey (componentKeyOf (pkgName pid) kind)) verT fp
 
     loadKey verT env k = do
       rows <- Cache.readCachedIndex cache k verT
@@ -196,7 +209,8 @@ buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
         Left err -> do
           hPutStrLn stderr $
             "hypha index: no source for "
-              <> Text.unpack (unPackageName (pkgName pid)) <> ": " <> show err
+              <> Text.unpack (unPackageName (pkgName pid)) <> ": "
+              <> Text.unpack (errorMessage err)
           bump
           pure env
         Right d -> do
@@ -220,8 +234,77 @@ buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
       -- never leaves the in-memory view ahead of the cache.
       Cache.writeCachedIndex cache (originFor pid)
         (unComponentKey compKey) verT flatRows
+      -- After the rows: 'writeIndex' replaces the meta row, so stamping
+      -- the fingerprint first would lose it and the component would
+      -- rebuild on every start.
+      fp <- indexInputsFingerprint plan pid kind
+      Cache.writeCachedFingerprint cache (originFor pid)
+        (unComponentKey compKey) verT fp
       publishRows ref (componentScorerRows flatRows)
       pure (Exports.extendEnv flatRows env)
+
+-- | Everything that decides what rows a component produces, as one digest.
+--
+-- Cache warmth used to mean "a meta row exists for this @(pkg, version)@",
+-- which is wrong in three ways at once.  A local package keeps its version
+-- across every edit, so the project's own symbols froze after the first
+-- indexing run — hypha could not find a function you had just written.  A
+-- component that produced no rows because its cabal stanzas were not yet
+-- readable counted as warm forever, so the degraded answer was the final
+-- one.  And the global DB is shared across projects while the rows depend
+-- on the compiler and the resolved language settings.
+--
+-- So the fingerprint covers: the source bytes (for units whose directory
+-- the plan knows without resolving anything), the compiler, the language
+-- settings, whether the cabal component list was available, and the
+-- resolved dependency versions.
+--
+-- A store package's own bytes are immutable at a given version, and
+-- walking its tree would mean extracting every dependency at startup, so
+-- for those the source term is the version alone.
+indexInputsFingerprint
+  :: BuildPlan -> PackageId -> Comp.ComponentKind -> IO Text
+indexInputsFingerprint plan pid kind = do
+  srcFp <- mutableSourceFingerprint plan (pkgName pid)
+  depFps <- mapM (mutableSourceFingerprint plan . pkgName) deps
+  pure $ Fingerprint.hashParts $ concat
+    [ [ "v1", srcFp, unCompilerId (bpCompiler plan) ]
+    , [ unVersion (pkgVersion pid) ]
+    , [ Comp.renderComponentKind kind ]
+    , languageFingerprint (languageSettingsFor plan (pkgName pid) kind)
+    , [ if isJust (componentsOf plan pid) then "cabal" else "walked" ]
+      -- A dependency's rows are what this component's re-exports resolve
+      -- against, so its version -- and, for a local one, its bytes --
+      -- belong in here too.
+    , [ unPackageName (pkgName d) <> "-" <> unVersion (pkgVersion d)
+      | d <- deps ]
+    , depFps
+    ]
+  where
+    deps = sortOn (unPackageName . pkgName) $ case lookupUnit (pkgName pid) plan of
+      Nothing -> []
+      Just u  -> puDeps u
+
+-- | The source-tree digest of a unit the plan gives a directory for, and a
+-- constant for one it does not.  Never resolves a package, so calling it
+-- cannot trigger an extraction.
+mutableSourceFingerprint :: BuildPlan -> PackageName -> IO Text
+mutableSourceFingerprint plan name =
+  case puSrcDir =<< lookupUnit name plan of
+    Just d  -> Fingerprint.componentFingerprint [d]
+    Nothing -> pure "immutable"
+
+-- | The language settings, flattened for hashing.
+--
+-- 'show' on GHC's 'Extension' is a serialisation here, not a rendering:
+-- nothing displays this, and the compiler whose enum it is appears in the
+-- same digest.
+languageFingerprint :: LanguageSettings -> [Text]
+languageFingerprint ls =
+  Text.pack (show (Extensions.lsLanguage ls))
+    : sort (map (Text.pack . show) (Extensions.lsDefaultOn ls))
+    ++ ["/off"]
+    ++ sort (map (Text.pack . show) (Extensions.lsDefaultOff ls))
 
 -- | The packages a unit may resolve a re-export through: its dependencies,
 -- plus its own name.
@@ -318,6 +401,17 @@ data ComponentIndex = ComponentIndex
   , ciAmbiguous     :: ![(OutsideExport, ExportChoice)]
     -- ^ Exports more than one dependency could have supplied.  Resolved,
     -- deterministically, and worth saying so.
+  , ciExternalModuleForms :: ![(ModulePath, ModulePath)]
+    -- ^ @(re-exporting module, the @module M@ it names)@ for an @M@ this
+    -- component does not have.  Those names cannot be expanded, so they
+    -- never reach 'ciUnresolved' either; without this field the loss is
+    -- total and silent.
+  , ciNoDeclaration :: ![(ModulePath, SymbolName)]
+    -- ^ Resolved to a module of this component, which then turned out to
+    -- have no declaration of that name.  Class methods and data
+    -- constructors land here (the parser reports top-level declarations
+    -- only), and they used to be dropped by a failing pattern guard with
+    -- nothing said.
   }
   deriving stock (Show, Eq)
 
@@ -359,6 +453,8 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
   , ciNameMismatch  = mismatches
   , ciUnresolved    = unresolved
   , ciAmbiguous     = ambiguous
+  , ciExternalModuleForms = Reexport.externalModuleForms ifaces
+  , ciNoDeclaration = noDeclaration
   }
   where
     failures   = [ (msDeclaredName ms, e) | (ms, Left e)  <- parsed ]
@@ -379,31 +475,47 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
     byModule :: Map.Map ModulePath (ModuleSource, ModuleInterface)
     byModule = Map.fromList [ (miName i, (ms, i)) | (ms, i) <- ok ]
 
+    -- Numbered once per module, not once per symbol.  Every row resolving
+    -- into @Data.Map.Internal@ used to re-number its ~4800 lines to slice
+    -- one signature out; the lazy map value makes it one traversal per
+    -- module that any row actually lands in.
+    linesOf :: Map.Map ModulePath [(Int, Text)]
+    linesOf = Map.map (Parser.numberedLines . msContent . fst) byModule
+
     resolved = Map.toList (Reexport.resolveComponent ifaces)
 
     visibilityFor presented =
       maybe Internal (msVisibility . fst) (Map.lookup presented byModule)
 
     -- Exports this component declares, here or in a sibling module.
-    localRows =
-      [ IndexRow
-          { rowComponent  = compKey
-          , rowModule     = presented
-          , rowName       = name
-          , rowSignature  = sig
-          , rowDefinition = DefinitionRef compKey defMod
-          , rowVisibility = visibilityFor presented
-          }
+    --
+    -- A pair that resolves to a module of this component but finds no
+    -- declaration there is reported rather than dropped: 'findDecl' sees
+    -- top-level declarations only, so every class method and data
+    -- constructor lands in that branch, and a failing pattern guard said
+    -- nothing about it.
+    (noDeclaration, localRows) = partitionEithers
+      [ case Parser.findDecl (unSymbolName name) (miDecls defIface) of
+          Nothing   -> Left (presented, name)
+          Just decl -> Right IndexRow
+            { rowComponent  = compKey
+            , rowModule     = presented
+            , rowName       = name
+              -- The signature is read from the module the resolver landed
+              -- on.  Looking it up in a component-wide name map is what
+              -- published Data.IntMap.Lazy.insertWith with Data.Map's
+              -- signature.
+            , rowSignature  = Signature
+                (fromMaybe "" (Parser.declSigTextIn (linesFor defMod) decl))
+            , rowDefinition = DefinitionRef compKey defMod
+            , rowVisibility = visibilityFor presented
+            }
       | ((presented, name), res) <- resolved
       , defMod <- insideSite presented (resSite res)
-      , Just (defSrc, defIface) <- [Map.lookup defMod byModule]
-        -- The signature is read from the module the resolver landed on.
-        -- Looking it up in a component-wide name map is what published
-        -- Data.IntMap.Lazy.insertWith with Data.Map's signature.
-      , Just decl <- [Parser.findDecl (unSymbolName name) (miDecls defIface)]
-      , let sig = Signature
-              (fromMaybe "" (Parser.declSigText (msContent defSrc) decl))
+      , Just (_, defIface) <- [Map.lookup defMod byModule]
       ]
+
+    linesFor m = Map.findWithDefault [] m linesOf
 
     -- Exports whose definition is in a dependency.  A site naming the
     -- asking module itself is "Hypha.Search.Reexport"'s "no import
@@ -458,8 +570,22 @@ reportComponentIndex compKey ci = do
   mapM_ reportMismatch   (ciNameMismatch ci)
   mapM_ reportUnresolved (ciUnresolved ci)
   mapM_ reportAmbiguous  (ciAmbiguous ci)
+  mapM_ reportExternalForm (ciExternalModuleForms ci)
+  mapM_ reportNoDeclaration (ciNoDeclaration ci)
   where
     label = Text.unpack (unComponentKey compKey)
+
+    reportExternalForm (from, m) = hPutStrLn stderr $
+      "hypha index: " <> label <> " re-exports module "
+        <> Text.unpack (unModulePath m) <> " from "
+        <> Text.unpack (unModulePath from)
+        <> ", which is not part of this component; its names are not indexed"
+
+    reportNoDeclaration (m, n) = hPutStrLn stderr $
+      "hypha index: " <> label <> " resolved "
+        <> Text.unpack (unModulePath m) <> "." <> Text.unpack (unSymbolName n)
+        <> " to a module that declares no such top-level name;"
+        <> " no row was written"
 
     reportUnresolved oe = hPutStrLn stderr $
       "hypha index: " <> label <> " could not resolve "

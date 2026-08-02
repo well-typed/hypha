@@ -20,9 +20,11 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import Hypha.Search.Cache (openIndexCache, readIndex, writeIndex)
 import Hypha.Search.Exports (Export (..), ExportChoice (..), lookupExport)
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
-import Hypha.Search.Indexer (Hydrated (..), hydrateFromCache)
+import Hypha.Project.Components (ComponentKind (..))
+import Hypha.Search.Indexer (Hydrated (..), hydrateFromCache, indexInputsFingerprint)
 import Hypha.Search.PackageCache
-  ( CacheOrigin (..), openPackageCacheAt, writeCachedIndex )
+  ( CacheOrigin (..), openPackageCacheAt, writeCachedFingerprint
+  , writeCachedIndex )
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
@@ -115,6 +117,11 @@ tests = testGroup "Unit.SearchIndexCache"
                   , puLibComponents = []
                   }
               }
+        -- Stamped with the digest the build pass computes, because that
+        -- is what hydration compares against.  Rows alone are not warmth:
+        -- a local package keeps its version across every edit.
+        fp <- indexInputsFingerprint plan pid MainLib
+        writeCachedFingerprint c OriginGlobal "ghc-internal" "9.1003.0" fp
         ref <- IORef.newIORef []
         hyd <- hydrateFromCache plan c [pid] ref
         hyMissing hyd @?= []

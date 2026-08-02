@@ -23,6 +23,8 @@ module Hypha.Search.Reexport
   , Resolution (..)
   , resolveComponent
   , expandedExportNames
+  , expandedExportNamesIn
+  , externalModuleForms
   , definitionModule
   , sharedSegments
   ) where
@@ -93,11 +95,11 @@ resolveComponent :: [ModuleInterface] -> Map (ModulePath, SymbolName) Resolution
 resolveComponent ifaces = fixpoint seeded
   where
     byName :: Map ModulePath ModuleInterface
-    byName = Map.fromList [ (miName i, i) | i <- ifaces ]
+    byName = interfacesByName ifaces
 
     -- Every pair we owe an answer for.
     wanted =
-      [ (i, n) | i <- ifaces, n <- expandedExportNames ifaces (miName i) ]
+      [ (i, n) | i <- ifaces, n <- expandedExportNamesIn byName (miName i) ]
 
     declaredSet :: Map ModulePath (Set SymbolName)
     declaredSet =
@@ -210,19 +212,52 @@ resolveComponent ifaces = fixpoint seeded
 -- re-export: @module Data.Map.Strict.Internal@ contributes no names of its
 -- own until it is expanded.
 expandedExportNames :: [ModuleInterface] -> ModulePath -> [SymbolName]
-expandedExportNames ifaces asking = case Map.lookup asking byName of
+expandedExportNames ifaces = expandedExportNamesIn (interfacesByName ifaces)
+
+-- | 'expandedExportNames' against a map the caller already has.
+--
+-- 'resolveComponent' asks once per interface, and rebuilding the map on
+-- each call made that quadratic in the size of the component.
+expandedExportNamesIn
+  :: Map ModulePath ModuleInterface -> ModulePath -> [SymbolName]
+expandedExportNamesIn byName asking = case Map.lookup asking byName of
   Nothing -> []
   Just i  -> Interface.interfaceExportedNames i ++ moduleFormNames i
   where
-    byName = Map.fromList [ (miName i, i) | i <- ifaces ]
-
     moduleFormNames i =
       [ n
-      | Just items <- [miExports i]
-      , ExportModule m <- items
+      | m      <- moduleForms i
       , Just target <- [Map.lookup m byName]
-      , n <- Interface.interfaceExportedNames target
+      , n      <- Interface.interfaceExportedNames target
       ]
+
+-- | Index modules by the name their source declares.
+interfacesByName :: [ModuleInterface] -> Map ModulePath ModuleInterface
+interfacesByName ifaces = Map.fromList [ (miName i, i) | i <- ifaces ]
+
+-- | The @module M@ items of a module's export list.
+moduleForms :: ModuleInterface -> [ModulePath]
+moduleForms i = [ m | Just items <- [miExports i], ExportModule m <- items ]
+
+-- | The @module M@ re-exports naming a module the component does not
+-- have, as @(the re-exporting module, the module it names)@.
+--
+-- Those names cannot be expanded here, so they never enter the resolver's
+-- work list and never reach the unresolved report either — @mtl@'s
+-- @Control.Monad.State@ exports @module Control.Monad@ and contributed
+-- none of its names, with nothing said.  Reported at module granularity,
+-- which is all we honestly know: what an out-of-component module exports
+-- is not a question this pass can answer.
+externalModuleForms
+  :: [ModuleInterface] -> [(ModulePath, ModulePath)]
+externalModuleForms ifaces =
+  [ (miName i, m)
+  | i <- ifaces
+  , m <- moduleForms i
+  , not (Map.member m byName)
+  ]
+  where
+    byName = interfacesByName ifaces
 
 -- | How many leading dot-separated segments two module paths share.
 --

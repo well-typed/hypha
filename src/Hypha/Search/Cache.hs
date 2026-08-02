@@ -19,7 +19,6 @@ module Hypha.Search.Cache
   ( IndexCache
   , openIndexCache
   , defaultCachePath
-  , haveIndex
   , readIndex
   , lookupRowsByName
   , lookupRowsInModule
@@ -210,14 +209,6 @@ migrateAddColumn conn table column colType = do
              ("ALTER TABLE " <> table
               <> " ADD COLUMN " <> column
               <> " " <> colType))
-
--- | Is there already a cached index for this @(pkg, version)@?
-haveIndex :: IndexCache -> Text -> Text -> IO Bool
-haveIndex c pkg ver = do
-  rs <- queryNamed (icConn c)
-          "SELECT 1 FROM pkg_index_meta WHERE pkg = :p AND version = :v LIMIT 1"
-          [":p" := pkg, ":v" := ver] :: IO [Only Int]
-  pure (not (null rs))
 
 -- | Read the cached @(pkg, mod, name, sig)@ rows for a given package
 -- version.  Returns @[]@ when no entry exists.
