@@ -12,7 +12,7 @@ These apply to every subcommand and are given before or after the command.
 | `--full` | Include all fields (default: compact) |
 | `--select f1,f2,...` | Post-filter output to the listed fields |
 | `--cache-dir DIR` | Override the cache root (default: XDG, `~/.cache/hypha`) |
-| `--quiet` / `-q` | Suppress informational output. Does not currently suppress the indexer's and the browser's diagnostics — a skipped module, an export it could not resolve, a cabal file it could not read — which always go to stderr |
+| `--quiet` / `-q` | Suppress informational output; overrides `--verbose`. Does not suppress the indexer's and the browser's diagnostics — a skipped module, an export it could not resolve, a cabal file it could not read — which always go to stderr |
 | `--verbose` / `-v` | Show debug output |
 
 ## Output format

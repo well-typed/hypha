@@ -60,21 +60,15 @@ resolution as a second fixpoint round.
 
 ## 5. Fields that are computed and never read
 
-- `Reexport.resAmbiguity` — its haddock says the rejected candidates are
-  "kept so the choice is testable and *reportable*"; nothing reports them,
-  so the recorded "ambiguous resolutions: 0" only ever counted the
-  cross-package kind (`ciAmbiguous`). Either add
-  `ciResolvedAmongst` and a fifth `reportComponentIndex` clause, or delete
-  `Ambiguity` and return a bare `DefinitionSite`.
+- ~~`Reexport.resAmbiguity`~~ — **done**: `Ambiguity` is deleted and
+  `resolveComponent` returns a bare `DefinitionSite`.
 - `ParseError.peUnknownExtensions` — unreachable now that the supported-name
   list and the resolver read the same tables. `peDiagnostics` is populated
   and never read; fold it into what `parseErrorMessage` renders so a page
   can say "the pragma block did not read" as the likely cause.
-- `Locate.Provenance.GuessedBySweep` — never constructed. `Ui.Doc` renders
-  a "best guess" warning nobody can trigger, and `Unit/Server.hs` builds
-  the value by hand. Either wire the cabal-less sweep through
-  `LocatedDefinition` so the affordance can fire, or delete the arm (and
-  with it, the one-constructor `Provenance`).
+- ~~`Locate.Provenance.GuessedBySweep`~~ — **done**: the arm, the
+  one-constructor `Provenance`, `ldProvenance`, `scdProvenance` and the
+  unreachable "best guess" warning are all deleted.
 
 ## 6. `Cache.fromStored` reports one anomaly of two
 

@@ -51,3 +51,10 @@ about the channel and the volume, not about going quiet.
 - `--verbose` prints them.
 - A test pins the summary line's shape for a component with unresolved
   exports.
+
+## Note
+
+`--quiet` now overrides `--verbose` when the tracer is chosen, so the flag
+is no longer a complete no-op.  It still cannot silence the sites listed
+above, because they do not go through the tracer at all — that is what
+this issue is for.

@@ -88,14 +88,56 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Conditional cabal stanzas are read.** `if`/`elif`/`else` branches were
+  discarded, so `base` contributed no `GHC.Event` and no
+  `System.CPUTime.Posix.*` on any non-Windows machine — both are declared
+  only in an `else` branch — and around 25 other cached packages lost
+  modules the same way.
+- **A facade over a facade resolves.** A re-export was matched against the
+  *definition's* package rather than the module's own; since GHC 9.10 a
+  package re-exporting `Data.Foldable.foldl'` from `base` was told the
+  definition lives in `ghc-internal`, which it does not depend on, and the
+  row was dropped.
+- **The index expires.** Cache warmth was "a row exists for this
+  `(package, version)`", so editing your own package and restarting the
+  server served the previous run's index forever, a component that indexed
+  to zero rows stayed warm, and the host-wide cache served one project's
+  rows to another. Entries now carry a fingerprint over the source bytes,
+  the compiler, the language settings, whether the cabal stanzas were
+  readable, and the resolved dependency versions.
+- **The parser no longer throws.** `cpphs` reports `#error` by calling
+  `error` from pure code, which escaped the `Either`: `hypha symbol` on a
+  module guarded by `#error "CURRENT_PACKAGE_KEY undefined"` aborted with a
+  raw `ErrorCall`. Module parsing also no longer swallows the server's
+  request-timeout cancellation and reports it as a parse failure.
+- **An unplaced entry is not filed as a function.** It carried a
+  fabricated `DkFunction`, which put `Bool`, `Maybe` and `Functor` under
+  "Values" in `base/Prelude`'s rail with `#v:` anchors no `#t:` link
+  resolves. Such entries now carry no kind and get their own rail group.
+- **A `module M` re-export of a module outside the component is
+  reported.** Those names cannot be expanded, so they reached neither the
+  index nor the unresolved report — `mtl`'s `Control.Monad.State` exports
+  `module Control.Monad` and contributed none of its names, silently.
+
 - **A symbol card or module page resolves a re-export through the index**
   rather than one hop of imports, so a two-hop chain (`Data.List` →
   `GHC.Internal.Data.List` → `GHC.Internal.Data.Traversable`) no longer
   reports "symbol not found". `base/Data.List` renders 121 entries where
   it rendered none.
+- **Links to symbols with operator characters work.** `#`, `/` and `?` in
+  a symbol name are percent-encoded, so `unpackCString#` reaches its card
+  instead of silently landing on the module page, and `System.FilePath.</>`
+  no longer 404s.
+- **The `+N` disclosure appears for a re-exported definition.** It was
+  gated on the folded-in presentations, so a result whose definition module
+  is no presentation at all — the re-export case the affordance exists for
+  — showed no badge and left the definition unreachable.
+- **`--quiet` does something.** It was parsed and read nowhere; it now
+  overrides `--verbose`. It still does not silence the indexer's stderr
+  diagnostics.
 - **One unparseable module no longer degrades a whole component.** Every
-  other module page keeps its entries, and the page names the module that
-  failed. A module `cpphs` cannot preprocess — an `#error` guarded on a
+  other module page keeps its entries, and the skipped module is named on
+  stderr. A module `cpphs` cannot preprocess — an `#error` guarded on a
   macro only a real compiler defines — is skipped rather than answering
   the request with a 500.
 - **A module page no longer presents a guess as a definition site.** An
@@ -106,9 +148,11 @@ loosely follows [Semantic Versioning](https://semver.org/).
   link there, while the index knew `Bool` is `ghc-prim`'s.
 - **Signatures are read at the definition site**, never matched by name,
   so `Data.IntMap` symbols no longer show `Map k a` signatures.
-- **Module names come from the parse tree**, not from file paths, so a
-  stray `examples/race.hs` no longer becomes a module called `race`, and
-  module enumeration comes from the cabal stanza.
+- **Indexed module names come from the parse tree**, not from file paths,
+  so a stray `examples/race.hs` no longer becomes a module called `race`,
+  and module enumeration comes from the cabal stanza. The package
+  overview page still enumerates by walking the source tree, so it can
+  still list a name a file path suggested.
 - `hypha source pkg/Mod/sym` resolves through the component's exports
   instead of scanning the package for a same-named binding;
   `Data.Map.Strict.insertWith` used to resolve to

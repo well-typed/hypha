@@ -56,6 +56,14 @@ layers) exposing `pkgPath` / `modPath` / `symPath` / `sourcePath` over
 `ComponentKey` / `ModulePath` / `SymbolName`, plus `qualifiedLabel`, with
 percent-encoding applied there. Add an operator-name case to the tests.
 
+**Done.** `Hypha.Types.Route` exists and owns every `/pkg/…` and
+`/source/…` path; `hrefFrom` percent-encodes each segment through
+`encodePathSegments`. `Unit.Route` covers `#`, `/`, `?` and a `/` inside a
+segment. What remains of this section is the label duplication:
+`Ui.Doc.definedIn` and `Ui.ModuleDoc.originLabel` still spell
+`component:module` separately, and `Collapse.presentationLabel` is a
+third.
+
 ## 4. While in the area: `SymbolCardData`'s three `Text` fields
 
 `scdModule`, `scdComponent` and `scdRequested` are `Text`, unwrapped at
