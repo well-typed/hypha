@@ -17,9 +17,9 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import Hypha.Search.Collapse
   ( SearchResult (..), SymbolResult (..), collapseRows, rankRows )
 import Hypha.Search.Fuzzy
-  ( ResultKind (..), mkModuleRow, mkPackageRow, mkSymbolRow, tokenize )
-import Hypha.Search.Index (IndexRow, rowModule, Visibility (..))
-import Hypha.Types.ComponentName (ComponentKey (..))
+  ( ResultKind (..), mkPackageRow, mkSymbolRow, tokenize )
+import Hypha.Search.Index (IndexRow, Visibility (..))
+import Hypha.Search.Indexer (componentScorerRows)
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (SymbolName (..))
 import Util.Row (row, rowIn)
@@ -39,13 +39,12 @@ firstKind results = case results of
 resultsFor :: Text.Text -> [IndexRow] -> [SearchResult]
 resultsFor q rows = collapseRows (rankRows (tokenize q) scorable)
   where
+    -- Through the indexer's own derivation, not a copy of it: the two
+    -- were free to drift on exactly the axis that once emitted a package
+    -- row per component.
     scorable =
       mkPackageRow (PackageName "containers") (Version "0.7")
-        : [ mkModuleRow (ComponentKey "containers") m Exposed | m <- modules ]
-        ++ map mkSymbolRow rows
-
-    modules = foldr addOnce [] (map rowModule rows)
-    addOnce m acc = if m `elem` acc then acc else m : acc
+        : componentScorerRows rows
 
 tests :: TestTree
 tests = testGroup "Property.SearchRanking"

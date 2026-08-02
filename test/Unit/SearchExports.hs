@@ -78,6 +78,46 @@ tests = testGroup "Unit.SearchExports"
             @?= [DefinitionRef (ComponentKey "beta") (ModulePath "Shared.Mod")]
         Nothing -> fail "expected a hit"
 
+  , testCase "a facade over a facade resolves through the direct dependency" $ do
+      -- The asking package depends on base and not on ghc-internal.  base
+      -- presents Data.Foldable.foldl' whose definition, since GHC 9.10,
+      -- lives in ghc-internal.  Filtering on the definition's package told
+      -- the asker "you do not depend on ghc-internal" and dropped the row,
+      -- which is every custom prelude on a modern GHC.  What the asker
+      -- named is a module of base, and that is what the filter must test.
+      let env = envFromRows
+            [ rowFrom "base" "Data.Foldable" "foldl'" "sigF"
+                (DefinitionRef (ComponentKey "ghc-internal")
+                               (ModulePath "GHC.Internal.Data.Foldable"))
+                Exposed
+            ]
+          onlyBase = Set.fromList [PackageName "base"]
+      case lookupExport onlyBase (ModulePath "Data.Foldable")
+             (SymbolName "foldl'") env of
+        Just ch -> do
+          exSignature (ecChosen ch) @?= Signature "sigF"
+          -- The definition travels out untouched: widening the dependency
+          -- set to its transitive closure would have resolved this too,
+          -- and would have thrown the guard away.
+          exDefinition (ecChosen ch)
+            @?= DefinitionRef (ComponentKey "ghc-internal")
+                              (ModulePath "GHC.Internal.Data.Foldable")
+        Nothing -> fail "expected a hit through the direct dependency"
+
+  , testCase "the guard still holds: an unrelated presenter is invisible" $ do
+      -- The same shape, but the presenting package is not a dependency
+      -- either.  Two unrelated packages exposing a module of the same name
+      -- must not resolve against each other.
+      let env = envFromRows
+            [ rowFrom "stranger" "Data.Foldable" "foldl'" "sigF"
+                (DefinitionRef (ComponentKey "ghc-internal")
+                               (ModulePath "GHC.Internal.Data.Foldable"))
+                Exposed
+            ]
+      lookupExport (Set.fromList [PackageName "base"])
+        (ModulePath "Data.Foldable") (SymbolName "foldl'") env
+        @?= Nothing
+
   , testCase "a name no dependency exports is a miss" $
       lookupExport deps (ModulePath "GHC.Internal.Data.Traversable")
         (SymbolName "notThere") (envFromRows ghcInternalRows)

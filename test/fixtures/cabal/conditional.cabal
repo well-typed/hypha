@@ -1,0 +1,38 @@
+cabal-version: 2.4
+name:          conditional
+version:       1.0
+build-type:    Simple
+
+-- Modelled on base.cabal, where GHC.Event is declared solely in the
+-- else-branch of `if os(windows)` and System.CPUTime.Posix.* solely in
+-- the else-branch of an elif chain.  Reading only the unconditional node
+-- left both out of the component's module list entirely.
+library
+    hs-source-dirs:  src
+    default-language: Haskell2010
+    exposed-modules:
+        Fixture.Always
+
+    if os(windows)
+        exposed-modules:
+            Fixture.Windows
+    else
+        exposed-modules:
+            Fixture.Posix
+
+    other-modules:
+        Fixture.AlwaysHidden
+
+    if os(windows)
+      other-modules:
+        Fixture.Hidden.Windows
+    elif arch(javascript)
+      other-modules:
+        Fixture.Hidden.Javascript
+    else
+      other-modules:
+        Fixture.Hidden.Posix
+
+    if impl(ghc >= 9.10)
+        hs-source-dirs: src-new
+        default-extensions: MagicHash

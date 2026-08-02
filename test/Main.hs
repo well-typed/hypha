@@ -43,6 +43,7 @@ import qualified Unit.HaddockExtract
 import qualified Unit.InternalError
 import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
+import qualified Unit.Route
 import qualified Unit.SourceExtensions
 import qualified Unit.SearchCollapse
 import qualified Unit.SearchExports
@@ -107,6 +108,7 @@ allTests = testGroup "hypha"
   , Unit.InternalError.tests
   , Unit.LookupPrepLocal.tests
   , Unit.RepoCache.tests
+  , Unit.Route.tests
   , Unit.SourceExtensions.tests
   , Unit.SearchCollapse.tests
   , Unit.SearchExports.tests

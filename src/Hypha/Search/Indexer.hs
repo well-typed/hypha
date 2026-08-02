@@ -21,6 +21,7 @@ module Hypha.Search.Indexer
   , ComponentIndex (..)
   , OutsideExport (..)
   , indexComponentPure
+  , componentScorerRows
     -- * Component discovery
   , componentModules
   , languageSettingsFor
@@ -34,7 +35,6 @@ import Control.Exception qualified as Exception
 import Control.Monad (foldM, void)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
-import Data.Either (partitionEithers)
 import Data.List (partition, sort, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
@@ -406,12 +406,6 @@ data ComponentIndex = ComponentIndex
     -- component does not have.  Those names cannot be expanded, so they
     -- never reach 'ciUnresolved' either; without this field the loss is
     -- total and silent.
-  , ciNoDeclaration :: ![(ModulePath, SymbolName)]
-    -- ^ Resolved to a module of this component, which then turned out to
-    -- have no declaration of that name.  Class methods and data
-    -- constructors land here (the parser reports top-level declarations
-    -- only), and they used to be dropped by a failing pattern guard with
-    -- nothing said.
   }
   deriving stock (Show, Eq)
 
@@ -454,7 +448,6 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
   , ciUnresolved    = unresolved
   , ciAmbiguous     = ambiguous
   , ciExternalModuleForms = Reexport.externalModuleForms ifaces
-  , ciNoDeclaration = noDeclaration
   }
   where
     failures   = [ (msDeclaredName ms, e) | (ms, Left e)  <- parsed ]
@@ -489,30 +482,30 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
 
     -- Exports this component declares, here or in a sibling module.
     --
-    -- A pair that resolves to a module of this component but finds no
-    -- declaration there is reported rather than dropped: 'findDecl' sees
-    -- top-level declarations only, so every class method and data
-    -- constructor lands in that branch, and a failing pattern guard said
-    -- nothing about it.
-    (noDeclaration, localRows) = partitionEithers
-      [ case Parser.findDecl (unSymbolName name) (miDecls defIface) of
-          Nothing   -> Left (presented, name)
-          Just decl -> Right IndexRow
-            { rowComponent  = compKey
-            , rowModule     = presented
-            , rowName       = name
-              -- The signature is read from the module the resolver landed
-              -- on.  Looking it up in a component-wide name map is what
-              -- published Data.IntMap.Lazy.insertWith with Data.Map's
-              -- signature.
-            , rowSignature  = Signature
-                (fromMaybe "" (Parser.declSigTextIn (linesFor defMod) decl))
-            , rowDefinition = DefinitionRef compKey defMod
-            , rowVisibility = visibilityFor presented
-            }
+    -- 'findDecl' cannot miss here: a site is only "inside" when
+    -- 'Interface.declaredNames' found the name, and that reads the very
+    -- 'miDecls' list 'findDecl' searches.  A name this component exports
+    -- but declares nowhere -- every class method, since the parser
+    -- reports top-level declarations only -- resolves to 'DefinedOutside'
+    -- instead and is reported through 'ciUnresolved'.
+    localRows =
+      [ IndexRow
+          { rowComponent  = compKey
+          , rowModule     = presented
+          , rowName       = name
+            -- The signature is read from the module the resolver landed
+            -- on.  Looking it up in a component-wide name map is what
+            -- published Data.IntMap.Lazy.insertWith with Data.Map's
+            -- signature.
+          , rowSignature  = Signature
+              (fromMaybe "" (Parser.declSigTextIn (linesFor defMod) decl))
+          , rowDefinition = DefinitionRef compKey defMod
+          , rowVisibility = visibilityFor presented
+          }
       | ((presented, name), res) <- resolved
       , defMod <- insideSite presented (resSite res)
       , Just (_, defIface) <- [Map.lookup defMod byModule]
+      , Just decl <- [Parser.findDecl (unSymbolName name) (miDecls defIface)]
       ]
 
     linesFor m = Map.findWithDefault [] m linesOf
@@ -571,7 +564,6 @@ reportComponentIndex compKey ci = do
   mapM_ reportUnresolved (ciUnresolved ci)
   mapM_ reportAmbiguous  (ciAmbiguous ci)
   mapM_ reportExternalForm (ciExternalModuleForms ci)
-  mapM_ reportNoDeclaration (ciNoDeclaration ci)
   where
     label = Text.unpack (unComponentKey compKey)
 
@@ -580,12 +572,6 @@ reportComponentIndex compKey ci = do
         <> Text.unpack (unModulePath m) <> " from "
         <> Text.unpack (unModulePath from)
         <> ", which is not part of this component; its names are not indexed"
-
-    reportNoDeclaration (m, n) = hPutStrLn stderr $
-      "hypha index: " <> label <> " resolved "
-        <> Text.unpack (unModulePath m) <> "." <> Text.unpack (unSymbolName n)
-        <> " to a module that declares no such top-level name;"
-        <> " no row was written"
 
     reportUnresolved oe = hPutStrLn stderr $
       "hypha index: " <> label <> " could not resolve "

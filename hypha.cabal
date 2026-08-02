@@ -248,6 +248,7 @@ test-suite hypha-tests
     Unit.InternalError
     Unit.LookupPrepLocal
     Unit.RepoCache
+    Unit.Route
     Unit.SourceExtensions
     Unit.SearchCollapse
     Unit.SearchExports

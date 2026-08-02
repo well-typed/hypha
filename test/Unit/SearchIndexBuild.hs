@@ -10,6 +10,7 @@
 -- symbol name).
 module Unit.SearchIndexBuild (tests) where
 
+import           Data.Containers.ListUtils (nubOrd)
 import           Data.List (sort)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
@@ -18,9 +19,11 @@ import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Hypha.Search.Exports (emptyEnv, envFromRows)
+import Hypha.Search.Fuzzy (Entity (..), IndexedRow (..))
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Search.Indexer
-  ( ComponentIndex (..), OutsideExport (..), indexComponentPure )
+  ( ComponentIndex (..), OutsideExport (..), componentScorerRows
+  , indexComponentPure )
 import Hypha.Source.Extensions (defaultLanguageSettings)
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..))
@@ -177,4 +180,42 @@ tests = testGroup "Unit.SearchIndexBuild"
                 , oeExpected = ModulePath "Dep.Internal"
                 } ]
 
+  , testCase "a module re-export we cannot expand is reported, not dropped" $ do
+      -- Fixture.Reflect exports `module Data.List`, which is not part of
+      -- this component.  Those names cannot be expanded, so they never
+      -- enter the resolver's work list and never reach ciUnresolved
+      -- either -- mtl's Control.Monad.State exports module Control.Monad
+      -- and contributed none of its names, with nothing said.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/Reflect.hs", "Fixture.Reflect", Exposed) ]
+      let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
+                 defaultLanguageSettings srcs
+      ciExternalModuleForms ci
+        @?= [(ModulePath "Fixture.Reflect", ModulePath "Data.List")]
+
+  , testCase "an exported class method gets no row, and is reported" $ do
+      -- The parser reports top-level declarations only, so a class method
+      -- is a name the component exports and declares nowhere (issue 043).
+      -- It must not be silently absent: it resolves to DefinedOutside and
+      -- travels out through ciUnresolved, naming the module that could not
+      -- account for it.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/Klass.hs", "Fixture.Klass", Exposed) ]
+      let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
+                 defaultLanguageSettings srcs
+      rowsFor ci "klassMethod" @?= []
+      assertBool ("expected klassMethod in " <> show (ciUnresolved ci))
+        (SymbolName "klassMethod" `elem` map oeName (ciUnresolved ci))
+
+  , testCase "the package row is not emitted once per component" $ do
+      -- componentScorerRows is per component; a package is not a
+      -- per-component fact.  Emitting one here made a project whose own
+      -- package has a library and two executables answer its own name
+      -- three times, and collapseRows dedups symbols only.
+      ci <- fixture
+      let entities = map irEntity (componentScorerRows (ciRows ci))
+      [ () | EntityPackage _ _ <- entities ] @?= []
+      -- And one module row per module, not one per symbol in it.
+      let mods = [ m | EntityModule _ m _ <- entities ]
+      length mods @?= length (nubOrd mods)
   ]

@@ -232,6 +232,33 @@ resultsFragmentTests =
       let html = renderResults ["insertwith"]
                    [ mapRow "Data.Map.Strict" "Data.Map.Strict" ]
       countOf "alt-group" html @?= 0
+
+  , testCase "a lone presentation still discloses its definition site" $ do
+      -- One indexed row, defined somewhere else.  srAlternates is empty
+      -- -- there is no other presentation to fold in -- but altRows
+      -- appends the definition, so gating the disclosure on srAlternates
+      -- rendered no badge and left the definition unreachable.  237 groups
+      -- in a real index have this shape.
+      let html = renderResults ["asyncbound"]
+            [ rowIn "async-pool" "Control.Concurrent.Async.Pool" "asyncBound"
+                    "sig" "Control.Concurrent.Async.Pool.Async" Exposed
+            ]
+      assertBool ("expected +1 in " <> show html) ("+1" `Text.isInfixOf` html)
+      countOf "alt-group" html @?= 1
+      let opened = altList html
+      countOf "async-pool:Control.Concurrent.Async.Pool.Async" opened @?= 1
+      countOf "<li>" opened @?= 1
+
+  , testCase "an operator's link is escaped, not concatenated raw" $ do
+      -- '#' would truncate the URL at the fragment and land the reader on
+      -- the module page, with no error to notice.
+      let html = renderResults ["unpackcstring"]
+            [ rowIn "ghc-prim" "GHC.CString" "unpackCString#" "sig"
+                    "GHC.CString" Exposed
+            ]
+      assertBool ("expected an escaped '#' in " <> show html)
+        ("/pkg/ghc-prim/GHC.CString/unpackCString%23" `Text.isInfixOf` html)
+      countOf "/pkg/ghc-prim/GHC.CString/unpackCString#" html @?= 0
   ]
   where
     mapRow presented defined =
