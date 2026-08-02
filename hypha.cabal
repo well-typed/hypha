@@ -246,6 +246,7 @@ test-suite hypha-tests
     Unit.HoogleRemote
     Unit.PackageCacheLookup
     Unit.InternalError
+    Unit.ImportedSources
     Unit.LookupPrepLocal
     Unit.RepoCache
     Unit.Route

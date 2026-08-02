@@ -16,6 +16,7 @@ module Hypha.Command.Server
   , buildServerConfig
     -- * Internals exposed for testing
   , briefException
+  , importedSourcesFor
   ) where
 
 import Control.Concurrent (forkIO)

@@ -41,6 +41,7 @@ import qualified Unit.ServerSlots
 import qualified Unit.Haddock
 import qualified Unit.HaddockExtract
 import qualified Unit.InternalError
+import qualified Unit.ImportedSources
 import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
 import qualified Unit.Route
@@ -106,6 +107,7 @@ allTests = testGroup "hypha"
   , Unit.Haddock.tests
   , Unit.HaddockExtract.tests
   , Unit.InternalError.tests
+  , Unit.ImportedSources.tests
   , Unit.LookupPrepLocal.tests
   , Unit.RepoCache.tests
   , Unit.Route.tests
