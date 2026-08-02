@@ -55,6 +55,7 @@ library
     Hypha.Prelude
     Hypha.Types
     Hypha.Types.PackageId
+    Hypha.Types.Route
     Hypha.Types.ComponentName
     Hypha.Types.SymbolPath
     Hypha.Types.BuildPlan

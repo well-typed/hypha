@@ -147,7 +147,12 @@ data EntryOrigin
 
 data DocEntry = DocEntry
   { deName      :: !Text
-  , deKind      :: !Parser.DeclKind
+  , deKind      :: !(Maybe Parser.DeclKind)
+    -- ^ 'Nothing' for an entry we could not place: there is no
+    -- declaration to read a kind off.  It used to be filled in with
+    -- 'Parser.DkFunction', which put @Bool@, @Maybe@ and @Functor@ under
+    -- \"Values\" in the rail and gave them @#v:@ anchors that no @#t:@
+    -- link from a prebuilt page could resolve.
   , deSignature :: !(Maybe Text)
     -- ^ The @name :: ...@ signature for values; for type\/class
     -- declarations without one, the raw source slice of the
@@ -184,7 +189,7 @@ extractModuleDoc path src = do
 docEntryFrom :: [(Int, Text)] -> Parser.Decl -> EntryOrigin -> DocEntry
 docEntryFrom ls d origin = DocEntry
   { deName      = Parser.declName d
-  , deKind      = Parser.declKind d
+  , deKind      = Just (Parser.declKind d)
   , deSignature = signatureFor ls d
   , deHaddock   = DocText <$> Parser.declDoc d
   , deSigLine   = Parser.declSigLine d
@@ -317,7 +322,7 @@ resolveModuleEntries langs compKey sources imported asking = do
     -- because that is what it is.
     placeholder name believed = DocEntry
       { deName      = unSymbolName name
-      , deKind      = Parser.DkFunction
+      , deKind      = Nothing
       , deSignature = Nothing
       , deHaddock   = Nothing
       , deSigLine   = Nothing

@@ -34,6 +34,7 @@ import Hypha.Search.Fuzzy (Entity (..), IndexedRow (..), scoreRow)
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.Route qualified as Route
 import Hypha.Types.SymbolPath (ModulePath (..), Signature, SymbolName (..))
 
 -- | One rendered search result.
@@ -173,11 +174,9 @@ presentationRank row =
 
 resultHref :: SearchResult -> Text
 resultHref = \case
-  ResultPackage p _  -> "/pkg/" <> unPackageName p
-  ResultModule c m _ -> "/pkg/" <> unComponentKey c <> "/" <> unModulePath m
-  ResultSymbol s     -> "/pkg/" <> unComponentKey (srComponent s)
-                          <> "/" <> unModulePath (srModule s)
-                          <> "/" <> unSymbolName (srName s)
+  ResultPackage p _  -> Route.packageHref p
+  ResultModule c m _ -> Route.moduleHref c m
+  ResultSymbol s     -> Route.symbolHref (srComponent s) (srModule s) (srName s)
 
 -- | Where one folded-in presentation lives, so an alternate can be reached
 -- and not merely counted.
@@ -187,10 +186,7 @@ resultHref = \case
 -- can cross a package boundary — @\/pkg\/base\/GHC.Internal…@ is a module
 -- @base@ does not have.
 presentationHref :: SymbolName -> Presentation -> Text
-presentationHref name p =
-  "/pkg/" <> unComponentKey (prComponent p)
-    <> "/" <> unModulePath (prModule p)
-    <> "/" <> unSymbolName name
+presentationHref name p = Route.symbolHref (prComponent p) (prModule p) name
 
 -- | The definition site seen as a presentation, so a renderer can ask
 -- whether one of the folded-in modules /is/ the defining one.

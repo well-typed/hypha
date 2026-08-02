@@ -26,6 +26,7 @@ import qualified Hypha.Server.Ui.Doc     as UIDoc
 import qualified Hypha.Server.Ui.Source  as UISrc
 import qualified Hypha.Server.Ui.Tree    as UITree
 import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.Route qualified as Route
 import qualified Hypha.Search.Collapse   as Collapse
 import qualified Hypha.Search.Fuzzy      as Fuzzy
 import           Hypha.Server.Api       (HyphaApi, api)
@@ -156,7 +157,7 @@ pkgPage :: ServerConfig -> String -> Handler (Html ())
 pkgPage cfg pkg = do
   let pkgT = Text.pack pkg
   m <- liftIO (scPackageInfo cfg pkgT)
-  let crumbs = [(pkgT, "/pkg/" <> pkgT)]
+  let crumbs = [(pkgT, Route.hrefFrom ["pkg", pkgT])]
   pure $ UI.shellPage pkgT crumbs (scPackages cfg) $ case m of
     Nothing -> p_ [class_ "warn"] (toHtml ("Package " <> pkgT <> " not found."))
     Just (ver, mods, origin) -> div_ [class_ "pkg"] $ do
@@ -171,7 +172,7 @@ pkgPage cfg pkg = do
       if null mods
         then p_ [class_ "hint"] (toHtml ("No modules exposed." :: Text))
         else ul_ [class_ "module-list"] $
-          mapM_ (\mp -> li_ $ a_ [href_ ("/pkg/" <> pkgT <> "/" <> mp)] (toHtml mp)) mods
+          mapM_ (\mp -> li_ $ a_ [href_ (Route.hrefFrom ["pkg", pkgT, mp])] (toHtml mp)) mods
 
 -- | Module documentation view: prebuilt Haddock when available,
 -- source-rendered docs otherwise, bare exports as the last resort.
@@ -181,8 +182,8 @@ modPage cfg pkg modPath = do
       modT = Text.pack modPath
   view <- liftIO (scModuleDoc cfg pkgT modT)
   let crumbs =
-        [ (pkgT, "/pkg/" <> pkgT)
-        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
+        [ (pkgT, Route.hrefFrom ["pkg", pkgT])
+        , (modT, Route.hrefFrom ["pkg", pkgT, modT])
         ]
   pure $ UI.shellPage modT crumbs (scPackages cfg)
            (UIMod.modulePage pkgT modT view)
@@ -196,9 +197,9 @@ symPage cfg pkg modPath sym = do
       modT = Text.pack modPath
       symT = Text.pack sym
       crumbs =
-        [ (pkgT, "/pkg/" <> pkgT)
-        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
-        , (symT, "/pkg/" <> pkgT <> "/" <> modT <> "/" <> symT)
+        [ (pkgT, Route.hrefFrom ["pkg", pkgT])
+        , (modT, Route.hrefFrom ["pkg", pkgT, modT])
+        , (symT, Route.hrefFrom ["pkg", pkgT, modT, symT])
         ]
   m <- liftIO (scSymbolLookup cfg pkgT modT symT)
   case m of
@@ -266,9 +267,9 @@ sourcePage cfg pkg modPath mLine = do
   let pkgT = Text.pack pkg
       modT = Text.pack modPath
       crumbs =
-        [ (pkgT, "/pkg/" <> pkgT)
-        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
-        , ("source", "/source/" <> pkgT <> "/" <> modT)
+        [ (pkgT, Route.hrefFrom ["pkg", pkgT])
+        , (modT, Route.hrefFrom ["pkg", pkgT, modT])
+        , ("source", Route.hrefFrom ["source", pkgT, modT])
         ]
   m <- liftIO (scSourceText cfg pkgT modT)
   case m of

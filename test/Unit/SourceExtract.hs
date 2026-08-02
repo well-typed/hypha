@@ -63,7 +63,7 @@ tests = testGroup "Unit.SourceExtract"
           fmap unDocText (mdiHeader d)
             @?= Just " Fixture module header.\n\n Second paragraph."
           map deName (mdiEntries d) @?= ["Colour", "run"]
-          map deKind (mdiEntries d) @?= [Parser.DkData, Parser.DkFunction]
+          map deKind (mdiEntries d) @?= [Just Parser.DkData, Just Parser.DkFunction]
           case mdiEntries d of
             [colour, run] -> do
               deSignature colour @?= Just "data Colour = Red | Green"

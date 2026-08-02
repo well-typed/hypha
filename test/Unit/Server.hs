@@ -178,7 +178,7 @@ modulePageTests =
   where
     entry origin = DocEntry
       { deName      = "mapAccumL"
-      , deKind      = DkFunction
+      , deKind      = Just DkFunction
       , deSignature = Nothing
       , deHaddock   = Nothing
       , deSigLine   = Nothing

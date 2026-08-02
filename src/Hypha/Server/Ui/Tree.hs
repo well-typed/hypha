@@ -16,6 +16,7 @@ import Lucid
 
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.Route qualified as Route
 
 -- | Full sidebar: a client-side filter box above two collapsible
 -- groups — the project's own packages first, dependencies below.
@@ -61,15 +62,18 @@ packageTree = ul_ [class_ "tree"] . mconcat . map renderEntry
       let (pkgPart, tail_) = case Text.breakOn ":" compName of
             (a, b) | Text.null b -> (a, Nothing)
                    | otherwise   -> (a, Just (Text.drop 1 b))
-          (kindCls, suffix, hrefSuffix) = case tail_ of
-            Nothing  -> ("", Nothing, "")
+          -- The split is for the chip: the href is the component key
+          -- whole, escaped once by 'Route.hrefFrom' like every other link
+          -- on the site.  Hand-escaping the colons here was the one place
+          -- that spelled the same URL differently.
+          (kindCls, suffix) = case tail_ of
+            Nothing  -> ("", Nothing)
             Just t   -> case Text.stripPrefix "exe:" t of
-              Just e  -> ("exe-tag",    Just (":exe:" <> e), "%3Aexe%3A" <> e)
-              Nothing -> ("sublib-tag", Just (":"     <> t), "%3A"       <> t)
-          hrefText = pkgPart <> hrefSuffix
+              Just e  -> ("exe-tag",    Just (":exe:" <> e))
+              Nothing -> ("sublib-tag", Just (":"     <> t))
       in li_ [class_ "tree-row"] $ do
            originBadge origin
-           a_ [href_ ("/pkg/" <> hrefText)] $ do
+           a_ [href_ (Route.hrefFrom ["pkg", compName])] $ do
              toHtml pkgPart
              case suffix of
                Nothing -> pure ()

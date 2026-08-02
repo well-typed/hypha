@@ -48,7 +48,7 @@ tests = testGroup "Golden.Server"
           , mdiEntries =
               [ DocEntry
                   { deName      = "Gadget"
-                  , deKind      = DkData
+                  , deKind      = Just DkData
                   , deSignature = Just "data Gadget = MkGadget !Int"
                   , deHaddock   = Just (DocText "A gadget.")
                   , deSigLine   = Nothing
@@ -57,7 +57,7 @@ tests = testGroup "Golden.Server"
                   }
               , DocEntry
                   { deName      = "frob"
-                  , deKind      = DkFunction
+                  , deKind      = Just DkFunction
                   , deSignature = Just "frob :: Gadget -> Int"
                   , deHaddock   = Just (DocText "Frobnicate the gadget.")
                   , deSigLine   = Just 17

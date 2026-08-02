@@ -86,8 +86,14 @@ resultsFragment tokens results = ul_ [class_ "results", id_ "results"] $
     entry r = li_ $ do
       a_ [href_ (resultHref r)] (body r)
       case r of
-        ResultSymbol s | not (null (srAlternates s)) -> alternates s
-        _                                   -> mempty
+        -- Gated on 'altRows', not on 'srAlternates': the append clause in
+        -- 'altRows' fires exactly when the definition module is no
+        -- presentation at all, which is the re-export case and the reason
+        -- that clause exists.  Gating on 'srAlternates' hid the disclosure
+        -- for precisely those groups, leaving the definition site
+        -- unreachable from the result that folded it in.
+        ResultSymbol s | not (null (altRows s)) -> alternates s
+        _                                      -> mempty
 
     body :: SearchResult -> Html ()
     body = \case
