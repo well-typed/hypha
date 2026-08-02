@@ -48,3 +48,24 @@ verify a path whose IO they replace.
 
 - Reverting either half of the browsing fix (the index lookup, or the
   cross-component source load) turns a test red.
+
+## Progress
+
+**Item 1 done.** `test/Unit/ImportedSources.hs` drives the producer end to
+end: rows into a real `PackageCache`, out through the real
+`lookupInModule` + `importedSourcesFor` with a stub resolver on the
+`reexport-dep` fixture, and the result fed to the real
+`locateDefinitionInComponent`.  Verified by mutation — stubbing the row
+lookup to `[]` fails it.
+
+Items 2 and 3 remain: a `Network.Wai.Test` request through `App.appWith`
+(needs `wai-extra`), and goldens for the `EntryReexport` /
+`EntryUnplaced` page shapes.
+
+Separately, the browsing paths were driven manually against this project
+in a `cabal repl lib:hypha` session over `buildServerConfig` — 252
+packages indexed, operator hrefs escaped, `+N` disclosures rendered,
+`base/Prelude` free of bogus `#v:` anchors, cross-package cards resolving,
+and a second start rebuilding only the package whose source had changed.
+That is a check someone has to remember to run; items 2 and 3 are how it
+stops being one.
