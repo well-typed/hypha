@@ -30,7 +30,8 @@ module Hypha.Source.Interface
   , declaredNames
   ) where
 
-import Control.Exception (SomeException, displayException, evaluate, try)
+import Control.Exception (evaluate)
+import Control.Exception.Safe (SomeException, displayException, try)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -106,6 +107,13 @@ parseInterface ls path src = do
 -- Forcing the parse inside 'try' turns it back into the typed failure the
 -- rest of the pipeline already reports, so one module loses its rows and
 -- every other module and package keeps its own.
+--
+-- The 'try' is @Control.Exception.Safe@'s, which rethrows asynchronous
+-- exceptions.  This runs on a Warp handler thread, and the plain
+-- 'Control.Exception.try' at @SomeException@ would swallow the timeout
+-- manager's kill and report it as a parse failure — a request that should
+-- have died would instead render a page missing every module it did not
+-- get to.
 parseInterfaceIO
   :: Extensions.LanguageSettings
   -> FilePath

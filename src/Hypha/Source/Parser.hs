@@ -30,6 +30,7 @@ module Hypha.Source.Parser
   , renderRdrName
   ) where
 
+import Control.Exception.Safe (SomeException, displayException, try)
 import Data.Maybe (listToMaybe)
 import Data.Text qualified as Text
 import Data.Text (Text)
@@ -118,12 +119,13 @@ parseErrorMessage = peMessage
 -- declarations.  @path@ is used only as the source-span file name.
 --
 -- When the source carries CPP directives (@\{\-# LANGUAGE CPP #\-\}@,
--- @\#ifdef@, ...) @cpphs@ is run as a preprocessor first.  The whole
--- pipeline is pure: cpphs is normally @IO@ to resolve @#include@
--- directives, but we hold those off (@locations = False@,
--- @hashline   = False@) and feed it source bytes we already own, so
--- the @IO@ is artefactual.  We pin the purity at the boundary with
--- 'unsafePerformIO' rather than push @IO@ through every caller.
+-- @\#ifdef@, ...) @cpphs@ is run as a preprocessor first, and that step
+-- does real IO: an @#include@ is resolved by reading the named file from
+-- the including module's directory.  'unsafePerformIO' pins the result at
+-- the boundary rather than pushing @IO@ through every caller, which is a
+-- deliberate trade and not a claim that nothing happens.  What makes it
+-- defensible is that 'parseModuleIO' catches the preprocessor's failures,
+-- so this is total: it returns a 'ParseError', never a thrown 'ErrorCall'.
 parseDecls :: FilePath -> Text -> Either ParseError [Decl]
 parseDecls = parseDeclsWith Extensions.defaultLanguageSettings
 
@@ -171,23 +173,55 @@ parseModuleIO
   :: Extensions.LanguageSettings -> FilePath -> Text
   -> IO (Either ParseError (HsModule GhcPs, Maybe Text, [Decl]))
 parseModuleIO ls path source = do
-  preprocessed <- if needsCpp source
-    then Text.pack <$> Cpphs.runCpphs cpphsOpts path (Text.unpack source)
-    else pure source
-  -- The module states its own requirements; read them rather than
-  -- guessing at a whitelist (see "Hypha.Source.Extensions").  Pragmas
-  -- are read from the *preprocessed* text so a pragma inside a live
-  -- @#if@ branch counts.
-  scan <- Extensions.scanPragmas path preprocessed
-  let (exts, unknown) =
-        Extensions.resolveExtensions ls (Extensions.psExtensionNames scan)
-      buf  = SB.stringToStringBuffer (Text.unpack preprocessed)
-      loc  = mkRealSrcLoc (mkFastString path) 1 1
-      st   = L.initParserState (Extensions.parserOptsFor exts) buf loc
-  pure $ case L.unP P.parseModule st of
-    L.POk _ (L _ hsMod) ->
-      Right (hsMod, moduleHeaderDoc hsMod, declsFromModule hsMod)
-    L.PFailed st' -> Left (parseFailure unknown (Extensions.psDiagnostics scan) st')
+  ePre <- preprocess
+  case ePre of
+    Left  e            -> pure (Left e)
+    Right preprocessed -> parsePreprocessed preprocessed
+  where
+   -- cpphs reports @#error@ and an unparseable @#if@ by calling 'error'
+   -- from pure code, so the failure escapes the 'Either' its type
+   -- advertises.  Catching it here is what makes every entry point below
+   -- total, including the 'unsafePerformIO' ones: without it, @hypha
+   -- symbol@ on a module guarded by @#error "CURRENT_PACKAGE_KEY
+   -- undefined"@ aborted with a raw 'ErrorCall' instead of a
+   -- 'Hypha.Error.HyphaError'.
+   --
+   -- 'Control.Exception.Safe.try' rethrows asynchronous exceptions, so a
+   -- timed-out server request still dies rather than being reported as a
+   -- broken module.
+   preprocess
+     | not (needsCpp source) = pure (Right source)
+     | otherwise = do
+         out <- try (Text.pack <$> Cpphs.runCpphs cpphsOpts path
+                                     (Text.unpack source))
+         pure $ case out of
+           Right t                   -> Right t
+           Left (e :: SomeException) -> Left ParseError
+             { peMessage = "the C preprocessor rejected this module: "
+                             <> firstLine (Text.pack (displayException e))
+             , peLine              = Nothing
+             , peUnknownExtensions = []
+             , peDiagnostics       = []
+             }
+
+   firstLine = Text.strip . Text.takeWhile (/= '\n')
+
+   -- The module states its own requirements; read them rather than
+   -- guessing at a whitelist (see "Hypha.Source.Extensions").  Pragmas
+   -- are read from the *preprocessed* text so a pragma inside a live
+   -- @#if@ branch counts.
+   parsePreprocessed preprocessed = do
+     scan <- Extensions.scanPragmas path preprocessed
+     let (exts, unknown) =
+           Extensions.resolveExtensions ls (Extensions.psExtensionNames scan)
+         buf  = SB.stringToStringBuffer (Text.unpack preprocessed)
+         loc  = mkRealSrcLoc (mkFastString path) 1 1
+         st   = L.initParserState (Extensions.parserOptsFor exts) buf loc
+     pure $ case L.unP P.parseModule st of
+       L.POk _ (L _ hsMod) ->
+         Right (hsMod, moduleHeaderDoc hsMod, declsFromModule hsMod)
+       L.PFailed st' ->
+         Left (parseFailure unknown (Extensions.psDiagnostics scan) st')
 
 -- | Turn a failed parser state into our typed error, keeping GHC's own
 -- diagnostic and the line it points at.
