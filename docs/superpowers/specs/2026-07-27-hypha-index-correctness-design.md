@@ -308,6 +308,12 @@ data Provenance
   | GuessedBySweep !Text        -- ^ why resolution was unavailable
 ```
 
+> **Not adopted.** `locateDefinitionInComponent` resolves or returns
+> nothing, so `GuessedBySweep` was never constructed and the warning it
+> was to drive was unreachable. `LocatedDefinition` carries no provenance
+> field; the sweep fallback lives in `hypha source`, which reports on
+> stderr instead.
+
 `sortByPrefix`'s dotted-vs-slashed comparison is deleted along with the
 hand-rolled `sortBy`; sibling preference is computed on `ModulePath`
 segments (`Data.Map.Internal` vs `Data.Set.Internal` share one segment,
