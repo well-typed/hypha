@@ -35,10 +35,10 @@ import Control.Exception qualified as Exception
 import Control.Monad (filterM, foldM, void)
 import Data.IORef qualified as IORef
 import Data.Map.Strict qualified as Map
-import Data.List (intercalate, partition, sort, sortOn)
+import Data.List (intercalate, sort, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
-import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -374,9 +374,15 @@ hsToModule =
 -- Named rather than tupled because all three fields are module paths or
 -- close to it, and a bare triple at a report site is unreadable.
 data OutsideExport = OutsideExport
-  { oeModule   :: !ModulePath   -- ^ the module that exports it
-  , oeName     :: !SymbolName
-  , oeExpected :: !ModulePath   -- ^ the import we believe supplies it
+  { oeModule     :: !ModulePath     -- ^ the module that exports it
+  , oeName       :: !SymbolName
+  , oeCandidates :: ![ModulePath]
+    -- ^ Every import that could supply it, ranked, all of them tried.
+    -- A list rather than the single import we "believe" supplies it:
+    -- an open @import Prelude@ plausibly supplies any name, so one
+    -- candidate is a guess and @base@'s @Control.Concurrent@ is where
+    -- that guess is always wrong.  Empty when no import could have
+    -- supplied it at all — a class method has none.
   }
   deriving stock (Show, Eq, Ord)
 
@@ -504,20 +510,25 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
 
     linesFor m = Map.findWithDefault [] m linesOf
 
-    -- Exports whose definition is in a dependency.  A site naming the
-    -- asking module itself is "Hypha.Search.Reexport"'s "no import
-    -- plausibly supplies this" fallback, not a claim about a dependency:
-    -- looking it up would match any dependency exposing a module of the
-    -- same name, so it goes straight to the unresolved report.
-    (selfNamed, outside) =
-      partition (\oe -> oeModule oe == oeExpected oe)
-        [ OutsideExport presented name m
-        | ((presented, name), DefinedOutside m) <- resolved
-        ]
+    -- Exports whose definition is in a dependency, with every import that
+    -- could have supplied them.
+    outside =
+      [ OutsideExport presented name cands
+      | ((presented, name), site) <- resolved
+      , Just cands <- [outsideCandidates site]
+      ]
 
-    classified = [ (oe, lookupExport deps (oeExpected oe) (oeName oe) env)
-                 | oe <- outside
-                 ]
+    -- The first candidate an indexed dependency actually exports wins.
+    -- Probing rather than trusting the best-ranked one is the whole
+    -- point: ranking can only order syntax, and syntax cannot tell an
+    -- open import that supplies the name from one that does not.
+    classified = [ (oe, firstResolvable oe) | oe <- outside ]
+
+    firstResolvable oe = listToMaybe
+      [ ch
+      | m       <- oeCandidates oe
+      , Just ch <- [lookupExport deps m (oeName oe) env]
+      ]
 
     outsideRows =
       [ IndexRow
@@ -531,7 +542,7 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
       | (oe, Just ch) <- classified
       ]
 
-    unresolved = selfNamed ++ [ oe | (oe, Nothing) <- classified ]
+    unresolved = [ oe | (oe, Nothing) <- classified ]
 
     ambiguous =
       [ (oe, ch)
@@ -547,6 +558,18 @@ insideSite asking site = case site of
   DefinedHere      -> [asking]
   DefinedIn m      -> [m]
   DefinedOutside _ -> []
+  NoSupplier       -> []
+
+-- | The imports a site offers as suppliers, and nothing when the site is
+-- inside the component.  'NoSupplier' offers an empty list rather than
+-- nothing: the export is real, we simply have no candidate to try, and
+-- it still owes the reader an entry in the unresolved report.
+outsideCandidates :: DefinitionSite -> Maybe [ModulePath]
+outsideCandidates site = case site of
+  DefinedHere       -> Nothing
+  DefinedIn _       -> Nothing
+  DefinedOutside ms -> Just (NE.toList ms)
+  NoSupplier        -> Just []
 
 -- | Trace what a component's index pass could not do.  Never silent: a
 -- module or symbol missing from the index is invisible to search, and the
@@ -567,12 +590,18 @@ reportComponentIndex compKey ci = do
         <> Text.unpack (unModulePath from)
         <> ", which is not part of this component; its names are not indexed"
 
+    -- Naming every candidate, not just the best one: "could not resolve
+    -- it through Prelude" sent every reader after the wrong import.
     reportUnresolved oe = hPutStrLn stderr $
       "hypha index: " <> label <> " could not resolve "
         <> Text.unpack (unModulePath (oeModule oe)) <> "."
         <> Text.unpack (unSymbolName (oeName oe))
-        <> " through " <> Text.unpack (unModulePath (oeExpected oe))
-        <> "; no indexed dependency exports it"
+        <> case oeCandidates oe of
+             [] -> "; no import of that module could supply it"
+             ms -> " through any of "
+                     <> intercalate ", "
+                          (map (Text.unpack . unModulePath) ms)
+                     <> "; no indexed dependency exports it"
 
     reportAmbiguous (oe, ch) = hPutStrLn stderr $
       "hypha index: " <> label <> " resolved "

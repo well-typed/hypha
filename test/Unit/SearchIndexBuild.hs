@@ -176,10 +176,28 @@ tests = testGroup "Unit.SearchIndexBuild"
       ciRows ci @?= []
       ciUnresolved ci
         @?= [ OutsideExport
-                { oeModule   = ModulePath "Fixture.Imported"
-                , oeName     = SymbolName "depThing"
-                , oeExpected = ModulePath "Dep.Internal"
+                { oeModule     = ModulePath "Fixture.Imported"
+                , oeName       = SymbolName "depThing"
+                , oeCandidates = [ModulePath "Dep.Internal"]
                 } ]
+
+  , testCase "an export resolves past an import that cannot supply it" $ do
+      -- Fixture.Shadowed's first-ranked import has no depThing; the
+      -- second one declares it.  Committing to the first candidate is
+      -- what dropped every symbol base:Control.Concurrent re-exports,
+      -- because its first import is Prelude.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/Shadowed.hs", "Fixture.Shadowed", Exposed) ]
+      dep <- depIndex
+      let ci = indexComponentPure (ComponentKey "reexport") reexportDeps
+                 (envFromRows (ciRows dep)) defaultLanguageSettings srcs
+      case rowsFor ci "depThing" of
+        [r] -> do
+          rowDefinition r @?= DefinitionRef (ComponentKey "reexport-dep")
+                                            (ModulePath "Dep.Internal")
+          rowSignature r  @?= Signature "depThing :: Int -> Int"
+        other -> fail ("expected one depThing row, got " <> show (length other))
+      ciUnresolved ci @?= []
 
   , testCase "a module re-export we cannot expand is reported, not dropped" $ do
       -- Fixture.Reflect exports `module Data.List`, which is not part of

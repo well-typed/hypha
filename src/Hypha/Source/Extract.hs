@@ -23,6 +23,7 @@ module Hypha.Source.Extract
   , resolveModuleEntries
   ) where
 
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as Text
 import Data.Text (Text)
@@ -286,13 +287,17 @@ resolveModuleEntries langs compKey sources imported asking = do
       case fromIndex outsideOf name of
         Just e  -> Just e
         Nothing -> case site of
-          Reexport.DefinedOutside m
-            | m /= asking -> case fromModule outsideOf name m of
-                Just e  -> Just e
-                -- Everything we can still say: the name, and where it came
-                -- from.  Dropping it would leave no trace of a symbol the
-                -- module genuinely exports.
-                Nothing -> Just (placeholder name m)
+          -- Every candidate import, in rank order, not just the best one:
+          -- @base@'s @Control.Concurrent@ ranks @Prelude@ among the
+          -- imports that could supply @isCurrentThreadBound@, and only
+          -- the third one does.
+          Reexport.DefinedOutside ms ->
+            case [ e | m <- NE.toList ms, Just e <- [fromModule outsideOf name m] ] of
+              (e : _) -> Just e
+              -- Everything we can still say: the name, and the import
+              -- that came closest.  Dropping it would leave no trace of a
+              -- symbol the module genuinely exports.
+              []      -> Just (placeholder name (NE.head ms))
           _ -> do
             let defMod = Reexport.definitionModule asking site
             defIface <- Map.lookup defMod byName

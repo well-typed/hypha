@@ -8,6 +8,7 @@
 -- name-keyed resolution would be wrong.
 module Unit.SearchReexport (tests) where
 
+import           Data.List.NonEmpty (NonEmpty (..))
 import           Data.Text (Text)
 import qualified Data.Map.Strict    as Map
 import qualified Data.Text          as Text
@@ -144,9 +145,53 @@ tests = testGroup "Unit.SearchReexport"
             }
           r = resolveComponent [mkIface "A" "B", mkIface "B" "A"]
       Map.lookup (ModulePath "A", SymbolName "x") r
-        @?= Just (DefinedOutside (ModulePath "B"))
+        @?= Just (DefinedOutside (ModulePath "B" :| []))
       Map.lookup (ModulePath "B", SymbolName "x") r
-        @?= Just (DefinedOutside (ModulePath "A"))
+        @?= Just (DefinedOutside (ModulePath "A" :| []))
+
+  , testCase "an outside export offers every import that could supply it" $ do
+      -- The base:Control.Concurrent shape.  An open @import Prelude@
+      -- comes first in the source and could syntactically supply any
+      -- name, so naming it alone -- as the resolver used to -- loses
+      -- isCurrentThreadBound, which really comes from the third import.
+      -- The candidates travel out ranked, so the caller can try the next
+      -- one instead of failing on the first.
+      iface <- inline "Control.Concurrent" $ Text.unlines
+        [ "module Control.Concurrent (isCurrentThreadBound) where"
+        , "import Prelude"
+        , "import GHC.Internal.Conc.Bound"
+        ]
+      site <- siteOf (resolveComponent [iface])
+                (ModulePath "Control.Concurrent", SymbolName "isCurrentThreadBound")
+      site @?= DefinedOutside
+                 (ModulePath "GHC.Internal.Conc.Bound" :| [ModulePath "Prelude"])
+
+  , testCase "an import that lists the name outranks an open one" $ do
+      -- An explicit import list is a statement about where a name comes
+      -- from; an unrestricted import is not.  The outside candidates owe
+      -- the same preference the in-component ones already apply.
+      iface <- inline "Facade" $ Text.unlines
+        [ "module Facade (thing) where"
+        , "import Any"
+        , "import Supplier (thing)"
+        ]
+      site <- siteOf (resolveComponent [iface])
+                (ModulePath "Facade", SymbolName "thing")
+      site @?= DefinedOutside (ModulePath "Supplier" :| [ModulePath "Any"])
+
+  , testCase "an export no import could supply names no supplier" $ do
+      -- A class method: the module exports it, declares no top-level
+      -- binding for it, and imports nothing that could have it.  The old
+      -- resolver said DefinedOutside <this module>, a sentinel every
+      -- caller had to recognise by comparing the module against itself.
+      iface <- inline "Klass" $ Text.unlines
+        [ "module Klass (Klass (..), klassMethod) where"
+        , "class Klass a where"
+        , "  klassMethod :: a -> Int"
+        ]
+      site <- siteOf (resolveComponent [iface])
+                (ModulePath "Klass", SymbolName "klassMethod")
+      site @?= NoSupplier
 
   , testCase "shared segments count segments, not characters" $ do
       -- The predecessor compared a dotted module prefix against slashed

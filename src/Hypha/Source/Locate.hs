@@ -15,7 +15,8 @@ module Hypha.Source.Locate
   ) where
 
 import Control.Monad (filterM)
-import Data.List (sortOn)
+import Data.List (intercalate, sortOn)
+import Data.List.NonEmpty qualified as NE
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -254,16 +255,23 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
               <> Text.unpack (unSymbolName sym)
           pure Nothing
         Just resolved -> case resolved of
-          DefinedOutside m | m /= asking ->
-            case Map.lookup m (idSources imported) of
-              Nothing -> do
+          -- Every candidate import, in rank order: the best-ranked one is
+          -- syntax, not an answer, and @base@'s @Control.Concurrent@
+          -- ranks @Prelude@ ahead of the module that really declares
+          -- @isCurrentThreadBound@.
+          DefinedOutside ms ->
+            case [ (m, supplied)
+                 | m <- NE.toList ms
+                 , Just supplied <- [Map.lookup m (idSources imported)] ] of
+              ((m, (comp, src)) : _) -> scanned comp m src Nothing
+              [] -> do
                 hPutStrLn stderr $
                   "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
-                    <> Text.unpack (unSymbolName sym) <> " from "
-                    <> Text.unpack (unModulePath m)
-                    <> ", whose source was not supplied"
+                    <> Text.unpack (unSymbolName sym) <> " from one of "
+                    <> intercalate ", "
+                         (map (Text.unpack . unModulePath) (NE.toList ms))
+                    <> ", none of whose sources were supplied"
                 pure Nothing
-              Just (comp, ms) -> scanned comp m ms Nothing
           site -> do
             let target = Reexport.definitionModule asking site
             case [ (ms, i)

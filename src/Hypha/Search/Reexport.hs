@@ -27,8 +27,11 @@ module Hypha.Search.Reexport
   , sharedSegments
   ) where
 
+import Data.Containers.ListUtils (nubOrd)
 import Data.Foldable qualified as Foldable
 import Data.List (sortOn)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -45,20 +48,33 @@ data DefinitionSite
   = DefinedHere
   | DefinedIn !ModulePath
     -- ^ Declared by another module of the same component.
-  | DefinedOutside !ModulePath
-    -- ^ No module of this component declares it; the field names the
-    -- import we believe supplies it.  The indexer writes no row for
-    -- these — we have no signature to give, and the definition belongs to
-    -- another index entry.
+  | DefinedOutside !(NonEmpty ModulePath)
+    -- ^ No module of this component declares it; the field ranks every
+    -- import that could supply it, best first.  A /list/ because one
+    -- import cannot be trusted: an open @import Prelude@ can
+    -- syntactically supply any name, and @base@'s @Control.Concurrent@
+    -- opens with one — so naming a single candidate lost every symbol
+    -- that module re-exports.  The caller probes the candidates in order
+    -- and keeps the first that really exports the name.
+  | NoSupplier
+    -- ^ No module of this component declares it, and no import could
+    -- have supplied it either.  A class method is the common case: the
+    -- parser reports top-level declarations only, so the method is a
+    -- name the component exports and nothing accounts for.
   deriving stock (Show, Eq)
 
 -- | Fold 'DefinedHere' back to the asking module, so callers that only
 -- want a 'ModulePath' need not case-split to get one.
+--
+-- 'DefinedOutside' folds to its best candidate and 'NoSupplier' to the
+-- asking module — both are the caller's last resort, not an answer, and
+-- a caller that can do better should case-split rather than call this.
 definitionModule :: ModulePath -> DefinitionSite -> ModulePath
 definitionModule asking = \case
-  DefinedHere      -> asking
-  DefinedIn m      -> m
-  DefinedOutside m -> m
+  DefinedHere       -> asking
+  DefinedIn m       -> m
+  DefinedOutside ms -> NE.head ms
+  NoSupplier        -> asking
 
 -- | Resolve every @(module, exported name)@ pair in a component.
 --
@@ -139,24 +155,30 @@ resolveComponent ifaces = fixpoint seeded
           Just (DefinedIn m) -> DefinedIn m
           _                  -> DefinedIn winner
 
-    -- Nothing inside the component supplies it: name the first import that
-    -- plausibly does, so the module page can still list the symbol and say
-    -- where it came from.  A module with no such import resolves to itself,
-    -- which keeps this total without an 'error' — and since
-    -- 'DefinedOutside' rows are never indexed, that value cannot reach a
-    -- search result.
+    -- Nothing inside the component supplies it: rank every import that
+    -- plausibly does and hand over all of them, so the caller can probe
+    -- rather than commit.  Committing to the first is what dropped
+    -- @base:Control.Concurrent.isCurrentThreadBound@ — that module opens
+    -- with @import Prelude@, which plausibly supplies every name and
+    -- actually supplies none of them.
     finish acc = Foldable.foldl' addOutside acc wanted
       where
         addOutside m (i, n)
           | Map.member (miName i, n) m = m
           | otherwise = Map.insert (miName i, n) (outsideFor i n) m
 
-    outsideFor i n = case [ iiModule ii
-                          | ii <- miImports i
-                          , explicitlyLists ii n || openImport ii n
-                          ] of
-      (m : _) -> DefinedOutside m
-      []      -> DefinedOutside (miName i)
+    outsideFor i n = case rankedImports i n of
+      (m : ms) -> DefinedOutside (m :| ms)
+      []       -> NoSupplier
+
+    -- Ranked by the rule the in-component candidates already use, so the
+    -- order is a function of the module rather than of the order its
+    -- imports happen to be written in.
+    rankedImports i n =
+      let (preferred, open) = candidates i n
+          explicit          = nubOrd preferred
+      in rank i explicit
+           ++ rank i [ m | m <- nubOrd open, m `notElem` explicit ]
 
     -- An explicit import list is a statement about where a name comes
     -- from; an unrestricted import is not.  So explicit candidates are
