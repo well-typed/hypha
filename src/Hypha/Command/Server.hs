@@ -48,6 +48,7 @@ import Hypha.Search.Index qualified as Index
 import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Search.PackageCache qualified as Cache
+import Hypha.Source.Origins qualified as Origins
 import Hypha.Server.App qualified as App
 import Hypha.Server.Bind
 import Hypha.Server.Haddock.Extract qualified as HExtract
@@ -207,8 +208,12 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
   case missing of
     [] -> IORef.writeIORef readyRef True
     _  -> do
+      -- Built here rather than per component: it probes for a matching
+      -- compiler once and remembers each package's interface directory.
+      dbs    <- Origins.discoverPackageDbs (bpCompiler plan)
+      oracle <- Origins.mkGhcOriginOracle (bpCompiler plan) dbs
       _ <- forkIO $ do
-        r <- try (Indexer.buildAndCacheIndex plan cache resolver
+        r <- try (Indexer.buildAndCacheIndex plan cache resolver oracle
                     (Indexer.hyEnv hyd) missing indexRef doneRef)
         case r :: Either SomeException () of
           Left e  -> hPutStrLn stderr ("hypha index build failed: " <> show e)

@@ -1,0 +1,74 @@
+interface Control.Concurrent 9103
+  interface hash: 78d6cece0acd0e962db931108618cb88
+  ABI hash: 261338b6d7761e9209a485c1e227f3ad
+  export-list hash: 0d9a645cc79d74647f2ef6d8060972b2
+  orphan hash: 693e9af84d3dfcc71e640e005bdc5e2e
+  flag hash: 7186033683818752f2a06a8f19868f7e
+  opt_hash: 5fb83f9605d5410d4dbf23f44f5cab05
+  hpc_hash: 93b885adfe0da089cdf634904fd59f71
+  plugin_hash: ad164012d6b1e14942349d58b1132007
+  src_hash: ce3dddd05c97f553a815bcb36c47d2df
+  sig of: Nothing
+  used TH splices: False
+  where
+exports:
+  forkFinally
+  threadWaitRead
+  threadWaitReadSTM
+  threadWaitWrite
+  threadWaitWriteSTM
+  Control.Concurrent.Chan.dupChan
+  Control.Concurrent.Chan.getChanContents
+  Control.Concurrent.Chan.newChan
+  Control.Concurrent.Chan.readChan
+  Control.Concurrent.Chan.writeChan
+  Control.Concurrent.Chan.writeList2Chan
+  Control.Concurrent.QSem.newQSem
+  Control.Concurrent.QSem.signalQSem
+  Control.Concurrent.QSem.waitQSem
+  Control.Concurrent.QSemN.newQSemN
+  Control.Concurrent.QSemN.signalQSemN
+  Control.Concurrent.QSemN.waitQSemN
+  GHC.Internal.Conc.Bound.forkOS
+  GHC.Internal.Conc.Bound.forkOSWithUnmask
+  GHC.Internal.Conc.Bound.isCurrentThreadBound
+  GHC.Internal.Conc.Bound.rtsSupportsBoundThreads
+  GHC.Internal.Conc.Bound.runInBoundThread
+  GHC.Internal.Conc.Bound.runInUnboundThread
+  GHC.Internal.Conc.IO.threadDelay
+  GHC.Internal.Conc.Sync.forkIO
+  GHC.Internal.Conc.Sync.forkIOWithUnmask
+  GHC.Internal.Conc.Sync.forkOn
+  GHC.Internal.Conc.Sync.forkOnWithUnmask
+  GHC.Internal.Conc.Sync.getNumCapabilities
+  GHC.Internal.Conc.Sync.killThread
+  GHC.Internal.Conc.Sync.mkWeakThreadId
+  GHC.Internal.Conc.Sync.myThreadId
+  GHC.Internal.Conc.Sync.setNumCapabilities
+  GHC.Internal.Conc.Sync.threadCapability
+  GHC.Internal.Conc.Sync.throwTo
+  GHC.Internal.Conc.Sync.yield
+  GHC.Internal.Control.Concurrent.MVar.addMVarFinalizer
+  GHC.Internal.Control.Concurrent.MVar.mkWeakMVar
+  GHC.Internal.Control.Concurrent.MVar.modifyMVar
+  GHC.Internal.Control.Concurrent.MVar.modifyMVarMasked
+  GHC.Internal.Control.Concurrent.MVar.modifyMVarMasked_
+  GHC.Internal.Control.Concurrent.MVar.modifyMVar_
+  GHC.Internal.Control.Concurrent.MVar.swapMVar
+  GHC.Internal.Control.Concurrent.MVar.withMVar
+  GHC.Internal.Control.Concurrent.MVar.withMVarMasked
+  GHC.Internal.MVar.isEmptyMVar
+  GHC.Internal.MVar.newEmptyMVar
+  GHC.Internal.MVar.newMVar
+  GHC.Internal.MVar.putMVar
+  GHC.Internal.MVar.readMVar
+  GHC.Internal.MVar.takeMVar
+  GHC.Internal.MVar.tryPutMVar
+  GHC.Internal.MVar.tryReadMVar
+  GHC.Internal.MVar.tryTakeMVar
+  Control.Concurrent.Chan.Chan
+  Control.Concurrent.QSem.QSem
+  Control.Concurrent.QSemN.QSemN
+  GHC.Internal.Conc.Sync.ThreadId
+  GHC.Internal.MVar.MVar
+direct module dependencies: base-4.20.2.0:Control.Concurrent.Chan

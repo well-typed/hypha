@@ -54,6 +54,7 @@ import qualified Unit.SearchReexport
 import qualified Unit.SourceInterface
 import qualified Unit.SourceExtract
 import qualified Unit.SourceLocate
+import qualified Unit.SourceOrigins
 import qualified Unit.SourceParser
 
 import Hypha.Encoding (setUtf8Encoding)
@@ -120,5 +121,6 @@ allTests = testGroup "hypha"
   , Unit.SourceInterface.tests
   , Unit.SourceExtract.tests
   , Unit.SourceLocate.tests
+  , Unit.SourceOrigins.tests
   , Unit.SourceParser.tests
   ]

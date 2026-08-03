@@ -131,6 +131,7 @@ library
     Hypha.Source.Interface
     Hypha.Source.Extract
     Hypha.Source.Locate
+    Hypha.Source.Origins
     Hypha.Source.Parser
     Hypha.Hackage.Source
     Hypha.Cabal.RepoCache
@@ -261,6 +262,7 @@ test-suite hypha-tests
     Unit.SourceInterface
     Unit.SourceExtract
     Unit.SourceLocate
+    Unit.SourceOrigins
     Unit.SourceParser
   build-depends:
     , aeson

@@ -21,6 +21,7 @@ module Hypha.Search.Indexer
   , ComponentIndex (..)
   , OutsideExport (..)
   , indexComponentPure
+  , repairUnresolved
   , componentScorerRows
     -- * Component discovery
   , componentModules
@@ -64,6 +65,7 @@ import Hypha.Source.Extensions (LanguageSettings)
 import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Source.Interface (ModuleInterface (..))
 import Hypha.Source.Interface qualified as Interface
+import Hypha.Source.Origins qualified as Origins
 import Hypha.Search.PackageCache (CacheOrigin (..))
 import Hypha.Search.PackageCache qualified as Cache
 import Hypha.Source.Parser qualified as Parser
@@ -185,12 +187,13 @@ buildAndCacheIndex
   :: BuildPlan
   -> Cache.HyphaPackageCache
   -> PackageResolver IO
+  -> Origins.OriginOracle IO            -- ^ where the compiler says exports come from
   -> ExportEnv                          -- ^ what the warm cache already supplies
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
   -> IORef.IORef Int                    -- ^ packages-done counter
   -> IO ()
-buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
+buildAndCacheIndex plan cache resolver oracle env0 pids ref doneRef =
   void (foldM indexUnit env0 (topologicalOrder plan pids))
   where
     -- Local + source-repository-package units land in the project DB;
@@ -225,10 +228,13 @@ buildAndCacheIndex plan cache resolver env0 pids ref doneRef =
           verT    = unVersion    (pkgVersion pid)
           compKey = componentKeyOf (PackageName pkgT) kind
           langs   = languageSettingsFor plan (pkgName pid) kind
+          deps    = dependencySet plan pid
       sources <- componentModules plan pid kind srcDirs
       parsed   <- Interface.parseSources langs sources
-      let ci       = indexParsedComponent compKey (dependencySet plan pid) env parsed
-          flatRows = ciRows ci
+      -- What syntax could resolve, then what only the compiler knows.
+      ci <- repairUnresolved oracle compKey pid deps env
+              (indexParsedComponent compKey deps env parsed)
+      let flatRows = ciRows ci
       reportComponentIndex compKey ci
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
@@ -268,7 +274,10 @@ indexInputsFingerprint plan pid kind = do
   srcFp <- mutableSourceFingerprint plan (pkgName pid)
   depFps <- mapM (mutableSourceFingerprint plan . pkgName) deps
   pure $ Fingerprint.hashParts $ concat
-    [ [ "v1", srcFp, unCompilerId (bpCompiler plan) ]
+    -- v2: rows now come from probing every candidate import and from the
+    -- compiler's own export origins, so a v1 component is missing rows a
+    -- rebuild would produce.
+    [ [ "v2", srcFp, unCompilerId (bpCompiler plan) ]
     , [ unVersion (pkgVersion pid) ]
     , [ Comp.renderComponentKind kind ]
     , languageFingerprint (languageSettingsFor plan (pkgName pid) kind)
@@ -383,6 +392,10 @@ data OutsideExport = OutsideExport
     -- candidate is a guess and @base@'s @Control.Concurrent@ is where
     -- that guess is always wrong.  Empty when no import could have
     -- supplied it at all — a class method has none.
+  , oeVisibility :: !Visibility
+    -- ^ The exporting module's visibility, carried so a repaired row can
+    -- be built from this record alone.  Recomputing it later would mean
+    -- re-deriving it from a module list the repair pass does not have.
   }
   deriving stock (Show, Eq, Ord)
 
@@ -406,6 +419,12 @@ data ComponentIndex = ComponentIndex
     -- component does not have.  Those names cannot be expanded, so they
     -- never reach 'ciUnresolved' either; without this field the loss is
     -- total and silent.
+  , ciOriginFailures :: ![(ModulePath, Origins.OriginError)]
+    -- ^ Modules whose compiled interface the repair pass could not read.
+    -- Empty until 'repairUnresolved' has run.  A package that was never
+    -- built has no interface files, which is ordinary and still worth
+    -- saying: it is the difference between "nothing to repair" and "we
+    -- never looked".
   }
   deriving stock (Show, Eq)
 
@@ -448,6 +467,7 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
   , ciUnresolved    = unresolved
   , ciAmbiguous     = ambiguous
   , ciExternalModuleForms = Reexport.externalModuleForms ifaces
+  , ciOriginFailures = originFailures
   }
   where
     failures   = [ (msDeclaredName ms, e) | (ms, Left e)  <- parsed ]
@@ -513,7 +533,7 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
     -- Exports whose definition is in a dependency, with every import that
     -- could have supplied them.
     outside =
-      [ OutsideExport presented name cands
+      [ OutsideExport presented name cands (visibilityFor presented)
       | ((presented, name), site) <- resolved
       , Just cands <- [outsideCandidates site]
       ]
@@ -544,11 +564,78 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
 
     unresolved = [ oe | (oe, Nothing) <- classified ]
 
+    originFailures = []
+
     ambiguous =
       [ (oe, ch)
       | (oe, Just ch) <- classified
       , not (null (ecRejected ch))
       ]
+
+-- | Resolve what syntax could not, by asking the compiler.
+--
+-- 'indexParsedComponent' can only rank a module's imports; it cannot know
+-- which one supplies a name, because an open import supplies every name
+-- syntactically.  GHC ran the renamer and wrote the answer into the
+-- module's @.hi@ file, so for each export the pure pass left unresolved
+-- we ask for the origin and re-run the same 'lookupExport' against it.
+--
+-- The signature still comes from the dependency's own indexed row, never
+-- from the interface: a @.hi@ has no source text, and a row with an
+-- invented signature is what "Hypha.Search.Reexport" exists to prevent.
+-- An origin no indexed dependency exports therefore yields no row and the
+-- export stays in the report — @Data.Bits.(.&.)@ is a class method, so
+-- @ghc-internal@ has no row for it either (issue 043).
+--
+-- One interface read per module that has unresolved exports, not per
+-- component and not per export: a warm component asks nothing at all.
+repairUnresolved
+  :: Monad m
+  => Origins.OriginOracle m
+  -> ComponentKey
+  -> PackageId                -- ^ the package whose interfaces to read
+  -> Set PackageName          -- ^ the packages a re-export may resolve through
+  -> ExportEnv
+  -> ComponentIndex
+  -> m ComponentIndex
+repairUnresolved oracle compKey pid deps env ci = do
+  attempted <- mapM askAbout (Map.toList grouped)
+  let failures = [ (m, e)  | (m, Left e)   <- attempted ]
+      answered = concat [ rs | (_, Right rs) <- attempted ]
+      repaired = Set.fromList (map fst answered)
+  pure ci
+    { ciRows           = ciRows ci ++ map (uncurry rowFor) answered
+    , ciUnresolved     = [ oe | oe <- ciUnresolved ci
+                              , not (oe `Set.member` repaired) ]
+    , ciAmbiguous      = ciAmbiguous ci
+                           ++ [ (oe, ch)
+                              | (oe, ch) <- answered
+                              , not (null (ecRejected ch)) ]
+    , ciOriginFailures = ciOriginFailures ci ++ failures
+    }
+  where
+    grouped = Map.fromListWith (++)
+      [ (oeModule oe, [oe]) | oe <- ciUnresolved ci ]
+
+    askAbout (m, oes) = do
+      answer <- Origins.moduleOrigins oracle pid m
+      pure (m, fmap (resolveAgainst oes) answer)
+
+    resolveAgainst oes mo =
+      [ (oe, ch)
+      | oe          <- oes
+      , Just origin <- [Map.lookup (oeName oe) (Origins.moOrigins mo)]
+      , Just ch     <- [lookupExport deps origin (oeName oe) env]
+      ]
+
+    rowFor oe ch = IndexRow
+      { rowComponent  = compKey
+      , rowModule     = oeModule oe
+      , rowName       = oeName oe
+      , rowSignature  = exSignature (ecChosen ch)
+      , rowDefinition = exDefinition (ecChosen ch)
+      , rowVisibility = oeVisibility oe
+      }
 
 -- | The definition module when it is inside this component, and nothing
 -- when it is not.  A list rather than a 'Maybe' so it drops straight into
@@ -581,8 +668,14 @@ reportComponentIndex compKey ci = do
   mapM_ reportUnresolved (ciUnresolved ci)
   mapM_ reportAmbiguous  (ciAmbiguous ci)
   mapM_ reportExternalForm (ciExternalModuleForms ci)
+  mapM_ reportOriginFailure (ciOriginFailures ci)
   where
     label = Text.unpack (unComponentKey compKey)
+
+    reportOriginFailure (m, e) = hPutStrLn stderr $
+      "hypha index: " <> label <> " could not read the compiled interface for "
+        <> Text.unpack (unModulePath m) <> ": "
+        <> Text.unpack (Origins.renderOriginError e)
 
     reportExternalForm (from, m) = hPutStrLn stderr $
       "hypha index: " <> label <> " re-exports module "

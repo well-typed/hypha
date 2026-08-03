@@ -1,0 +1,74 @@
+interface Data.Bits 9103
+  interface hash: ab387e82ca960b646225e4f581adf950
+  ABI hash: 1b6000cb3ce0b5e16714c51b14ffbfb9
+  export-list hash: 9a25b503d3a6407b06c4e19192a0dad7
+  orphan hash: 693e9af84d3dfcc71e640e005bdc5e2e
+  flag hash: 420663e28d16047622f9e49cb22f3b81
+  opt_hash: 5fb83f9605d5410d4dbf23f44f5cab05
+  hpc_hash: 93b885adfe0da089cdf634904fd59f71
+  plugin_hash: ad164012d6b1e14942349d58b1132007
+  src_hash: bfd61c96faa5a9e42c27c0a2e8a5d663
+  sig of: Nothing
+  used TH splices: False
+  where
+exports:
+  GHC.Internal.Bits.bitDefault
+  GHC.Internal.Bits.popCountDefault
+  GHC.Internal.Bits.testBitDefault
+  GHC.Internal.Bits.toIntegralSized
+  GHC.Internal.Data.Bits.!<<.
+  GHC.Internal.Data.Bits.!>>.
+  GHC.Internal.Data.Bits..<<.
+  GHC.Internal.Data.Bits..>>.
+  GHC.Internal.Data.Bits..^.
+  GHC.Internal.Data.Bits.oneBits
+  GHC.Internal.Bits.Bits{GHC.Internal.Bits..&. GHC.Internal.Bits..|. GHC.Internal.Bits.bit GHC.Internal.Bits.bitSize GHC.Internal.Bits.bitSizeMaybe GHC.Internal.Bits.clearBit GHC.Internal.Bits.complement GHC.Internal.Bits.complementBit GHC.Internal.Bits.isSigned GHC.Internal.Bits.popCount GHC.Internal.Bits.rotate GHC.Internal.Bits.rotateL GHC.Internal.Bits.rotateR GHC.Internal.Bits.setBit GHC.Internal.Bits.shift GHC.Internal.Bits.shiftL GHC.Internal.Bits.shiftR GHC.Internal.Bits.testBit GHC.Internal.Bits.unsafeShiftL GHC.Internal.Bits.unsafeShiftR GHC.Internal.Bits.xor GHC.Internal.Bits.zeroBits}
+  GHC.Internal.Bits.FiniteBits{GHC.Internal.Bits.countLeadingZeros GHC.Internal.Bits.countTrailingZeros GHC.Internal.Bits.finiteBitSize}
+  GHC.Internal.Data.Bits.And{GHC.Internal.Data.Bits.And GHC.Internal.Data.Bits.getAnd}
+  GHC.Internal.Data.Bits.Iff{GHC.Internal.Data.Bits.Iff GHC.Internal.Data.Bits.getIff}
+  GHC.Internal.Data.Bits.Ior{GHC.Internal.Data.Bits.Ior GHC.Internal.Data.Bits.getIor}
+  GHC.Internal.Data.Bits.Xor{GHC.Internal.Data.Bits.Xor GHC.Internal.Data.Bits.getXor}
+direct module dependencies:
+boot module dependencies:
+direct package dependencies: ghc-internal-9.1003.0
+plugin package dependencies:
+trusted package dependencies: ghc-internal-9.1003.0
+orphans: GHC.Internal.Base GHC.Internal.Float GHC.Prim.Ext
+family instance modules:
+import safe GHC.Internal.Bits c78ef61a8a1daee532f4120762676225
+import safe GHC.Internal.Data.Bits d09c3564f69c6c41ac5a6387c85e2749
+2328f093e79351f20f1f00e2836ae158
+  $trModule :: GHC.Types.Module
+  [HasNoCafRefs, TagSig: <TagProper>,
+   LambdaFormInfo: LFCon[GHC.Types.Module],
+   Unfolding: Core: <vanilla> GHC.Types.Module $trModule3 $trModule1]
+125a1feb38b2485cd097390c5f0b3141
+  $trModule1 :: GHC.Types.TrName
+  [HasNoCafRefs, TagSig: <TagProper>,
+   LambdaFormInfo: LFCon[GHC.Types.TrNameS],
+   Unfolding: Core: <vanilla> GHC.Types.TrNameS $trModule2]
+e878157b106cd1507d5364d5253a38cc
+  $trModule2 :: GHC.Prim.Addr#
+  [HasNoCafRefs, LambdaFormInfo: LFUnlifted,
+   Unfolding: Core: <vanilla> "Data.Bits"#]
+422879f2b4994a729ca7533380893f94
+  $trModule3 :: GHC.Types.TrName
+  [HasNoCafRefs, TagSig: <TagProper>,
+   LambdaFormInfo: LFCon[GHC.Types.TrNameS],
+   Unfolding: Core: <vanilla> GHC.Types.TrNameS $trModule4]
+d6878563e39341d89d98b40dabe8d3fc
+  $trModule4 :: GHC.Prim.Addr#
+  [HasNoCafRefs, LambdaFormInfo: LFUnlifted,
+   Unfolding: Core: <vanilla> "base"#]
+Warnings:
+  Deprecated names:
+  Deprecated exports:
+trusted: safe
+require own pkg trusted: False
+docs:
+  Just module header:
+         Just text:
+                -- |
+--
+-- Module      :  Data.Bits
+-- Copyright   :  (c) The University of Glasgow 2001

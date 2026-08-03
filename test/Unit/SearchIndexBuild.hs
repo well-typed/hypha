@@ -12,6 +12,7 @@ module Unit.SearchIndexBuild (tests) where
 
 import           Data.Containers.ListUtils (nubOrd)
 import           Data.List (sort)
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 
@@ -23,10 +24,12 @@ import Hypha.Search.Fuzzy (Entity (..), IndexedRow (..))
 import Hypha.Search.Index (DefinitionRef (..), IndexRow (..), Visibility (..))
 import Hypha.Search.Indexer
   ( ComponentIndex (..), OutsideExport (..), componentScorerRows
-  , indexComponentPure )
+  , indexComponentPure, repairUnresolved )
 import Hypha.Source.Extensions (defaultLanguageSettings)
+import Hypha.Source.Origins
+  ( ModuleOrigins (..), OriginError (..), OriginOracle (..) )
 import Hypha.Types.ComponentName (ComponentKey (..))
-import Hypha.Types.PackageId (PackageName (..))
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import Util.Fixture (depSources, fixtureSources, sourcesFor)
 import Util.Row (envFromRows)
@@ -55,6 +58,37 @@ depIndex = do
 
 rowsFor :: ComponentIndex -> Text.Text -> [IndexRow]
 rowsFor ci n = [ r | r <- ciRows ci, rowName r == SymbolName n ]
+
+-- | The fixture whose export no import can account for, with its
+-- dependency already indexed.
+blindIndex :: IO ComponentIndex
+blindIndex = do
+  srcs <- sourcesFor
+    [ ("test/fixtures/reexport/src/Fixture/Blind.hs", "Fixture.Blind", Exposed) ]
+  dep  <- depIndex
+  pure (indexComponentPure (ComponentKey "reexport") reexportDeps
+          (envFromRows (ciRows dep)) defaultLanguageSettings srcs)
+
+-- | Run the repair pass over an index, against the same environment the
+-- pure pass had.
+repairedWith :: OriginOracle IO -> ComponentIndex -> IO ComponentIndex
+repairedWith oracle ci = do
+  dep <- depIndex
+  repairUnresolved oracle (ComponentKey "reexport")
+    (PackageId (PackageName "reexport") (Version "0.1"))
+    reexportDeps (envFromRows (ciRows dep)) ci
+
+-- | An oracle that answers from a table, and refuses anything else --
+-- rather than returning an empty export list, which would read as "this
+-- module exports nothing" and quietly repair nothing.
+stubOracle
+  :: [(ModulePath, Either OriginError [(SymbolName, ModulePath)])]
+  -> OriginOracle IO
+stubOracle table = OriginOracle $ \_ m ->
+  pure $ case lookup m table of
+    Just (Right pairs) -> Right (ModuleOrigins (Map.fromList pairs))
+    Just (Left e)      -> Left e
+    Nothing            -> Left (OriginNotAnInterface (unModulePath m))
 
 tests :: TestTree
 tests = testGroup "Unit.SearchIndexBuild"
@@ -179,6 +213,7 @@ tests = testGroup "Unit.SearchIndexBuild"
                 { oeModule     = ModulePath "Fixture.Imported"
                 , oeName       = SymbolName "depThing"
                 , oeCandidates = [ModulePath "Dep.Internal"]
+                , oeVisibility = Exposed
                 } ]
 
   , testCase "an export resolves past an import that cannot supply it" $ do
@@ -225,6 +260,54 @@ tests = testGroup "Unit.SearchIndexBuild"
       rowsFor ci "klassMethod" @?= []
       assertBool ("expected klassMethod in " <> show (ciUnresolved ci))
         (SymbolName "klassMethod" `elem` map oeName (ciUnresolved ci))
+
+  , testCase "an export no import explains is repaired from the interface" $ do
+      -- Fixture.Blind's only import has no depThing, and the module that
+      -- declares it is never named in the source.  Syntax has nothing
+      -- left to try; GHC's own interface file says where it comes from.
+      ci  <- blindIndex
+      ci' <- repairedWith
+               (stubOracle
+                  [ ( ModulePath "Fixture.Blind"
+                    , Right [(SymbolName "depThing", ModulePath "Dep.Internal")] ) ])
+               ci
+      map oeName (ciUnresolved ci) @?= [SymbolName "depThing"]
+      case rowsFor ci' "depThing" of
+        [r] -> do
+          rowDefinition r @?= DefinitionRef (ComponentKey "reexport-dep")
+                                            (ModulePath "Dep.Internal")
+          -- The signature comes from the dependency's own row, not from
+          -- the interface: a .hi carries no source text.
+          rowSignature r  @?= Signature "depThing :: Int -> Int"
+        other -> fail ("expected one repaired row, got " <> show (length other))
+      ciUnresolved ci' @?= []
+
+  , testCase "an interface we cannot read leaves the export unresolved" $ do
+      -- A package that has not been built has no .hi.  The export stays
+      -- in the unresolved report and the reason travels with it; a
+      -- swallowed failure would read as "this module exports nothing".
+      ci  <- blindIndex
+      let missing = OriginIfaceMissing
+                      (PackageId (PackageName "reexport") (Version "0.1"))
+                      (ModulePath "Fixture.Blind") ["nowhere/Fixture/Blind.hi"]
+      ci' <- repairedWith
+               (stubOracle [(ModulePath "Fixture.Blind", Left missing)]) ci
+      rowsFor ci' "depThing" @?= []
+      map oeName (ciUnresolved ci') @?= [SymbolName "depThing"]
+      ciOriginFailures ci' @?= [(ModulePath "Fixture.Blind", missing)]
+
+  , testCase "an origin no dependency exports is not invented" $ do
+      -- The interface names a module, and the index has no row for that
+      -- (module, name) -- an unindexed class method, say.  There is no
+      -- signature to give, so there is no row to write.
+      ci  <- blindIndex
+      ci' <- repairedWith
+               (stubOracle
+                  [ ( ModulePath "Fixture.Blind"
+                    , Right [(SymbolName "depThing", ModulePath "Dep.Unindexed")] ) ])
+               ci
+      rowsFor ci' "depThing" @?= []
+      map oeName (ciUnresolved ci') @?= [SymbolName "depThing"]
 
   , testCase "the package row is not emitted once per component" $ do
       -- componentScorerRows is per component; a package is not a
