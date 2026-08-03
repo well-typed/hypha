@@ -215,6 +215,12 @@ indented l = Text.null (Text.strip l) || Text.isPrefixOf " " l
 splitQualified :: Text -> [(SymbolName, Maybe ModulePath)]
 splitQualified entry
   | Text.null entry = []
+  -- A parent GHC marks with a trailing bar is not itself exported: it
+  -- writes @IsString{fromString}@ when the class is exported and
+  -- @IsString|{fromString}@ when only the method is, which is how
+  -- @Data.ListLike@ re-exports @fromString@ alone.  Recording it would
+  -- invent an export named @IsString|@ that no module has.
+  | Text.isSuffixOf "|" entry = []
   | otherwise = case go [] (Text.splitOn "." entry) of
       ([], name)   -> [(SymbolName name, Nothing)]
       (modSegs, name)

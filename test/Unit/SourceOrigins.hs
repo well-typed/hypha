@@ -131,6 +131,27 @@ tests = testGroup "Unit.SourceOrigins"
           @?= Just ( ModulePath "Language.Haskell.Syntax.Binds"
                        :| [ModulePath "Language.Haskell.Syntax.Extension"] )
 
+  , testCase "a class exported only through its methods is not an export" $ do
+      -- Real: Data.ListLike re-exports fromString without IsString, and
+      -- ghc marks the unexported parent with a bar.  Taken literally it
+      -- becomes an export named "IsString|", which no module has and
+      -- nothing can ever resolve.  Data.String, which does export the
+      -- class, prints the same line without the bar.
+      let dump = Text.unlines
+            [ "interface Data.ListLike 9103"
+            , "exports:"
+            , "  GHC.Internal.Data.String.IsString|{GHC.Internal.Data.String.fromString}"
+            , "  GHC.Internal.Data.String.IsString{GHC.Internal.Data.String.fromString}"
+            , "direct module dependencies: base:Data.String"
+            ]
+      case parseShowIface dump of
+        Left e   -> fail ("parse failed: " <> show e)
+        Right mo -> do
+          Map.keys (moOrigins mo)
+            @?= [SymbolName "IsString", SymbolName "fromString"]
+          Map.lookup (SymbolName "fromString") (moOrigins mo)
+            @?= only "GHC.Internal.Data.String"
+
   , testCase "the real oracle reads a real interface off disk" $ do
       -- Everything above tests the parser against captured text, and the
       -- indexer's own tests drive a stub.  Nothing else runs the
