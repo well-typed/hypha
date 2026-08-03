@@ -735,8 +735,36 @@ processOutcome opts outcome = do
       envOpts = envelopeOptsFor opts
       envelope = encodeOutcomeEnvelope envOpts
                    (compactKeysFor cmd) (fullKeysFor cmd) outcome
+  warnUnmatchedSelect cmd envOpts outcome
   emitEnvelope opts envelope
   System.exitWith System.ExitSuccess
+
+-- | Report the @--select@ names this command cannot answer.
+--
+-- Without this the projection just drops them: @--select bogus@, or a
+-- field of some other command, leaves @result: {}@ and exit 0, which
+-- reads as "this symbol has no fields" rather than "you named a field
+-- that does not exist here".  The names that /would/ have worked come
+-- along so the fix is in the message.
+--
+-- Not silenced by @--quiet@: it reports a mistake in the invocation, not
+-- progress chatter, and an agent that never sees it repeats the call.
+warnUnmatchedSelect :: ClientCommandTag -> EnvelopeOpts -> Outcome Value -> IO ()
+warnUnmatchedSelect cmd envOpts outcome =
+  case unmatchedSelect envOpts (compactKeysFor cmd) (fullKeysFor cmd) outcome of
+    ([], _) -> pure ()
+    (missed, available) ->
+      hPutStrLn stderr . Text.unpack $
+        "warning: --select names no field of '" <> clientCommandName cmd <> "': "
+        <> Text.intercalate ", " missed
+        <> "; this command answers with "
+        <> renderAvailable available
+  where
+    renderAvailable ks
+      | Set.null ks = "no fields at all"
+      | otherwise   =
+          Text.intercalate ", " (Set.toAscList ks)
+          <> if eoFull envOpts then "" else " (more under --full)"
 
 -- | Emit a 'HyphaError' as a JSON error envelope on stdout, a one-line
 -- @CODE: message@ on stderr, then exit with the typed code.

@@ -152,9 +152,16 @@ writeFingerprint c pkg ver fp = withWrite c $ executeNamed (icConn c)
   [":p" := pkg, ":v" := ver, ":f" := fp]
 
 -- | Look up every row whose @name@ matches the given symbol.  When
--- the caller supplies a module qualifier, filter by @mod@ too.  This
--- is the SQL-only primitive; 'Hypha.Search.PackageCache.lookupByName'
--- handles qualified-name parsing and project-shadows-global merging.
+-- the caller supplies a module qualifier, filter by @mod@ too.  Rows
+-- come back ordered by @(pkg, mod, version DESC)@ so a name several
+-- packages declare answers with a stable candidate list, independent of
+-- insertion order.  @version@ is part of the key because it is the only
+-- remaining column that distinguishes two rows the cache can hold at
+-- once — a package indexed at two versions has a row per version, and
+-- without it those tie and fall back to SQLite's unstable sort.
+-- Descending so the newest version leads.  This is the SQL-only primitive;
+-- 'Hypha.Search.PackageCache.lookupByName' handles qualified-name
+-- parsing and project-shadows-global merging.
 lookupRowsByName
   :: IndexCache
   -> Text                                  -- ^ symbol name
@@ -163,12 +170,13 @@ lookupRowsByName
 lookupRowsByName c name mMod = (reportAnomalies . map fromStored =<<) $ case mMod of
   Nothing ->
     queryNamed (icConn c)
-      (Query ("SELECT " <> rowColumns <> " FROM pkg_index WHERE name = :n"))
+      (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
+              \WHERE name = :n ORDER BY pkg, mod, version DESC"))
       [":n" := name]
   Just modT ->
     queryNamed (icConn c)
       (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
-              \WHERE name = :n AND mod = :m"))
+              \WHERE name = :n AND mod = :m ORDER BY pkg, mod, version DESC"))
       [":n" := name, ":m" := modT]
 
 -- | Every row a component's module presents, whatever the version.

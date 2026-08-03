@@ -23,6 +23,26 @@ parse. `--json` switches to a JSON envelope for machine pipelines;
 
 - **`--full`** includes every field the command can produce.
 - **`--select`** trims the output to just the fields you name, e.g.
-  `--select signature,haddock`. Great for keeping token cost down.
+  `hypha symbol … --select signature,haddock`. Great for keeping token
+  cost down. The short spellings `sig` and `haddock` mean the same fields
+  (they are aliases for `signature` and `haddock_raw`), so
+  `--select sig,haddock` works too.
+
+  It names *top-level result* fields, so which names are valid depends on
+  the command: `signature` and `haddock_raw` are `hypha symbol`'s. A name
+  no command produces selects nothing — `hypha lookup … --select sig`
+  answers with an empty result, because `lookup`'s signatures live one
+  level down, inside each entry of `providers`. `lookup`'s own top-level
+  fields are `query` and `providers` (plus `tiers_consulted` under
+  `--full`), and its default output is already compact.
+
+  You do not have to guess: a name the command cannot answer is reported
+  on stderr, along with the ones it can.
+
+  ```console
+  $ hypha lookup encode --select sig
+  warning: --select names no field of 'lookup': signature; this command
+  answers with providers, query (more under --full)
+  ```
 
 See [Caching](caching.md) for what `--cache-dir` and `--offline` control.

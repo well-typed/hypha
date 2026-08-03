@@ -121,6 +121,25 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`--select sig,haddock` no longer returns an empty result.** The
+  documented short spellings are aliases for the wire field names
+  (`sig` → `signature`, `haddock` → `haddock_raw`), so the invocation
+  the skill docs and the MCP schema recommend now keeps the signature
+  and the haddock instead of projecting a key that does not exist
+  (issue 6). Both spellings work.
+- **`hypha lookup` answers with a stable candidate order.** The cache
+  query is now ordered by `(pkg, mod, version DESC)`, so a name several
+  packages declare comes back the same way every time rather than in
+  insertion order. The order is alphabetical by package, not a relevance
+  ranking — `HTTP` precedes `aeson` — so it buys reproducibility, not a
+  better first candidate (issue 6).
+- **`--select` says so when it cannot answer.** A field name the command
+  does not produce — a typo, a field of a different command, or one that
+  only exists under `--full` — used to be dropped in silence, leaving
+  `result: {}` and exit 0. It now warns on stderr, naming the fields the
+  command *does* answer. Exit code and output shape are unchanged
+  (issue 6).
+
 - **Conditional cabal stanzas are read.** `if`/`elif`/`else` branches were
   discarded, so `base` contributed no `GHC.Event` and no
   `System.CPUTime.Posix.*` on any non-Windows machine — both are declared
