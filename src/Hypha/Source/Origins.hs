@@ -49,6 +49,7 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), (<.>))
+import System.FilePath qualified as FP
 import System.Process (readProcessWithExitCode)
 
 import Hypha.Types.BuildPlan (CompilerId (..))
@@ -180,6 +181,10 @@ splitQualified entry
 
 -- | A capitalised, alphanumeric segment: what a module path is made of,
 -- and what an operator never is.
+--
+-- The dot is a module character because this answers the question for a
+-- whole path as well as for one segment — 'interfaceModule' asks about
+-- @Control.Concurrent@, 'splitQualified' about @Control@.
 looksLikeModule :: Text -> Bool
 looksLikeModule s = case Text.uncons s of
   Just (c, _) -> c `elem` ['A' .. 'Z'] && Text.all isModuleChar s
@@ -271,10 +276,14 @@ firstExisting (p : ps) = do
   ok <- doesFileExist p
   if ok then pure (Just p) else firstExisting ps
 
--- | @Data.Map.Strict@ to @Data/Map/Strict@, the layout @.hi@ files use.
+-- | @Data.Map.Strict@ to @Data\/Map\/Strict@, the layout @.hi@ files use.
+--
+-- Through 'joinPath', which is total and knows the platform separator:
+-- @foldr1 (\<\/\>)@ is neither, and rewriting @\'.\'@ to @\'\/\'@ by hand
+-- is the shape of the Windows bug in issue #10.
 modulePathFile :: ModulePath -> FilePath
 modulePathFile =
-  foldr1 (</>) . map Text.unpack . Text.splitOn "." . unModulePath
+  FP.joinPath . map Text.unpack . Text.splitOn "." . unModulePath
 
 -- | The cabal store package databases for a compiler.
 --
