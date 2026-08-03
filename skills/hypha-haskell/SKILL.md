@@ -50,7 +50,10 @@ flows.
 - **Default output is compact YAML.** Read it directly; do not pipe to
   `jq` or `yq` unless you genuinely need a sub-selection.
 - `--select sig,haddock` — return only the listed fields. Use this when
-  you only want the type signature, or only the docs.
+  you only want the type signature, or only the docs. Names the *result*
+  fields, so it varies per command: those two are `hypha symbol` fields.
+  `hypha lookup` has no top-level `sig` — its signatures live inside each
+  entry of `providers`, and its default output is already compact.
 - `--full` — opt into the heavier payload (full Haddock prose, all
   fields). Use sparingly; only when `--select` cannot express what you
   need.
@@ -81,8 +84,11 @@ If the user says "the `lookup` in `Data.Map`", resolve it via
 **"What's the type of X?"**
 
 ```bash
-hypha lookup X --select sig
+hypha lookup X
 ```
+
+The default output is already compact: the query plus one `sig` per
+candidate provider.
 
 **"Show me the Haddock for `aeson`'s `encode`."**
 
@@ -140,7 +146,7 @@ string.
 
 ```json
 {"args": ["lookup", "filterM"]}
-{"args": ["lookup", "a -> Maybe a", "--select", "sig"]}
+{"args": ["lookup", "a -> Maybe a"]}
 {"args": ["symbol", "aeson/Data.Aeson/encode", "--select", "sig,haddock"]}
 {"args": ["source", "containers/Data.Map.Strict/insert"]}
 ```

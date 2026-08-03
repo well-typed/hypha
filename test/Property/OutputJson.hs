@@ -20,7 +20,8 @@ import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Types.PackageId (PackageName (..))
 import Hypha.Output.Json
   ( ToOutcomeJson (..), encodeSuccessEnvelope, encodeErrorEnvelope
-  , filterSelect, objectKeys )
+  , filterSelect, objectKeys, parseSelectList
+  , EnvelopeOpts (..), defaultEnvelopeOpts, unmatchedSelect )
 import Hypha.Output.Outcome (successOutcome)
 
 -------------------------------------------------------------------------------
@@ -115,6 +116,9 @@ tests = testGroup "OutputJson"
   , testCase "encodeErrorEnvelope produces valid failure envelope"      testFailureEnvelope
   , testCase "filterSelect keeps only listed top-level keys"            testFilterSelect
   , testCase "filterSelect empty list is identity"                      testFilterSelectNoop
+  , testCase "select aliases canonicalize to the wire field names"      testSelectAliases
+  , testCase "aliased select keeps the aliased fields"                  testSelectAliasesProject
+  , testCase "a select name the command cannot answer is reported"      testUnmatchedSelect
   ]
 
 testSuccessEnvelope :: IO ()
@@ -146,3 +150,52 @@ testFilterSelectNoop = do
       env     = encodeSuccessEnvelope outcome
       filtered = filterSelect [] env
   filtered @?= env
+
+testSelectAliases :: IO ()
+testSelectAliases = do
+  -- The skill docs and the MCP schema tell agents to pass
+  -- @--select sig,haddock@; the result fields are spelled @signature@
+  -- and @haddock_raw@.  Both spellings must mean the same fields, or
+  -- the documented invocation returns an empty @result: {}@.
+  parseSelectList "sig,haddock" @?= ["signature", "haddock_raw"]
+  parseSelectList "signature,haddock_raw" @?= ["signature", "haddock_raw"]
+  parseSelectList "name, sig" @?= ["name", "signature"]
+  parseSelectList "" @?= []
+
+testUnmatchedSelect :: IO ()
+testUnmatchedSelect = do
+  -- Without this report the projection just drops a name it cannot
+  -- satisfy, so a typo — or a field that only exists under --full, or
+  -- one belonging to a different command — answers @result: {}@ with
+  -- exit 0 and no explanation.
+  let card     = SymbolCard "x" "fn" "p" "1.0" "M"
+                   (Just "x :: Int") (Just " doc") Nothing
+      compactK = Set.fromList ["name", "kind", "package", "version", "module"]
+      fullK    = Set.union compactK (Set.fromList ["signature", "haddock_raw"])
+      ask sel full =
+        unmatchedSelect
+          defaultEnvelopeOpts { eoSelect = parseSelectList sel, eoFull = full }
+          compactK fullK
+          (successOutcome SymbolCmd
+             (if full then toFullJSON card else toCompactJSON card))
+
+  -- A field the command does answer: nothing to report.
+  fst (ask "name" False) @?= []
+
+  -- A name no command produces, alongside a good one: only the bad one.
+  ask "name,bogus" False @?= (["bogus"], compactK)
+
+  -- A real field that this field set does not carry.  `sig` canonicalises
+  -- to `signature`, which lives in the full set only, so asking for it
+  -- without --full is a miss and the report says so in wire spelling.
+  ask "sig" False @?= (["signature"], compactK)
+
+  -- Same request under --full lands.
+  fst (ask "sig" True) @?= []
+
+testSelectAliasesProject :: IO ()
+testSelectAliasesProject = do
+  let result = toFullJSON (SymbolCard "x" "fn" "p" "1.0" "M"
+                            (Just "x :: Int") (Just " doc") Nothing)
+      kept   = objectKeys (filterSelect (parseSelectList "sig,haddock") result)
+  kept @?= Set.fromList ["signature", "haddock_raw"]

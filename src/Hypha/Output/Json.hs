@@ -15,6 +15,7 @@ module Hypha.Output.Json
   , restrictBody
   , objectKeys
   , parseSelectList
+  , unmatchedSelect
   ) where
 
 import Data.Aeson
@@ -22,6 +23,7 @@ import qualified Data.Aeson.Encode.Pretty as AesonPretty
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
+import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -145,6 +147,27 @@ projectOutcome opts compact full oc =
                 ks -> restrictKeys (Set.fromList ks) step1
   in oc { outcomeResult = step2 }
 
+-- | The @--select@ names this outcome cannot answer, paired with the
+-- names it can.
+--
+-- 'projectOutcome' intersects the request with what the command
+-- produced, so a name no command produces — a typo, or a field of a
+-- different command — quietly projects nothing and the user is handed
+-- @result: {}@ with a success exit code and no clue why.  That is the
+-- defect the @sig@/@haddock@ aliases were two instances of; reporting
+-- the miss covers the rest of the class, including fields that are real
+-- but only under @--full@.
+--
+-- Pure so the caller decides how to surface it; an empty first
+-- component means every requested name landed on a field.
+unmatchedSelect
+  :: EnvelopeOpts -> Set Text -> Set Text -> Outcome Value -> ([Text], Set Text)
+unmatchedSelect opts compact full oc =
+  let keep      = if eoFull opts then full else compact
+      available = Set.intersection keep (objectKeys (outcomeResult oc))
+      missed    = filter (`Set.notMember` available) (eoSelect opts)
+  in (missed, available)
+
 -- | Internal: keep only the listed keys at the top level of an 'Object'.
 -- Pass-through on non-objects so primitive results are not silently dropped.
 restrictKeys :: Set Text -> Value -> Value
@@ -171,7 +194,30 @@ objectKeys :: Value -> Set Text
 objectKeys (Object obj) = Set.fromList (map Key.toText (KM.keys obj))
 objectKeys _            = Set.empty
 
--- | Split a comma-separated select-list, trimming whitespace and dropping
--- empty entries.
+-- | Split a comma-separated select-list, trimming whitespace, dropping
+-- empty entries, and canonicalising aliases to the wire field names.
+--
+-- The result fields of a symbol card are spelled @signature@ and
+-- @haddock_raw@, but the skill docs and the MCP schema tell agents to
+-- pass @--select sig,haddock@.  Before the aliases, that documented
+-- invocation kept a key that does not exist and returned an empty
+-- @result: {}@ — the projection had nothing to keep.  Both spellings
+-- now mean the same fields.
 parseSelectList :: Text -> [Text]
-parseSelectList = filter (not . Text.null) . map Text.strip . Text.splitOn ","
+parseSelectList =
+  map canonicalizeSelectField
+    . filter (not . Text.null)
+    . map Text.strip
+    . Text.splitOn ","
+
+-- | The select aliases: short doc'd names for the wire fields.
+selectFieldAliases :: [(Text, Text)]
+selectFieldAliases =
+  [ ("sig", "signature")
+  , ("haddock", "haddock_raw")
+  ]
+
+-- | Map a user-supplied field name to the wire field, leaving
+-- anything that is not an alias (and any real field name) unchanged.
+canonicalizeSelectField :: Text -> Text
+canonicalizeSelectField f = fromMaybe f (lookup f selectFieldAliases)

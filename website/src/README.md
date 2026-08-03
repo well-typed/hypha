@@ -14,9 +14,9 @@ follow-up question. Both are expensive.
 `hypha` exists to make Haskell knowledge **cheap to consume**:
 
 - **Token economy.** Every command emits compact, structured **YAML** by
-  default (or `--json` for machine pipelines). No HTML. Use
-  `--select sig,haddock` to drop the fields you don't need; use `--full`
-  only when you do.
+  default (or `--json` for machine pipelines). No HTML. Use `--select` to
+  drop the fields you don't need — `hypha symbol … --select sig,haddock`
+  for just the type and the docs — and `--full` only when you do.
 - **Cache-aggressive, Hackage-friendly.** Network responses are cached on
   disk with ETag + `If-Modified-Since` revalidation. The same project
   re-queried a thousand times produces a small handful of HTTP requests.

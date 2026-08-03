@@ -60,7 +60,7 @@ hyphaOptionsParser = HyphaOptions
   <*> optional (strOption
         ( long "select"
        <> metavar "FIELDS"
-       <> help "Post-filter output to listed fields"
+       <> help "Post-filter output to listed fields (sig→signature, haddock→haddock_raw)"
         ))
   <*> switch
         ( long "quiet"
