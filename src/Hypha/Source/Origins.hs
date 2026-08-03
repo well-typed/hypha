@@ -39,30 +39,44 @@ module Hypha.Source.Origins
 
 import Control.Exception.Safe (IOException, try)
 import Data.IORef qualified as IORef
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.IO qualified as TIO
+import GHC.IO.Encoding.Failure (CodingFailureMode (RoundtripFailure))
+import GHC.IO.Encoding.UTF8 (mkUTF8)
 import System.Directory
   ( doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory )
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), (<.>))
 import System.FilePath qualified as FP
-import System.Process (readProcessWithExitCode)
+import System.IO (Handle, hIsEOF, hSetEncoding)
+import System.Process qualified as Process
 
 import Hypha.Types.BuildPlan (CompilerId (..))
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), Version (..) )
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 
--- | The defining module of each name a compiled module exports.
+-- | The defining modules of each name a compiled module exports.
 --
 -- Keyed by the exported name because that is the question every caller
 -- has: /this module exports @x@ — who declares it?/
+--
+-- The value is a 'NonEmpty' because one module can export one name from
+-- two places: ghc's own @GHC@ exports @XFixitySig@ from both
+-- @Language.Haskell.Syntax.Binds@ and @…Extension@.  Keeping one would be
+-- the same "first candidate wins" mistake the resolver was cured of — if
+-- the kept origin has no indexed row and the dropped one does, the export
+-- stays unresolved for no reason.
 newtype ModuleOrigins = ModuleOrigins
-  { moOrigins :: Map SymbolName ModulePath }
+  { moOrigins :: Map SymbolName (NonEmpty ModulePath) }
   deriving stock (Show, Eq)
 
 -- | Everything that can stop us answering, carried as itself so the
@@ -82,9 +96,17 @@ data OriginError
     -- ^ The dump carried no @interface \<module\>@ header, so whatever we
     -- read was not an interface at all.  Never degraded to "this module
     -- exports nothing": that would delete every export instead.
-  | OriginCompilerMismatch !CompilerId !Text
-    -- ^ The @ghc@ we found is not the one the plan was solved with, so
-    -- its interface files would not be readable anyway.
+  | OriginNoExportSection !ModulePath
+    -- ^ A header we understood, and no @exports:@ section after it.  The
+    -- other door to the same lie, and distinct from a section that is
+    -- present and empty — @GHC.Constants@ really has one of those.
+  | OriginCompilerMissing !CompilerId ![Text]
+    -- ^ No reachable @ghc@ matches the plan's compiler; the field lists
+    -- what each candidate answered.  Its interface format would differ,
+    -- so reading its @.hi@ files is not a degraded answer but no answer.
+  | OriginStoreUnreadable !FilePath !Text
+    -- ^ A package-database root we could not list.  Every package under
+    -- it then reports as "not built", which is the wrong cause.
   deriving stock (Show, Eq)
 
 -- | Render an 'OriginError' for a stderr report.  The only place these
@@ -99,9 +121,15 @@ renderOriginError = \case
   OriginToolFailed cmd code err ->
     cmd <> " exited " <> Text.pack (show code) <> ": " <> Text.strip err
   OriginNotAnInterface what ->
-    "not an interface dump: " <> Text.strip (Text.take 200 what)
-  OriginCompilerMismatch (CompilerId want) got ->
-    "the ghc on PATH is " <> Text.strip got <> ", the plan wants " <> want
+    "not an interface dump: " <> Text.strip what
+  OriginNoExportSection m ->
+    "the interface for " <> unModulePath m <> " has no exports section"
+  OriginCompilerMissing (CompilerId want) tried ->
+    "no ghc matching " <> want <> " is reachable (tried "
+      <> Text.intercalate ", " tried <> ")"
+  OriginStoreUnreadable root err ->
+    "cannot list the package databases under " <> Text.pack root <> ": "
+      <> Text.strip err
 
 renderPkg :: PackageId -> Text
 renderPkg pid = unPackageName (pkgName pid) <> "-" <> unVersion (pkgVersion pid)
@@ -118,19 +146,33 @@ newtype OriginOracle m = OriginOracle
 -- Parsing ------------------------------------------------------------
 
 -- | Read the @exports:@ section of a @ghc --show-iface@ dump.
+parseShowIface :: Text -> Either OriginError ModuleOrigins
+parseShowIface = parseShowIfaceLines . Text.lines
+
+-- | 'parseShowIface' over lines the caller already has.
 --
 -- GHC prints an export qualified by its defining module, and unqualified
 -- when that module is the interface's own — so the header line is load
 -- bearing, not decoration.
-parseShowIface :: Text -> Either OriginError ModuleOrigins
-parseShowIface dump = case interfaceModule (Text.lines dump) of
-  Nothing -> Left (OriginNotAnInterface dump)
-  Just self -> Right . ModuleOrigins . Map.fromList $
-    [ (name, origin)
-    | entry      <- exportEntries (Text.lines dump)
+parseShowIfaceLines :: [Text] -> Either OriginError ModuleOrigins
+parseShowIfaceLines ls = do
+  self <- maybe (Left notAnInterface) Right (interfaceModule ls)
+  body <- maybe (Left (OriginNoExportSection self)) Right (exportSection ls)
+  -- 'flip' so the earlier origin stays first: the dump's order is GHC's
+  -- own, and the caller probes these in order.  Deduplicated because one
+  -- entry can name the same origin twice — @ModuleOrigins{ModuleOrigins
+  -- moOrigins}@ is a type and a constructor of one name — and a repeated
+  -- origin is one origin, not a second thing to try.
+  pure . ModuleOrigins . Map.map NE.nub . Map.fromListWith (flip (<>)) $
+    [ (name, fromMaybe self mo :| [])
+    | entry      <- body
     , (name, mo) <- splitQualified entry
-    , let origin = maybe self id mo
     ]
+  where
+    -- Truncated here rather than at the report: the constructor would
+    -- otherwise retain the whole dump, and one of those is 12 MB.
+    notAnInterface =
+      OriginNotAnInterface (Text.take 200 (Text.unlines (take 3 ls)))
 
 -- | The module an interface dump is for: @interface Control.Concurrent 9103@.
 interfaceModule :: [Text] -> Maybe ModulePath
@@ -142,19 +184,24 @@ interfaceModule ls = listToMaybe
   , looksLikeModule m
   ]
 
--- | Every name listed under @exports:@, class subordinates included.
+-- | Every name listed under @exports:@, class subordinates included, or
+-- 'Nothing' when there is no such section.
 --
 -- The section ends at the next unindented @field:@ line — @direct module
 -- dependencies:@ follows it and is full of module-shaped words, every one
 -- of which would otherwise become an export that does not exist.
-exportEntries :: [Text] -> [Text]
-exportEntries ls =
-  concatMap (Text.words . Text.map unbrace) (takeWhile indented body)
+exportSection :: [Text] -> Maybe [Text]
+exportSection ls = case break (== "exports:") ls of
+  (_, [])        -> Nothing
+  (_, _ : after) ->
+    Just (concatMap (Text.words . Text.map unbrace) (takeWhile indented after))
   where
-    body   = drop 1 (dropWhile (/= "exports:") ls)
-    -- The listing is indented; a new section is not.
-    indented l = Text.null (Text.strip l) || Text.isPrefixOf " " l
     unbrace c = if c == '{' || c == '}' then ' ' else c
+
+-- | A line that continues a section rather than starting the next one.
+-- The listing is indented; a new field is not.
+indented :: Text -> Bool
+indented l = Text.null (Text.strip l) || Text.isPrefixOf " " l
 
 -- | Split @GHC.Internal.Conc.Bound.isCurrentThreadBound@ into its module
 -- and its name, and report 'Nothing' for a bare name.
@@ -176,8 +223,8 @@ splitQualified entry
             [(SymbolName name, Just (ModulePath (Text.intercalate "." modSegs)))]
   where
     go acc = \case
-      (s : rest@(_ : _)) | looksLikeModule s -> go (acc ++ [s]) rest
-      rest                                   -> (acc, Text.intercalate "." rest)
+      (s : rest@(_ : _)) | looksLikeModule s -> go (s : acc) rest
+      rest -> (reverse acc, Text.intercalate "." rest)
 
 -- | A capitalised, alphanumeric segment: what a module path is made of,
 -- and what an operator never is.
@@ -187,62 +234,78 @@ splitQualified entry
 -- @Control.Concurrent@, 'splitQualified' about @Control@.
 looksLikeModule :: Text -> Bool
 looksLikeModule s = case Text.uncons s of
-  Just (c, _) -> c `elem` ['A' .. 'Z'] && Text.all isModuleChar s
+  Just (c, _) -> isAsciiUpper c && Text.all isModuleChar s
   Nothing     -> False
   where
     isModuleChar c =
-      c `elem` ['A' .. 'Z'] || c `elem` ['a' .. 'z']
-        || c `elem` ['0' .. '9'] || c == '_' || c == '\'' || c == '.'
+      isAsciiUpper c || isAsciiLower c || isDigit c
+        || c == '_' || c == '\'' || c == '.'
 
 -- Asking GHC ---------------------------------------------------------
 
--- | An oracle backed by the @ghc@ and @ghc-pkg@ of the plan's compiler.
+-- | The @ghc@ and @ghc-pkg@ of one installation, named together so a
+-- skewed pair cannot be assembled by accident.
+data GhcToolchain = GhcToolchain
+  { gtGhc    :: !FilePath
+  , gtGhcPkg :: !FilePath
+  }
+
+-- | An oracle backed by the compiler the plan was solved with.
 --
--- Refuses to answer at all when the @ghc@ we can reach is not the one the
--- plan was solved with: its @.hi@ format differs, so every answer would
--- be a tool failure reported once per module.  Import directories are
--- resolved once per package and remembered; only modules the caller
--- actually asks about cost a @--show-iface@.
+-- Returns the reason once rather than an oracle that refuses once per
+-- module: a mismatch is a property of the machine, not of any module, and
+-- @base@ alone would have printed it a hundred times.
+--
+-- Interface files are version-exact — @ghc-9.12.4 --show-iface@ on a
+-- 9.10.3 @.hi@ exits 1 with @mismatched interface file versions@ — so the
+-- version equality below is the right predicate, and the compiler is
+-- /selected/ by it rather than merely checked against it.  Import
+-- directories are resolved once per package and remembered; only modules
+-- the caller actually asks about cost a @--show-iface@.
 mkGhcOriginOracle
   :: CompilerId
-  -> [FilePath]          -- ^ extra package databases to stack on the global one
-  -> IO (OriginOracle IO)
-mkGhcOriginOracle cid dbs = do
-  installed <- numericVersion
-  case installed of
-    Left err -> pure (OriginOracle (\_ _ -> pure (Left err)))
-    Right v
-      | v /= compilerVersion cid ->
-          pure (OriginOracle (\_ _ -> pure (Left (OriginCompilerMismatch cid v))))
-      | otherwise -> do
-          dirsRef <- IORef.newIORef Map.empty
-          pure (OriginOracle (originsVia dirsRef))
+  -> [FilePath]                  -- ^ package databases to stack on the global one
+  -> (PackageId -> [FilePath])
+     -- ^ interface directories the caller already knows, tried first.
+     -- The project's own packages are not in any store database, and the
+     -- plan knows where their build tree is.
+  -> IO (Either OriginError (OriginOracle IO))
+mkGhcOriginOracle cid dbs known = do
+  found <- locateToolchain cid
+  case found of
+    Left err -> pure (Left err)
+    Right tc -> do
+      dirsRef <- IORef.newIORef Map.empty
+      pure (Right (OriginOracle (originsVia tc dirsRef)))
   where
-    originsVia dirsRef pid m = do
-      eDirs <- cachedImportDirs dirsRef pid
+    originsVia tc dirsRef pid m = do
+      eDirs <- cachedImportDirs tc dirsRef pid
       case eDirs of
         Left err   -> pure (Left err)
         Right dirs -> do
-          mHi <- firstExisting [ d </> modulePathFile m <.> "hi" | d <- dirs ]
+          let candidates = [ d </> modulePathFile m <.> "hi" | d <- dirs ]
+          mHi <- firstExisting candidates
           case mHi of
-            Nothing ->
-              pure (Left (OriginIfaceMissing pid m
-                            [ d </> modulePathFile m <.> "hi" | d <- dirs ]))
-            Just hi -> do
-              out <- runTool "ghc" ["--show-iface", hi]
-              pure (parseShowIface =<< out)
+            Nothing -> pure (Left (OriginIfaceMissing pid m candidates))
+            Just hi -> fmap (>>= parseShowIfaceLines) (showIfaceHead (gtGhc tc) hi)
 
-    cachedImportDirs dirsRef pid = do
-      known <- IORef.readIORef dirsRef
-      case Map.lookup pid known of
+    cachedImportDirs tc dirsRef pid = do
+      remembered <- IORef.readIORef dirsRef
+      case Map.lookup pid remembered of
         Just cached -> pure cached
         Nothing     -> do
-          fresh <- importDirs pid
+          fresh <- importDirs tc pid
           IORef.atomicModifyIORef' dirsRef (\m -> (Map.insert pid fresh m, ()))
           pure fresh
 
-    importDirs pid = do
-      out <- runTool "ghc-pkg"
+    -- What the caller knows beats what ghc-pkg knows, and skips a
+    -- subprocess: a local package has no store entry to find.
+    importDirs tc pid = case known pid of
+      d : ds -> pure (Right (d : ds))
+      []     -> askGhcPkg tc pid
+
+    askGhcPkg tc pid = do
+      out <- runTool (gtGhcPkg tc)
                ( ["--global"] ++ map ("--package-db=" <>) dbs
                  ++ ["field", Text.unpack (renderPkg pid), "import-dirs"] )
       pure $ case out of
@@ -251,18 +314,111 @@ mkGhcOriginOracle cid dbs = do
         Right text -> case mapMaybe (Text.stripPrefix "import-dirs:")
                                     (Text.lines text) of
           []   -> Left (OriginNoImportDirs pid text)
-          -- Several when the store holds the same version under more than
-          -- one hash; each is tried in turn, so no choice is made here.
+          -- Several when the store holds one version under more than one
+          -- hash; each is tried in turn, so no choice is made here.
           dirs -> Right (map (Text.unpack . Text.strip) dirs)
 
-    compilerVersion (CompilerId c) = maybe c id (Text.stripPrefix "ghc-" c)
+-- | The first reachable installation whose @ghc@ reports the plan's
+-- version.
+--
+-- Versioned names first: ghcup, Debian and Nix all install @ghc-9.10.3@
+-- beside the bare @ghc@ shim, so a project built with
+-- @--project-file=cabal.ghc-9.12.4.project@ on a machine whose default is
+-- 9.10.3 has its compiler right there on @$PATH@.  Asking for @ghc@ alone
+-- would refuse the work with the right binary one name away.
+locateToolchain :: CompilerId -> IO (Either OriginError GhcToolchain)
+locateToolchain cid = go [] candidates
+  where
+    version = fromMaybe raw (Text.stripPrefix "ghc-" raw)
+      where CompilerId raw = cid
 
-    numericVersion = fmap (fmap Text.strip) (runTool "ghc" ["--numeric-version"])
+    candidates =
+      [ GhcToolchain ("ghc-" <> Text.unpack version)
+                     ("ghc-pkg-" <> Text.unpack version)
+      , GhcToolchain "ghc" "ghc-pkg"
+      ]
 
--- | Run a tool, keeping its own words on failure.
+    go tried [] = pure (Left (OriginCompilerMissing cid (reverse tried)))
+    go tried (tc : rest) = do
+      answer <- runTool (gtGhc tc) ["--numeric-version"]
+      case answer of
+        Right v | Text.strip v == version -> pure (Right tc)
+        Right v  -> go (said tc (Text.strip v) : tried) rest
+        Left err -> go (said tc (renderOriginError err) : tried) rest
+
+    said tc what = Text.pack (gtGhc tc) <> " (" <> what <> ")"
+
+-- | Run @ghc --show-iface@ and stop reading at the end of the exports
+-- section.
+--
+-- Streamed rather than slurped because the rest of a dump is unfoldings
+-- we throw away, and there is a lot of it: @GHC.Internal.ClosureTypes@
+-- prints 12 MB, which as a 'String' from @readProcessWithExitCode@ is
+-- hundreds of megabytes of transient cons cells inside a server that is
+-- already holding an index.
+showIfaceHead :: FilePath -> FilePath -> IO (Either OriginError [Text])
+showIfaceHead ghc hi = handling $
+  Process.withCreateProcess spec $ \_ mOut mErr ph ->
+    case (mOut, mErr) of
+      -- Unreachable while both pipes are requested above, and reported
+      -- rather than asserted: a broken pipe is not a programmer error.
+      (Nothing, _) -> pure (Left (noPipe "stdout"))
+      (_, Nothing) -> pure (Left (noPipe "stderr"))
+      (Just out, Just err) -> do
+        utf8Lenient out
+        utf8Lenient err
+        (ls, closed) <- readHead out
+        if closed
+          then do
+            -- We have what we came for; the child would otherwise spend
+            -- seconds printing unfoldings into a pipe nobody reads.
+            Process.terminateProcess ph
+            _ <- Process.waitForProcess ph
+            pure (Right ls)
+          else do
+            code <- Process.waitForProcess ph
+            case code of
+              ExitSuccess   -> pure (Right ls)
+              ExitFailure n -> do
+                errText <- TIO.hGetContents err
+                pure (Left (OriginToolFailed (Text.pack ghc) n errText))
+  where
+    spec = (Process.proc ghc ["--show-iface", hi])
+      { Process.std_out = Process.CreatePipe
+      , Process.std_err = Process.CreatePipe
+      }
+
+    noPipe which = OriginToolFailed (Text.pack ghc) (-1) ("no " <> which <> " pipe")
+
+    handling act = do
+      r <- try act
+      pure $ case r of
+        Left (e :: IOException) ->
+          Left (OriginToolFailed (Text.pack ghc) (-1) (Text.pack (show e)))
+        Right ok -> ok
+
+    -- A stray byte in a dump must not take down an index build.
+    utf8Lenient h = hSetEncoding h (mkUTF8 RoundtripFailure)
+
+-- | Lines up to and including the one that closes the exports section,
+-- and whether we actually saw it close.
+readHead :: Handle -> IO ([Text], Bool)
+readHead h = go [] False
+  where
+    go acc inSection = do
+      eof <- hIsEOF h
+      if eof
+        then pure (reverse acc, False)
+        else do
+          l <- TIO.hGetLine h
+          if inSection && not (indented l)
+            then pure (reverse (l : acc), True)
+            else go (l : acc) (inSection || l == "exports:")
+
+-- | Run a tool to completion, keeping its own words on failure.
 runTool :: FilePath -> [String] -> IO (Either OriginError Text)
 runTool cmd args = do
-  r <- try (readProcessWithExitCode cmd args "")
+  r <- try (Process.readProcessWithExitCode cmd args "")
   pure $ case r of
     Left (e :: IOException) ->
       Left (OriginToolFailed (Text.pack cmd) (-1) (Text.pack (show e)))
@@ -285,13 +441,17 @@ modulePathFile :: ModulePath -> FilePath
 modulePathFile =
   FP.joinPath . map Text.unpack . Text.splitOn "." . unModulePath
 
--- | The cabal store package databases for a compiler.
+-- | The cabal store package databases for a compiler, and the roots we
+-- could not read.
 --
 -- Boot packages live in the global database @ghc-pkg@ reads by default;
--- everything else lives in the store, one database per compiler.  Both
--- store layouts are checked — @~\/.cabal@ and the XDG one — because a
--- machine can have either, and @CABAL_DIR@ overrides both.
-discoverPackageDbs :: CompilerId -> IO [FilePath]
+-- everything else lives in the store, one database per compiler.  Every
+-- known store layout is searched — @$CABAL_DIR@, @~\/.cabal@ and the XDG
+-- one — because a machine can have any of them, and a root we cannot list
+-- travels back rather than silently contributing nothing: every package
+-- under it would otherwise report as "never built", naming the wrong
+-- cause.
+discoverPackageDbs :: CompilerId -> IO ([FilePath], [OriginError])
 discoverPackageDbs (CompilerId cid) = do
   mCabalDir <- lookupEnv "CABAL_DIR"
   home      <- getHomeDirectory
@@ -299,19 +459,23 @@ discoverPackageDbs (CompilerId cid) = do
         [ home </> ".cabal" </> "store"
         , home </> ".local" </> "state" </> "cabal" </> "store"
         ]
-  concat <$> mapM dbsUnder roots
+  results <- mapM dbsUnder roots
+  pure (concat [ ds | Right ds <- results ], [ e | Left e <- results ])
   where
     -- The directory is the compiler id, sometimes with an ABI suffix.
     dbsUnder root = do
       ok <- doesDirectoryExist root
       if not ok
-        then pure []
+        then pure (Right [])
         else do
-          entries <- either (const []) id
-                       <$> try @IO @IOException (listDirectory root)
-          existing [ root </> e </> "package.db"
-                   | e <- entries
-                   , cid `Text.isPrefixOf` Text.pack e ]
+          listed <- try @IO @IOException (listDirectory root)
+          case listed of
+            Left e        ->
+              pure (Left (OriginStoreUnreadable root (Text.pack (show e))))
+            Right entries -> Right <$> existing
+              [ root </> e </> "package.db"
+              | e <- entries
+              , cid `Text.isPrefixOf` Text.pack e ]
 
     existing = fmap concat . mapM (\p -> do
       ok <- doesDirectoryExist p

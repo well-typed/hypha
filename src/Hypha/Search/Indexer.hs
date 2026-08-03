@@ -187,7 +187,11 @@ buildAndCacheIndex
   :: BuildPlan
   -> Cache.HyphaPackageCache
   -> PackageResolver IO
-  -> Origins.OriginOracle IO            -- ^ where the compiler says exports come from
+  -> Maybe (Origins.OriginOracle IO)
+     -- ^ Where the compiler says exports come from, when there is a
+     -- compiler to ask.  'Nothing' means the caller already reported why
+     -- there is not — repeating it once per module would bury every other
+     -- diagnostic.
   -> ExportEnv                          -- ^ what the warm cache already supplies
   -> [PackageId]
   -> IORef.IORef [Fuzzy.IndexedRow]
@@ -232,8 +236,10 @@ buildAndCacheIndex plan cache resolver oracle env0 pids ref doneRef =
       sources <- componentModules plan pid kind srcDirs
       parsed   <- Interface.parseSources langs sources
       -- What syntax could resolve, then what only the compiler knows.
-      ci <- repairUnresolved oracle compKey pid deps env
-              (indexParsedComponent compKey deps env parsed)
+      let syntactic = indexParsedComponent compKey deps env parsed
+      ci <- maybe (pure syntactic)
+                  (\o -> repairUnresolved o compKey pid deps env syntactic)
+                  oracle
       let flatRows = ciRows ci
       reportComponentIndex compKey ci
       -- Persist before publishing into memory so a crash mid-stream
@@ -550,17 +556,7 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
       , Just ch <- [lookupExport deps m (oeName oe) env]
       ]
 
-    outsideRows =
-      [ IndexRow
-          { rowComponent  = compKey
-          , rowModule     = oeModule oe
-          , rowName       = oeName oe
-          , rowSignature  = exSignature (ecChosen ch)
-          , rowDefinition = exDefinition (ecChosen ch)
-          , rowVisibility = visibilityFor (oeModule oe)
-          }
-      | (oe, Just ch) <- classified
-      ]
+    outsideRows = [ outsideRow compKey oe ch | (oe, Just ch) <- classified ]
 
     unresolved = [ oe | (oe, Nothing) <- classified ]
 
@@ -571,6 +567,23 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
       | (oe, Just ch) <- classified
       , not (null (ecRejected ch))
       ]
+
+-- | The row an 'OutsideExport' becomes once something has told us where
+-- its definition is.
+--
+-- Shared by the syntactic pass and the repair pass because they build the
+-- same row from the same two things: they differ only in who answered.
+-- 'oeVisibility' rather than a second lookup in the component's module
+-- map — the repair pass does not have that map, and the export knows.
+outsideRow :: ComponentKey -> OutsideExport -> ExportChoice -> IndexRow
+outsideRow compKey oe ch = IndexRow
+  { rowComponent  = compKey
+  , rowModule     = oeModule oe
+  , rowName       = oeName oe
+  , rowSignature  = exSignature (ecChosen ch)
+  , rowDefinition = exDefinition (ecChosen ch)
+  , rowVisibility = oeVisibility oe
+  }
 
 -- | Resolve what syntax could not, by asking the compiler.
 --
@@ -621,21 +634,20 @@ repairUnresolved oracle compKey pid deps env ci = do
       answer <- Origins.moduleOrigins oracle pid m
       pure (m, fmap (resolveAgainst oes) answer)
 
+    -- One name can have more than one origin -- ghc's own @GHC@ exports
+    -- @XFixitySig@ from two modules -- so these are probed in order too,
+    -- for the same reason the candidate imports are.
     resolveAgainst oes mo =
       [ (oe, ch)
-      | oe          <- oes
-      , Just origin <- [Map.lookup (oeName oe) (Origins.moOrigins mo)]
-      , Just ch     <- [lookupExport deps origin (oeName oe) env]
+      | oe           <- oes
+      , Just origins <- [Map.lookup (oeName oe) (Origins.moOrigins mo)]
+      , Just ch      <- [firstFrom (oeName oe) (NE.toList origins)]
       ]
 
-    rowFor oe ch = IndexRow
-      { rowComponent  = compKey
-      , rowModule     = oeModule oe
-      , rowName       = oeName oe
-      , rowSignature  = exSignature (ecChosen ch)
-      , rowDefinition = exDefinition (ecChosen ch)
-      , rowVisibility = oeVisibility oe
-      }
+    firstFrom name origins = listToMaybe
+      [ ch | o <- origins, Just ch <- [lookupExport deps o name env] ]
+
+    rowFor = outsideRow compKey
 
 -- | The definition module when it is inside this component, and nothing
 -- when it is not.  A list rather than a 'Maybe' so it drops straight into

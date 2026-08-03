@@ -11,6 +11,7 @@
 module Unit.SearchIndexBuild (tests) where
 
 import           Data.Containers.ListUtils (nubOrd)
+import           Data.List.NonEmpty (NonEmpty (..))
 import           Data.List (sort)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -82,7 +83,7 @@ repairedWith oracle ci = do
 -- rather than returning an empty export list, which would read as "this
 -- module exports nothing" and quietly repair nothing.
 stubOracle
-  :: [(ModulePath, Either OriginError [(SymbolName, ModulePath)])]
+  :: [(ModulePath, Either OriginError [(SymbolName, NonEmpty ModulePath)])]
   -> OriginOracle IO
 stubOracle table = OriginOracle $ \_ m ->
   pure $ case lookup m table of
@@ -269,7 +270,7 @@ tests = testGroup "Unit.SearchIndexBuild"
       ci' <- repairedWith
                (stubOracle
                   [ ( ModulePath "Fixture.Blind"
-                    , Right [(SymbolName "depThing", ModulePath "Dep.Internal")] ) ])
+                    , Right [(SymbolName "depThing", ModulePath "Dep.Internal" :| [])] ) ])
                ci
       map oeName (ciUnresolved ci) @?= [SymbolName "depThing"]
       case rowsFor ci' "depThing" of
@@ -304,7 +305,7 @@ tests = testGroup "Unit.SearchIndexBuild"
       ci' <- repairedWith
                (stubOracle
                   [ ( ModulePath "Fixture.Blind"
-                    , Right [(SymbolName "depThing", ModulePath "Dep.Unindexed")] ) ])
+                    , Right [(SymbolName "depThing", ModulePath "Dep.Unindexed" :| [])] ) ])
                ci
       rowsFor ci' "depThing" @?= []
       map oeName (ciUnresolved ci') @?= [SymbolName "depThing"]

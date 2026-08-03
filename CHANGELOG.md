@@ -29,6 +29,24 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The compiler answers where a re-export comes from.** An export list
+  says *which* names a module exports and never *whence*, so a syntactic
+  pass has to guess between the imports that could plausibly supply one —
+  and `base`'s `Control.Concurrent` lists `Prelude` first, which is how
+  `isCurrentThreadBound` came to be "re-exported, origin unresolved" while
+  Hackage documents it fine. The index build now asks GHC, which already
+  ran the renamer and wrote one fully-qualified origin per export into the
+  `.hi` file: an export syntax could not place is repaired by reading
+  `ghc --show-iface` for the module that exports it, and by trying every
+  ranked candidate import rather than committing to the first.
+
+  This needs the compiler the plan was solved with — `ghc-<version>` or a
+  bare `ghc` reporting that version, alongside its `ghc-pkg`; interface
+  files are patch-exact and a mismatched compiler reads nothing at all.
+  When there is no such compiler, or a cabal store cannot be listed, the
+  reason is reported **once** and re-exports are resolved from source
+  alone, as before. The project's own packages are read from the build
+  tree the plan names, so a local façade is repaired like any dependency.
 - **Cross-package re-exports are indexed.** A façade module now
   contributes rows for what it re-exports from a dependency, resolved
   transitively through that dependency's own already-resolved rows.

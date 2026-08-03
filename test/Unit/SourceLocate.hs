@@ -38,6 +38,12 @@ depDefinitions dep = ImportedDefinitions
       [ (msDeclaredName d, (ComponentKey "reexport-dep", d)) | d <- dep ]
   }
 
+-- | The dependency's sources with no resolved definition site, which is
+-- what the index leaves behind for a name it could not place.  Forces the
+-- locator down its own resolution path instead of the index's answer.
+depSourcesOnly :: [ModuleSource] -> ImportedDefinitions
+depSourcesOnly dep = (depDefinitions dep) { idSites = Map.empty }
+
 tests :: TestTree
 tests = testGroup "Unit.SourceLocate"
   [ testCase "an intra-component re-export resolves to its definition" $ do
@@ -80,6 +86,24 @@ tests = testGroup "Unit.SourceLocate"
           Locate.ldModule ld    @?= ModulePath "Dep.Internal"
           Locate.ldComponent ld @?= ComponentKey "reexport-dep"
         Nothing -> fail "expected to locate depThing through the two-hop chain"
+
+  , testCase "resolution tries every candidate, not the first one supplied" $ do
+      -- Fixture.ViaFacade imports Dep.Facade and Dep.Internal; both sources
+      -- are supplied and only the second declares depThing.  With no index
+      -- answer to short-circuit on, the locator has to walk the ranked
+      -- candidates rather than commit to the first it can open.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/ViaFacade.hs"
+          , "Fixture.ViaFacade", Exposed) ]
+      dep  <- depSources
+      mLd <- Locate.locateDefinitionInComponent defaultLanguageSettings
+               (ComponentKey "reexport") srcs (depSourcesOnly dep)
+               (ModulePath "Fixture.ViaFacade") (SymbolName "depThing")
+      case mLd of
+        Just ld -> do
+          Locate.ldModule ld    @?= ModulePath "Dep.Internal"
+          Locate.ldComponent ld @?= ComponentKey "reexport-dep"
+        Nothing -> fail "expected to locate depThing past Dep.Facade"
 
   , testCase "a symbol whose dependency source is absent is not guessed at" $ do
       srcs <- fixtureSources

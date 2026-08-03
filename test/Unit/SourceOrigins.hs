@@ -10,29 +10,44 @@
 -- appears in a real @ghc --show-iface@ dump of @base@.
 module Unit.SourceOrigins (tests) where
 
+import           Control.Exception (IOException, try)
+import           Data.List (isPrefixOf)
+import           Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map.Strict as Map
 import qualified Data.Text       as Text
 import qualified Data.Text.IO    as TIO
+import           Data.Version (showVersion)
+import           System.Directory (doesFileExist, listDirectory)
+import           System.FilePath ((</>))
+import           System.Info (fullCompilerVersion)
 
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-import Hypha.Source.Origins (ModuleOrigins (..), parseShowIface)
+import Hypha.Source.Origins
+  ( ModuleOrigins (..), OriginOracle (..), discoverPackageDbs
+  , mkGhcOriginOracle, parseShowIface )
+import Hypha.Types.BuildPlan (CompilerId (..))
+import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 
 -- | The origins of one captured dump, or a failure the case can report.
-originsOf :: FilePath -> IO (Map.Map SymbolName ModulePath)
+originsOf :: FilePath -> IO (Map.Map SymbolName (NonEmpty ModulePath))
 originsOf fp = do
   dump <- TIO.readFile fp
   case parseShowIface dump of
     Left e   -> fail ("parseShowIface failed for " <> fp <> ": " <> show e)
     Right mo -> pure (moOrigins mo)
 
-concurrent :: IO (Map.Map SymbolName ModulePath)
+concurrent :: IO (Map.Map SymbolName (NonEmpty ModulePath))
 concurrent = originsOf "test/fixtures/iface/Control.Concurrent.showiface"
 
-bits :: IO (Map.Map SymbolName ModulePath)
+bits :: IO (Map.Map SymbolName (NonEmpty ModulePath))
 bits = originsOf "test/fixtures/iface/Data.Bits.showiface"
+
+-- | One origin, the common case.
+only :: Text.Text -> Maybe (NonEmpty ModulePath)
+only m = Just (ModulePath m :| [])
 
 tests :: TestTree
 tests = testGroup "Unit.SourceOrigins"
@@ -42,22 +57,21 @@ tests = testGroup "Unit.SourceOrigins"
       -- Prelude by anything that reads only the import list.
       m <- concurrent
       Map.lookup (SymbolName "isCurrentThreadBound") m
-        @?= Just (ModulePath "GHC.Internal.Conc.Bound")
+        @?= only "GHC.Internal.Conc.Bound"
 
   , testCase "an unqualified export belongs to the module itself" $ do
       -- GHC prints the origin only when it differs from the interface's
       -- own module, so a bare name is a local declaration.
       m <- concurrent
-      Map.lookup (SymbolName "forkFinally") m
-        @?= Just (ModulePath "Control.Concurrent")
+      Map.lookup (SymbolName "forkFinally") m @?= only "Control.Concurrent"
 
   , testCase "a class brings its methods, each with its own origin" $ do
       -- Bits{.&. .|. ...}: the methods are exports too, and they are
       -- exactly what the source parser cannot see (issue 043).
       m <- bits
-      Map.lookup (SymbolName "Bits") m  @?= Just (ModulePath "GHC.Internal.Bits")
-      Map.lookup (SymbolName ".&.") m   @?= Just (ModulePath "GHC.Internal.Bits")
-      Map.lookup (SymbolName "shiftL") m @?= Just (ModulePath "GHC.Internal.Bits")
+      Map.lookup (SymbolName "Bits") m   @?= only "GHC.Internal.Bits"
+      Map.lookup (SymbolName ".&.") m    @?= only "GHC.Internal.Bits"
+      Map.lookup (SymbolName "shiftL") m @?= only "GHC.Internal.Bits"
 
   , testCase "an operator name keeps the dots that belong to it" $ do
       -- GHC.Internal.Data.Bits..>>. splits into a module and an operator
@@ -65,8 +79,7 @@ tests = testGroup "Unit.SourceOrigins"
       -- dot instead yields the module GHC.Internal.Data.Bits..>> and the
       -- name "", which is how a naive reader loses every operator.
       m <- bits
-      Map.lookup (SymbolName ".>>.") m
-        @?= Just (ModulePath "GHC.Internal.Data.Bits")
+      Map.lookup (SymbolName ".>>.") m @?= only "GHC.Internal.Data.Bits"
 
   , testCase "the export list stops where the next section starts" $ do
       -- "direct module dependencies:" follows the exports and is full of
@@ -84,4 +97,115 @@ tests = testGroup "Unit.SourceOrigins"
         Left _   -> pure ()
         Right mo -> fail ("expected a failure, got " <> show (Map.size (moOrigins mo))
                             <> " origins")
+
+  , testCase "an interface with no exports section is an error too" $ do
+      -- The other door to the same lie: a header we understand followed by
+      -- no section at all is "we could not find the exports", never "this
+      -- module has none".  Distinct from a section that is present and
+      -- empty, which GHC.Constants really does have.
+      case parseShowIface (Text.unlines ["interface Foo 9103", "  where"]) of
+        Left _   -> pure ()
+        Right mo -> fail ("expected a failure, got " <> show (moOrigins mo))
+
+  , testCase "a section that is present and empty is not an error" $ do
+      case parseShowIface (Text.unlines ["interface Foo 9103", "exports:"]) of
+        Left e   -> fail ("expected an empty module, got " <> show e)
+        Right mo -> moOrigins mo @?= Map.empty
+
+  , testCase "a name two modules define keeps both origins" $ do
+      -- Real: ghc's own GHC.hi exports XFixitySig from both
+      -- Language.Haskell.Syntax.Binds and Language.Haskell.Syntax.Extension.
+      -- Keeping one is the same "first candidate wins" mistake the resolver
+      -- was just cured of -- if the kept one has no indexed row and the
+      -- dropped one does, the export stays unresolved for no reason.
+      let dump = Text.unlines
+            [ "interface GHC 9103"
+            , "exports:"
+            , "  Language.Haskell.Syntax.Binds.XFixitySig"
+            , "  Language.Haskell.Syntax.Extension.XFixitySig"
+            , "direct module dependencies: ghc-9.10.3:GHC.Cmm"
+            ]
+      case parseShowIface dump of
+        Left e   -> fail ("parse failed: " <> show e)
+        Right mo -> Map.lookup (SymbolName "XFixitySig") (moOrigins mo)
+          @?= Just ( ModulePath "Language.Haskell.Syntax.Binds"
+                       :| [ModulePath "Language.Haskell.Syntax.Extension"] )
+
+  , testCase "the real oracle reads a real interface off disk" $ do
+      -- Everything above tests the parser against captured text, and the
+      -- indexer's own tests drive a stub.  Nothing else runs the
+      -- subprocess, and this repo has shipped two browsing releases that
+      -- were green and broken because the IO was the part that was wrong.
+      --
+      -- The compiler that built this test is by construction the one whose
+      -- interface files it can read, so no plan is needed to name it.  The
+      -- module asked about is hypha's own, located through the same
+      -- caller-supplied hook the server uses for local packages.
+      mDir <- ownBuildDir
+      case mDir of
+        -- Reported, not silently green: an absent build tree means this
+        -- case verified nothing, and saying so beats a passing tick.
+        Nothing -> putStrLn
+          "  (skipped: no build directory holding Hypha/Source/Origins.hi)"
+        Just dir -> do
+          (dbs, _) <- discoverPackageDbs ownCompiler
+          built    <- mkGhcOriginOracle ownCompiler dbs (const [dir])
+          case built of
+            Left e  -> fail ("no oracle for the compiler that built us: " <> show e)
+            Right o -> do
+              r <- moduleOrigins o ownPackage (ModulePath "Hypha.Source.Origins")
+              case r of
+                Left e   -> fail ("real oracle failed: " <> show e)
+                Right mo -> do
+                  Map.lookup (SymbolName "parseShowIface") (moOrigins mo)
+                    @?= only "Hypha.Source.Origins"
+                  -- A type and its constructor share this name, so the
+                  -- dump names the same origin twice: one origin, not two
+                  -- things to try.
+                  Map.lookup (SymbolName "ModuleOrigins") (moOrigins mo)
+                    @?= only "Hypha.Source.Origins"
   ]
+
+-- | The compiler that built this test suite.
+ownCompiler :: CompilerId
+ownCompiler = CompilerId (Text.pack ("ghc-" <> showVersion fullCompilerVersion))
+
+-- | Any package id: the interface directory is supplied directly, so
+-- nothing looks this up.
+ownPackage :: PackageId
+ownPackage = PackageId (PackageName "hypha") (Version "0.2.0")
+
+-- | The build tree holding this library's own @.hi@ files, if the usual
+-- @dist-newstyle@ layout is in place.
+--
+-- A checkout built against several compilers has one tree per compiler,
+-- and only ours can be read: @cabal test all
+-- --project-file=cabal.ghc-9.12.4.project@ would otherwise walk into the
+-- 9.10.3 tree first and fail on @mismatched interface file versions@,
+-- which is the guard working rather than the test having something to
+-- say.
+ownBuildDir :: IO (Maybe FilePath)
+ownBuildDir = go 6 "dist-newstyle"
+  where
+    go :: Int -> FilePath -> IO (Maybe FilePath)
+    go depth dir
+      | depth < 0 = pure Nothing
+      | otherwise = do
+          here <- doesFileExist (dir </> "Hypha" </> "Source" </> "Origins.hi")
+          if here
+            then pure (Just dir)
+            else do
+              subs <- either (const [] . asIOException) id
+                        <$> try (listDirectory dir)
+              firstJustM [ go (depth - 1) (dir </> s) | s <- subs, ours s ]
+
+    -- Every other compiler's tree, skipped by name.
+    ours s = not ("ghc-" `isPrefixOf` s) || Text.pack s == unCompilerId ownCompiler
+
+    firstJustM []       = pure Nothing
+    firstJustM (a : as) = a >>= maybe (firstJustM as) (pure . Just)
+
+    -- An unreadable directory during a best-effort walk is not the
+    -- subject under test; the type annotation is all `try` needs.
+    asIOException :: IOException -> ()
+    asIOException _ = ()

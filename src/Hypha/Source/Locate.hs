@@ -259,18 +259,25 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
           -- syntax, not an answer, and @base@'s @Control.Concurrent@
           -- ranks @Prelude@ ahead of the module that really declares
           -- @isCurrentThreadBound@.
-          DefinedOutside ms ->
-            case [ (m, supplied)
-                 | m <- NE.toList ms
-                 , Just supplied <- [Map.lookup m (idSources imported)] ] of
-              ((m, (comp, src)) : _) -> scanned comp m src Nothing
-              [] -> do
+          DefinedOutside ms -> do
+            -- Until one of them declares it, not until one of them can be
+            -- opened: a facade supplies its source and no declaration, so
+            -- stopping at the first readable candidate reports the symbol
+            -- absent while the next candidate has it.
+            found <- firstJustM
+              [ scanned comp m src Nothing
+              | m <- NE.toList ms
+              , Just (comp, src) <- [Map.lookup m (idSources imported)]
+              ]
+            case found of
+              Just ld -> pure (Just ld)
+              Nothing -> do
                 hPutStrLn stderr $
                   "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
-                    <> Text.unpack (unSymbolName sym) <> " from one of "
+                    <> Text.unpack (unSymbolName sym) <> ", and none of "
                     <> intercalate ", "
                          (map (Text.unpack . unModulePath) (NE.toList ms))
-                    <> ", none of whose sources were supplied"
+                    <> " both supplied a source and declared it"
                 pure Nothing
           site -> do
             let target = Reexport.definitionModule asking site
@@ -307,6 +314,11 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
     reportParseFailure (ms, e) = hPutStrLn stderr $
       "hypha: " <> msPath ms <> " could not be parsed: "
         <> Text.unpack (Parser.parseErrorMessage e)
+
+-- | The first action that answers, running no more than it must.
+firstJustM :: Monad m => [m (Maybe a)] -> m (Maybe a)
+firstJustM []         = pure Nothing
+firstJustM (a : rest) = a >>= maybe (firstJustM rest) (pure . Just)
 
 -- | Walk every @.hs@ file under @root@ (skipping build/test dirs) and
 -- return the first hit whose top-level binding or type signature matches

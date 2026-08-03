@@ -210,8 +210,7 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
     _  -> do
       -- Built here rather than per component: it probes for a matching
       -- compiler once and remembers each package's interface directory.
-      dbs    <- Origins.discoverPackageDbs (bpCompiler plan)
-      oracle <- Origins.mkGhcOriginOracle (bpCompiler plan) dbs
+      oracle <- originOracleFor plan
       _ <- forkIO $ do
         r <- try (Indexer.buildAndCacheIndex plan cache resolver oracle
                     (Indexer.hyEnv hyd) missing indexRef doneRef)
@@ -502,6 +501,37 @@ projectName plan =
   case filter puIsLocal (Map.elems (bpUnits plan)) of
     (pu : _) -> unPackageName (pkgName (puId pu))
     []       -> "hypha"
+
+-- | The compiler's answer to "where does this export come from", if we
+-- can reach the compiler the plan was solved with.
+--
+-- Every reason we might not is reported here, once: a mismatched
+-- toolchain and an unreadable store are properties of the machine, and
+-- restating them once per module would bury the per-module diagnostics
+-- that are actually about the code.
+originOracleFor :: BuildPlan -> IO (Maybe (Origins.OriginOracle IO))
+originOracleFor plan = do
+  (dbs, storeErrs) <- Origins.discoverPackageDbs (bpCompiler plan)
+  mapM_ report storeErrs
+  built <- Origins.mkGhcOriginOracle (bpCompiler plan) dbs localImportDirs
+  case built of
+    Right o  -> pure (Just o)
+    Left err -> do
+      report err
+      hPutStrLn stderr
+        "hypha index: re-exports will be resolved from source alone"
+      pure Nothing
+  where
+    report e = hPutStrLn stderr
+      ("hypha index: " <> Text.unpack (Origins.renderOriginError e))
+
+    -- A local package has no store entry for ghc-pkg to find, and the
+    -- plan already knows where its build tree is.  Skipping this leaves
+    -- the project's own facade modules -- the ones a project-scoped tool
+    -- exists for -- as the only ones without a compiler's answer.
+    localImportDirs pid =
+      [ d FP.</> "build"
+      | Just d <- [puDistDir =<< lookupUnit (pkgName pid) plan] ]
 
 -- | Parse @"<pkg>-<ver>"@.  The version is the suffix after the last @-@.
 parsePkgVer :: Text -> Maybe PackageId

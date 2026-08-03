@@ -37,6 +37,14 @@ render "class method of `Traversable`".
 The indexer then writes rows for them with no change: the resolution and
 collapse layers already key on `(definition, name)`.
 
+## Note (from issue 046)
+
+The interface dump `Hypha.Source.Origins` now reads carries class methods
+and constructors with a per-method origin — the `Data.Bits` fixture pins
+`.&.` and `shiftL` — so the origin side of this is already answered. What
+is still missing is a *declaration* to read a signature from, which is
+what `Parser.findDecl` has to learn.
+
 ## Acceptance criteria
 
 - `fmap`, `Just`, `mempty`, `traverse` all have rows, attributed to the
