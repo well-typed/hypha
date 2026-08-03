@@ -52,56 +52,66 @@ Up to 3 agents can work concurrently, each in its own git worktree:
 
 ### Issue Assignment
 
-The human assigns issues manually to avoid race conditions. **Never pick an issue yourself.** Wait for the human to say: *"Agent N, work on issue XXX"*.
+The human assigns issues manually to avoid race conditions. **Never pick an issue yourself.** Wait for the human to say: *"Agent N, work on issue #XXX"*.
 
 ### Per-Task Workflow
 
 When assigned an issue:
 
 ```
-1. cd .worktrees/agent-N/                           # your worktree
-2. git fetch origin && git merge origin/main        # stay current
-3. git checkout -b agent-N/feat-<short-description>  # feature branch
-4. Move issue: issues/todo/XXX → issues/in_progress/XXX
-5. git commit -m "chore: claim issue XXX"
-6. Implement exactly what the issue says
-7. Run: cabal build all && cabal test all
-8. Move issue: issues/in_progress/XXX → issues/done/XXX
-9. git commit -m "feat(<scope>): <description>"      # conventional commit
-10. Tell human: "Agent N ready to merge agent-N/feat-<desc>"
-11. Wait for human to merge into main
-12. git checkout agent-N/main && git pull origin main
-13. Rinse and repeat from step 1
+1. cd .worktrees/agent-N/                            # your worktree
+2. git fetch origin && git merge origin/main         # stay current
+3. glab issue view XXX                               # read the full issue
+4. git checkout -b agent-N/issue-XXX-<short-desc>    # feature branch
+5. Implement exactly what the issue says
+6. Run: cabal build all && cabal test all
+7. git commit -m "feat(<scope>): <description>"       # conventional commit,
+                                                     # body ends with "Closes #XXX"
+8. Tell human: "Agent N ready to merge agent-N/issue-XXX-<desc>"
+9. Wait for human to merge into main
+10. git checkout agent-N/main && git pull origin main
+11. Rinse and repeat from step 1
 ```
 
 ### Blocked?
 
 If you cannot proceed (missing dependency, unclear spec, failing test you can't fix):
-1. Add a comment to the issue file explaining the blocker
-2. Move the issue back to `issues/todo/`
+1. Comment on the GitLab issue explaining the blocker (`glab issue note XXX -m "..."`)
+2. Unassign yourself from it
 3. Tell the human what's blocking you
 
-## Issue Board
+## Issue Tracker
 
-We track work in `issues/todo/`, `issues/in_progress/`, and `issues/done/`.
+Work is tracked in **GitLab issues** on
+<https://gitlab.well-typed.com/well-typed/hypha/-/issues>. There is no
+file-based board in this repo — never create one.
 
-- **To start work:** Move an issue from `issues/todo/` → `issues/in_progress/`
-- **To finish work:** Move it from `issues/in_progress/` → `issues/done/`
-- **Blocked?** Leave a comment in the issue file and move to `issues/todo/`
+Use the `glab` CLI (needs `GITLAB_HOST=gitlab.well-typed.com`):
 
-Never work on an issue without moving it to `in_progress` first.
+```bash
+glab issue list                  # open issues
+glab issue view XXX              # read one
+glab issue note XXX -m "..."     # comment (progress, blockers, findings)
+glab issue create -t "..." -d "..."   # file new work you discover
+```
+
+- **To start work:** assign the issue to yourself, so concurrent agents see it is taken.
+- **To finish work:** reference it from the commit (`Closes #XXX`) — the merge closes it.
+- **Blocked?** Comment the blocker on the issue and unassign yourself.
+
+Never work on an issue without assigning it to yourself first.
 
 ## How to Pick Up Work (if human doesn't assign)
 
 1. Read the master spec (`docs/superpowers/specs/2026-05-18-hypha-design.md`) for context.
-2. Pick the next unblocked issue in `issues/todo/`.
-3. Move the file to `issues/in_progress/`.
+2. `glab issue list` and pick the next unblocked unassigned issue.
+3. Assign it to yourself.
 4. Implement exactly what the issue says.
 5. Run `cabal build all && cabal test all` before declaring done.
-6. Move the issue to `issues/done/`.
+6. Commit with `Closes #XXX` in the body.
 7. There might be multiple agents working concurrently on the codebase, so pick one
-   unclaimed issue but stop and escalate to the user if you notice that the issue you have
-   picked has a direct dependency on an issue currently "in progress".
+   unassigned issue but stop and escalate to the user if you notice that the issue you have
+   picked has a direct dependency on an issue currently assigned to someone else.
 
 ## Well-Typed Ethos
 

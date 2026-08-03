@@ -41,7 +41,7 @@ read from `CLAUDE.md` is NOT a placeholder anymore — leave it to the boot sequ
 |---|---|---|
 | `MISSION_SUMMARY` | One-line mission | `harden error handling across the source-resolution layer` |
 | `TRACKING_UNIT` | What you track work in (matches the project's mechanism) | `epic` / `milestone` / `issue` / `board` |
-| `TRACKING_REF` | The reference to the tracking unit | `#81`, `issues/epics/source-hardening.md` |
+| `TRACKING_REF` | The reference to the tracking unit | `#81`, `%3` (GitLab milestone) |
 | `TRACKING_LABEL` | Short human name for it | `source-hardening` |
 | `N_DEVS` | How many senior-dev instances may run | `2` |
 | `N_QA` | How many QA instances may run | `1` |

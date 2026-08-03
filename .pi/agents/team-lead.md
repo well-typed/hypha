@@ -21,8 +21,8 @@ from the project's own documentation. Do not assume; read.
 1. **Read the project brief.** Read `CLAUDE.md` (and `AGENT.md` / `AGENTS.md` if
    present) in the repo root. From it, extract and write down:
    - The **domain** (language, frameworks, what the project is).
-   - The **work-tracking mechanism**: a file-based board (`issues/todo|in_progress|done/`
-     or similar), GitHub Issues (`gh issue ...`), Linear, etc. Use whatever the
+   - The **work-tracking mechanism**: GitLab issues (`glab issue ...`), GitHub
+     Issues (`gh issue ...`), Linear, a file-based board, etc. Use whatever the
      brief says — never hardcode one.
    - The **board states / columns** actually in use (these may differ from the
      canonical `todo → in_progress → in_review → done`; map onto what exists).
