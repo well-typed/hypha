@@ -53,6 +53,21 @@ loosely follows [Semantic Versioning](https://semver.org/).
   `base` went from 308 index rows to 1450; `Data.Traversable`,
   `Control.Monad`, `Data.Foldable`, `Data.List`, `Data.Maybe` and
   `Prelude` had contributed none.
+- **Class methods, data constructors and record fields are indexed.** The
+  parser now emits them as declarations in their own right
+  (`DkClassMethod` / `DkConstructor` / `DkRecordField`, parented on the
+  enclosing class or type), and the resolver expands `T(..)` wildcard
+  exports to them. A constructor carries the declaration text as its
+  signature rather than an empty one, and a field is anchored on its own
+  `field :: Type` entry, so `getSum`, `appEndo` and `runReaderT` are
+  searchable. The index had no row for a class method —
+  `foldMap`, `traverse`, `fmap`, `Just`, `mempty` all came up empty in
+  the server's search — and `hypha source`/`hypha symbol` could not
+  resolve a method (issue 12). A method now resolves to the module that
+  declares it with the signature GHC attaches to it, and `lookup`'s
+  cache tier surfaces the canonical package instead of only fringe
+  packages that happened to declare a top-level function of the same
+  name.
 - **Search results collapse to one hit per definition**, with the most
   public presentation winning. A `+N` disclosure names every package and
   module folded in, each a link, with the defining one tagged; scoping to
@@ -199,14 +214,12 @@ loosely follows [Semantic Versioning](https://semver.org/).
   old rows may hold path-derived module names or signatures matched by
   name — defects that are not detectable row by row. See
   [Caching](website/src/guide/caching.md) for what to expect.
-- **Class methods and data constructors are not indexed.**
-  `Traversable` has a row; `traverse`, `fmap`, `Just` and `mempty` have
-  none. Declaration scanning sees top-level declarations only, and a
-  class's methods are not top-level. `hypha lookup` still answers for
-  these through Hoogle. A module page lists them as "re-exported, origin
-  unresolved" — the interface file names the module that declares them,
-  and there is still no declaration to read a signature from:
-  `ListLike/Data.ListLike` shows 113 of them.
+- **A member of a type declared in an unparseable module still has no
+  row.** Class methods, constructors and record fields are indexed now,
+  but only from source the parser can read: `GHC.Internal.Base` needs CPP
+  (see the next entry), so `liftA2`, `pure` and `mappend` have no `base`
+  row while `fmap` and `mempty` reach one through a re-exporter that does
+  parse. `hypha lookup` still answers for all of them through Hoogle.
 - **159 modules of a 283-package plan do not parse without CPP
   preprocessing**, and every module re-exporting from one loses exactly
   what it re-exported — which is why `Prelude` is sparse. Each is

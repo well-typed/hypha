@@ -20,6 +20,8 @@
 module Hypha.Search.Reexport
   ( DefinitionSite (..)
   , resolveComponent
+  , ComponentExports (..)
+  , componentExports
   , expandedExportNames
   , expandedExportNamesIn
   , externalModuleForms
@@ -41,7 +43,8 @@ import Data.Text qualified as Text
 import Hypha.Source.Interface
   ( ExportItem (..), ImportItem (..), ModuleInterface (..) )
 import Hypha.Source.Interface qualified as Interface
-import Hypha.Types.SymbolPath (ModulePath (..), SymbolName)
+import Hypha.Source.Parser qualified as Parser
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 
 -- | Where an exported name is declared.
 data DefinitionSite
@@ -58,9 +61,10 @@ data DefinitionSite
     -- and keeps the first that really exports the name.
   | NoSupplier
     -- ^ No module of this component declares it, and no import could
-    -- have supplied it either.  A class method is the common case: the
-    -- parser reports top-level declarations only, so the method is a
-    -- name the component exports and nothing accounts for.
+    -- have supplied it either.  The common case is a name from outside
+    -- the component: a module re-exports something the component does
+    -- not contain.  (Class methods used to land here too, before the
+    -- parser emitted them as declarations.)
   deriving stock (Show, Eq)
 
 -- | Fold 'DefinedHere' back to the asking module, so callers that only
@@ -92,12 +96,15 @@ definitionModule asking = \case
 resolveComponent :: [ModuleInterface] -> Map (ModulePath, SymbolName) DefinitionSite
 resolveComponent ifaces = fixpoint seeded
   where
+    exports :: ComponentExports
+    exports = componentExports ifaces
+
     byName :: Map ModulePath ModuleInterface
-    byName = interfacesByName ifaces
+    byName = ceByName exports
 
     -- Every pair we owe an answer for.
     wanted =
-      [ (i, n) | i <- ifaces, n <- expandedExportNamesIn byName (miName i) ]
+      [ (i, n) | i <- ifaces, n <- expandedExportNamesIn exports (miName i) ]
 
     declaredSet :: Map ModulePath (Set SymbolName)
     declaredSet =
@@ -212,24 +219,77 @@ resolveComponent ifaces = fixpoint seeded
 -- re-export: @module Data.Map.Strict.Internal@ contributes no names of its
 -- own until it is expanded.
 expandedExportNames :: [ModuleInterface] -> ModulePath -> [SymbolName]
-expandedExportNames ifaces = expandedExportNamesIn (interfacesByName ifaces)
+expandedExportNames ifaces = expandedExportNamesIn (componentExports ifaces)
 
--- | 'expandedExportNames' against a map the caller already has.
+-- | 'expandedExportNames' against tables the caller already has.
 --
--- 'resolveComponent' asks once per interface, and rebuilding the map on
+-- 'resolveComponent' asks once per interface, and rebuilding them on
 -- each call made that quadratic in the size of the component.
-expandedExportNamesIn
-  :: Map ModulePath ModuleInterface -> ModulePath -> [SymbolName]
-expandedExportNamesIn byName asking = case Map.lookup asking byName of
+expandedExportNamesIn :: ComponentExports -> ModulePath -> [SymbolName]
+expandedExportNamesIn ce asking = nubOrd $ case Map.lookup asking byName of
   Nothing -> []
   Just i  -> Interface.interfaceExportedNames i ++ moduleFormNames i
+    ++ [ n
+       | wc <- wildcardNames i
+       , n  <- subordinatesOf ce wc
+       ]
   where
+    byName = ceByName ce
+
+    wildcardNames i =
+      [ wc | Just items <- [miExports i], ExportSymbolAll wc <- items ]
+
     moduleFormNames i =
       [ n
       | m      <- moduleForms i
       , Just target <- [Map.lookup m byName]
       , n      <- Interface.interfaceExportedNames target
       ]
+
+-- | A component's modules indexed the two ways export expansion needs
+-- them.  Both tables are built once per component: the subordinate one
+-- used to be a scan of every module's declarations per @T(..)@ export,
+-- which is quadratic in the component and got worse the moment the
+-- parser started emitting methods, constructors and fields.
+data ComponentExports = ComponentExports
+  { ceByName       :: !(Map ModulePath ModuleInterface)
+  , ceSubordinates :: !(Map SymbolName [SymbolName])
+    -- ^ Container name to the names declared inside it.  Keyed by name
+    -- alone, because the module that writes @T(..)@ is generally not the
+    -- one that declares @T@ — that is the whole point of the form. Two
+    -- unrelated same-named containers in one component therefore pool
+    -- their members; the surplus names resolve nowhere and drop out.
+  }
+
+-- | Build the export tables for a component.
+componentExports :: [ModuleInterface] -> ComponentExports
+componentExports ifaces = ComponentExports
+  { ceByName       = interfacesByName ifaces
+  , ceSubordinates = Map.fromListWith (++)
+      [ (SymbolName parent, [SymbolName (Parser.declName child)])
+      | i      <- ifaces
+      , child  <- miDecls i
+      , Just parent <- [Parser.declParent child]
+      , parent `Set.member` containers i
+      ]
+  }
+  where
+    -- A parent name only counts when this module really declares the
+    -- container: 'declParent' is a name, and a name is not proof.
+    containers i = Set.fromList
+      [ Parser.declName d
+      | d <- miDecls i
+      , Parser.declKind d `elem`
+          [ Parser.DkClass, Parser.DkData, Parser.DkNewtype ]
+      ]
+
+-- | The subordinate names a @T(..)@ export contributes: a class's
+-- methods, a data type's constructors and record fields.  A wildcard
+-- naming something no module of the component declares expands to
+-- nothing — the subordinates live at the definition site, and that site
+-- is out of reach.
+subordinatesOf :: ComponentExports -> SymbolName -> [SymbolName]
+subordinatesOf ce wc = Map.findWithDefault [] wc (ceSubordinates ce)
 
 -- | Index modules by the name their source declares.
 interfacesByName :: [ModuleInterface] -> Map ModulePath ModuleInterface

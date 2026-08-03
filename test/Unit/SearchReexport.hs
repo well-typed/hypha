@@ -179,11 +179,11 @@ tests = testGroup "Unit.SearchReexport"
                 (ModulePath "Facade", SymbolName "thing")
       site @?= DefinedOutside (ModulePath "Supplier" :| [ModulePath "Any"])
 
-  , testCase "an export no import could supply names no supplier" $ do
-      -- A class method: the module exports it, declares no top-level
-      -- binding for it, and imports nothing that could have it.  The old
-      -- resolver said DefinedOutside <this module>, a sentinel every
-      -- caller had to recognise by comparing the module against itself.
+  , testCase "a class method resolves to the class that declares it" $ do
+      -- The parser used to report top-level declarations only, so a class
+      -- method was a name the module exported and declared nowhere, and
+      -- the resolver answered NoSupplier (issue 12 / 043).  Now the
+      -- method is its own declaration inside the class body.
       iface <- inline "Klass" $ Text.unlines
         [ "module Klass (Klass (..), klassMethod) where"
         , "class Klass a where"
@@ -191,7 +191,19 @@ tests = testGroup "Unit.SearchReexport"
         ]
       site <- siteOf (resolveComponent [iface])
                 (ModulePath "Klass", SymbolName "klassMethod")
-      site @?= NoSupplier
+      site @?= DefinedHere
+
+  , testCase "a class method exported only through (..) resolves" $ do
+      -- The (..) wildcard must expand to the class's methods, so a module
+      -- that exports only @Klass (..)@ still answers for klassMethod.
+      iface <- inline "Klass" $ Text.unlines
+        [ "module Klass (Klass (..)) where"
+        , "class Klass a where"
+        , "  klassMethod :: a -> Int"
+        ]
+      site <- siteOf (resolveComponent [iface])
+                (ModulePath "Klass", SymbolName "klassMethod")
+      site @?= DefinedHere
 
   , testCase "shared segments count segments, not characters" $ do
       -- The predecessor compared a dotted module prefix against slashed

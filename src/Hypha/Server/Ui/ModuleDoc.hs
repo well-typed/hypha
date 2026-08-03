@@ -243,12 +243,17 @@ kindNamespace = \case
 
 isTypeKind :: DeclKind -> Bool
 isTypeKind = \case
-  DkData       -> True
-  DkNewtype    -> True
-  DkClass      -> True
-  DkTypeSyn    -> True
-  DkTypeFamily -> True
-  _            -> False
+  DkData        -> True
+  DkNewtype     -> True
+  DkClass       -> True
+  DkTypeSyn     -> True
+  DkTypeFamily  -> True
+  DkFunction    -> False
+  DkPatternSyn  -> False
+  DkForeign     -> False
+  DkClassMethod -> False
+  DkConstructor -> False
+  DkRecordField -> False
 
 -- | Small badge naming the declaration form.  Functions carry no badge
 -- — they are the common case and the signature already says it all.
@@ -259,14 +264,17 @@ kindBadge = maybe mempty badgeFor
   where
     badgeFor :: DeclKind -> Html ()
     badgeFor = \case
-      DkFunction   -> mempty
-      DkData       -> badge "kb-type"    "data"
-      DkNewtype    -> badge "kb-type"    "newtype"
-      DkClass      -> badge "kb-class"   "class"
-      DkTypeSyn    -> badge "kb-type"    "type"
-      DkTypeFamily -> badge "kb-type"    "type family"
-      DkPatternSyn -> badge "kb-pattern" "pattern"
-      DkForeign    -> badge "kb-foreign" "foreign"
+      DkFunction     -> mempty
+      DkData         -> badge "kb-type"    "data"
+      DkNewtype      -> badge "kb-type"    "newtype"
+      DkClass        -> badge "kb-class"   "class"
+      DkTypeSyn      -> badge "kb-type"    "type"
+      DkTypeFamily   -> badge "kb-type"    "type family"
+      DkPatternSyn   -> badge "kb-pattern" "pattern"
+      DkForeign      -> badge "kb-foreign" "foreign"
+      DkClassMethod  -> badge "kb-method"  "method"
+      DkConstructor  -> badge "kb-con"     "constructor"
+      DkRecordField  -> badge "kb-field"   "field"
 
     badge :: Text -> Text -> Html ()
     badge cls label =
