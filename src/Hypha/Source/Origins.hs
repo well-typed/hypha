@@ -220,7 +220,12 @@ splitQualified entry
   -- @IsString|{fromString}@ when only the method is, which is how
   -- @Data.ListLike@ re-exports @fromString@ alone.  Recording it would
   -- invent an export named @IsString|@ that no module has.
-  | Text.isSuffixOf "|" entry = []
+  --
+  -- The bar is only a marker after a name that could not have ended in
+  -- one: @(||)@ and @(<|)@ are real exports, and dropping every entry
+  -- with a trailing bar deletes them.  A type operator parent is the one
+  -- case this cannot tell apart, and GHC's own output cannot either.
+  | Text.isSuffixOf "|" entry, looksLikeModule (Text.init entry) = []
   | otherwise = case go [] (Text.splitOn "." entry) of
       ([], name)   -> [(SymbolName name, Nothing)]
       (modSegs, name)

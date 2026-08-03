@@ -152,6 +152,25 @@ tests = testGroup "Unit.SourceOrigins"
           Map.lookup (SymbolName "fromString") (moOrigins mo)
             @?= only "GHC.Internal.Data.String"
 
+  , testCase "an operator that ends in a bar is not a marker" $ do
+      -- The bar only marks an unexported parent when it follows a name
+      -- that could not have ended in one.  Dropping every entry with a
+      -- trailing bar deleted (||) from Data.Bool and Prelude, and (<|)
+      -- from base-compat, from a real index.
+      let dump = Text.unlines
+            [ "interface Data.Bool 9103"
+            , "exports:"
+            , "  GHC.Internal.Classes.||"
+            , "  Data.Sequence.<|"
+            , "direct module dependencies: ghc-internal:GHC.Internal.Classes"
+            ]
+      case parseShowIface dump of
+        Left e   -> fail ("parse failed: " <> show e)
+        Right mo -> do
+          Map.lookup (SymbolName "||") (moOrigins mo)
+            @?= only "GHC.Internal.Classes"
+          Map.lookup (SymbolName "<|") (moOrigins mo) @?= only "Data.Sequence"
+
   , testCase "the real oracle reads a real interface off disk" $ do
       -- Everything above tests the parser against captured text, and the
       -- indexer's own tests drive a stub.  Nothing else runs the
