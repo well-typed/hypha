@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Source.Locate
   ( listExportedSymbols
@@ -15,9 +16,14 @@ module Hypha.Source.Locate
   ) where
 
 import Control.Monad (filterM)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
+import Control.Monad.Trans.State.Strict (evalStateT, get, put)
 import Data.List (intercalate, sortOn)
 import Data.List.NonEmpty qualified as NE
 import qualified Data.Map.Strict as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TIO
@@ -26,7 +32,7 @@ import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type     (BuildEnv (..))
 import Hypha.Search.Index
-  ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource (..) )
+  ( DefinitionRef (..), ModuleSource (..), OutsideReach (..) )
 import Hypha.Search.Reexport   (DefinitionSite (..))
 import qualified Hypha.Search.Reexport as Reexport
 import qualified Hypha.Source.Extensions as Extensions
@@ -207,13 +213,13 @@ data LocatedDefinition = LocatedDefinition
   }
   deriving stock (Show, Eq)
 
--- | Locate a symbol given every module of its component, plus the modules
--- of other components its exports resolve into.
+-- | Locate a symbol given every module of its component, plus whatever of
+-- other components the caller can reach.
 --
 -- Resolution, not sweeping: with the component in hand there is nothing to
 -- guess.  A symbol the asking module re-exports is followed to its
--- definition — including into a dependency, when the caller supplied that
--- module's source — and a symbol whose definition we cannot reach is
+-- definition — across package boundaries, and across as many of them as
+-- the chain crosses — and a symbol whose definition we cannot reach is
 -- reported absent rather than approximated by the first same-named binding
 -- elsewhere in the package.
 --
@@ -224,23 +230,23 @@ locateDefinitionInComponent
   :: Extensions.LanguageSettings
   -> ComponentKey                                  -- ^ the asking component
   -> [ModuleSource]
-  -> ImportedDefinitions                           -- ^ what the index resolved
+  -> OutsideReach IO                               -- ^ what lies outside it
   -> ModulePath
   -> SymbolName
   -> IO (Maybe LocatedDefinition)
 locateDefinitionInComponent langs ownComponent sources imported asking sym =
-  -- The index's answer first, because it is the only transitively resolved
-  -- one.  Following the immediate import instead is a single hop, and
-  -- @base:Data.List@ needs two: @GHC.Internal.Data.List@ declares nothing
-  -- and passes @mapAccumL@ along from @GHC.Internal.Data.Traversable@, so
-  -- scanning it reported the symbol absent.
-  case resolvedSite of
+  -- The index's answer first when there is one: it was resolved once, for
+  -- the whole component, and taking it costs a single parse where
+  -- following the chain costs one per hop.  Resolving from source is the
+  -- fallback, not the lesser answer — it reaches the same place, and it is
+  -- the only path the CLI has.
+  resolvedSite >>= \case
     Just (def, ms) -> scanned (drComponent def) (drModule def) ms Nothing
     Nothing        -> byResolution
   where
-    resolvedSite = do
-      def <- Map.lookup sym (idSites imported)
-      (_, ms) <- Map.lookup (drModule def) (idSources imported)
+    resolvedSite = runMaybeT $ do
+      def     <- MaybeT (pure (Map.lookup sym (orSites imported)))
+      (_, ms) <- MaybeT (orModule imported (drModule def))
       pure (def, ms)
 
     byResolution = do
@@ -260,21 +266,14 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
           -- ranks @Prelude@ ahead of the module that really declares
           -- @isCurrentThreadBound@.
           DefinedOutside ms -> do
-            -- Until one of them declares it, not until one of them can be
-            -- opened: a facade supplies its source and no declaration, so
-            -- stopping at the first readable candidate reports the symbol
-            -- absent while the next candidate has it.
-            found <- firstJustM
-              [ scanned comp m src Nothing
-              | m <- NE.toList ms
-              , Just (comp, src) <- [Map.lookup m (idSources imported)]
-              ]
+            found <- followChain (localSources parsed) (NE.toList ms)
             case found of
               Just ld -> pure (Just ld)
               Nothing -> do
                 hPutStrLn stderr $
                   "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
-                    <> Text.unpack (unSymbolName sym) <> ", and none of "
+                    <> Text.unpack (unSymbolName sym) <> ", and no module"
+                    <> " reachable from "
                     <> intercalate ", "
                          (map (Text.unpack . unModulePath) (NE.toList ms))
                     <> " both supplied a source and declared it"
@@ -293,32 +292,151 @@ locateDefinitionInComponent langs ownComponent sources imported asking sym =
     -- @default-extensions: LambdaCase@ resolved the symbol and then failed
     -- to read the module it had resolved it to.
     scanned comp target ms mIface = do
-      r <- case mIface of
-             Just i  -> pure (Right i)
-             Nothing -> Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
+      mIface' <- case mIface of
+        Just i  -> pure (Just i)
+        Nothing -> parsedOf ms
+      pure (declaredIn comp target ms =<< mIface')
+
+    parsedOf ms = do
+      r <- Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
       case r of
-        Left e -> do
-          reportParseFailure (ms, e)
-          pure Nothing
-        Right iface -> pure $ do
-          decl <- Parser.findDecl (unSymbolName sym) (Interface.miDecls iface)
-          ln   <- declAnchor decl
-          pure LocatedDefinition
-            { ldLocation   = SourceLocation (msPath ms) ln
-            , ldModule     = target
-            , ldComponent  = comp
-            , ldDecl       = decl
-            , ldContent    = msContent ms
-            }
+        Left e      -> reportParseFailure (ms, e) >> pure Nothing
+        Right iface -> pure (Just iface)
+
+    declaredIn comp target ms iface = do
+      decl <- Parser.findDecl (unSymbolName sym) (Interface.miDecls iface)
+      ln   <- declAnchor decl
+      pure LocatedDefinition
+        { ldLocation   = SourceLocation (msPath ms) ln
+        , ldModule     = target
+        , ldComponent  = comp
+        , ldDecl       = decl
+        , ldContent    = msContent ms
+        }
+
+    -- The component's own modules, so a candidate that lives here is read
+    -- from the bytes we already hold rather than looked for outside.
+    -- Keyed on the parsed name, which is what an import names.
+    localSources parsed = Map.fromList
+      [ (Interface.miName i, (ownComponent, ms)) | (ms, Right i) <- parsed ]
+
+    -- Follow the re-export chain hop by hop.
+    --
+    -- One ring of candidates is not enough.  The first hop out of
+    -- @base:Data.List@ lands in @GHC.Internal.Data.List@, which is itself
+    -- a facade and passes @sortOn@ on to @GHC.Internal.Data.OldList@ —
+    -- stopping at the ring reports the symbol absent one module short of
+    -- it, which is issue #20.  Each hop asks the module it just read which
+    -- of /its/ imports could supply the name, using the same ranking the
+    -- component-wide resolution uses.
+    --
+    -- Breadth-first, so a nearer definition always wins over a further
+    -- one, and short-circuited within a level, so the common single
+    -- candidate costs a single parse.  Bounded three ways, because an
+    -- unrestricted import plausibly supplies any name and the candidate
+    -- ranking is therefore an order over a graph rather than a path: a
+    -- visited set, a hop limit, and a parse budget.  Exhausting the last
+    -- two is reported — a search that stopped early must not read as a
+    -- search that finished.
+    followChain local ring =
+      evalStateT (hop hopLimit ring) (Search Set.empty (Remaining parseBudget))
+      where
+        hop hops frontier = do
+          st <- get
+          if null frontier || seBudget st == Exhausted then pure Nothing
+            else if hops <= (0 :: Int)
+              then do
+                lift (reportGaveUp "the chain is longer than" hopLimit "hops")
+                pure Nothing
+              else level frontier [] >>= \case
+                Right ld       -> pure (Just ld)
+                Left  children -> hop (hops - 1) children
+
+        -- One ring of candidates: the first that declares the symbol wins,
+        -- and the ones that do not contribute their own candidates to the
+        -- next ring, in rank order.
+        level [] acc = pure (Left (reverse acc))
+        level (m : ms) acc = probe m >>= \case
+          Just (Right ld) -> pure (Right ld)
+          Just (Left cs)  -> level ms (reverse cs ++ acc)
+          Nothing         -> level ms acc
+
+        probe m = do
+          st <- get
+          if m `Set.member` seSeen st then pure Nothing else case seBudget st of
+            Exhausted   -> pure Nothing
+            Remaining 0 -> do
+              -- Said once, at the moment it runs out: the frontier is
+              -- still hundreds of modules long, and one line per skipped
+              -- module would bury the answer that is about to follow it.
+              put st { seBudget = Exhausted }
+              lift (reportGaveUp "reaching it would take more than"
+                      parseBudget "modules")
+              pure Nothing
+            Remaining n -> do
+              put st { seSeen   = Set.insert m (seSeen st)
+                     , seBudget = Remaining (n - 1) }
+              lift (reach m) >>= \case
+                Nothing          -> pure Nothing
+                Just (comp, src) -> lift (parsedOf src) >>= \case
+                  Nothing    -> pure Nothing
+                  Just iface -> pure . Just $
+                    case declaredIn comp m src iface of
+                      Just ld -> Right ld
+                      Nothing -> Left (Reexport.supplierCandidates iface sym)
+
+        reach m = case Map.lookup m local of
+          Just hit -> pure (Just hit)
+          Nothing  -> orModule imported m
+
+    reportGaveUp what limit unit = hPutStrLn stderr $
+      "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
+        <> Text.unpack (unSymbolName sym) <> ", and " <> what <> " "
+        <> show limit <> " " <> unit <> "; the search stopped there"
 
     reportParseFailure (ms, e) = hPutStrLn stderr $
       "hypha: " <> msPath ms <> " could not be parsed: "
         <> Text.unpack (Parser.parseErrorMessage e)
 
--- | The first action that answers, running no more than it must.
-firstJustM :: Monad m => [m (Maybe a)] -> m (Maybe a)
-firstJustM []         = pure Nothing
-firstJustM (a : rest) = a >>= maybe (firstJustM rest) (pure . Just)
+-- | What a chain-following search has spent so far.
+--
+-- Carried in a 'StateT' rather than threaded through the recursion,
+-- because both fields are global to the search and a parameter version
+-- would have to return them from every arm — including the arms that
+-- answer, which is where they would get dropped and the visited set would
+-- silently stop working.
+data Search = Search
+  { seSeen   :: !(Set ModulePath)
+  , seBudget :: !Budget
+  }
+
+-- | Modules the search may still parse.
+--
+-- 'Exhausted' is a state of its own rather than a count of zero because it
+-- also means \"and we have already told the user\": a counter alone would
+-- either say nothing when the search gave up or repeat itself once per
+-- module in a frontier hundreds wide.
+data Budget = Remaining !Int | Exhausted
+  deriving stock (Eq)
+
+-- | How many re-export hops a search follows.
+--
+-- Three, because two is what @base@ needs — @Data.List@ to
+-- @GHC.Internal.Data.List@ to @GHC.Internal.Data.OldList@ — and a facade
+-- over a facade over a facade is the deepest shape anyone has written on
+-- purpose.
+hopLimit :: Int
+hopLimit = 3
+
+-- | How many modules a search may parse before giving up.
+--
+-- A hop limit alone does not bound the work: an unrestricted import is a
+-- candidate for every name, so the second ring out of a module like
+-- @base@'s @Control.Concurrent@ is already hundreds of modules wide.  The
+-- searches that succeed cost a handful of parses; this only stops the ones
+-- that were never going to.
+parseBudget :: Int
+parseBudget = 64
 
 -- | Walk every @.hs@ file under @root@ (skipping build/test dirs) and
 -- return the first hit whose top-level binding or type signature matches

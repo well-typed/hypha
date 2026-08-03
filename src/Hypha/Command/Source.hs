@@ -25,7 +25,7 @@ import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
 import Hypha.Project.Components qualified as Comp
-import Hypha.Search.Index (ModuleSource (..), noImportedDefinitions)
+import Hypha.Search.Index (ModuleSource (..), OutsideReach)
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Types.ComponentName (componentKeyOf)
 import Hypha.Source.Locate
@@ -33,7 +33,6 @@ import Hypha.Source.Locate
   , locateDefinitionInComponent, locateSymbolDefinitionInDir )
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 import System.IO (hPutStrLn, stderr)
-import Hypha.Types.BuildPlan (BuildPlan (..))
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | Result of a source command.
@@ -70,32 +69,33 @@ fullKeys = Set.fromList
 --   Parses the argument as @PKG/MOD[/SYM]@ and returns a 30-line snippet
 --   around the symbol definition (or the module header if no symbol).
 runSource
-  :: BuildEnv IO -> BuildPlan -> PackageId -> Text -> Maybe Text
+  :: BuildEnv IO -> OutsideReach IO -> PackageId -> Text -> Maybe Text
   -> IO (Either HyphaError (Outcome Value))
-runSource env _plan pid modPath mSym = runExceptT $ do
+runSource env reach pid modPath mSym = runExceptT $ do
   srcDir <- liftMaybe (NotFound (NotFoundSource pid))
     =<< liftIO (locatePackageSource env pid)
-  sourceFromDirE pid srcDir modPath mSym
+  sourceFromDirE reach pid srcDir modPath mSym
 
 -- | Variant that takes an already-resolved source directory.  Used by the
 -- 'PackageResolver'-driven dispatch path so the full fallback chain (plan
 -- → store → Hackage tarball) can locate sources before this command runs.
 runSourceFromDir
-  :: BuildEnv IO
+  :: OutsideReach IO
+    -- ^ The dependency closure, for a re-export that leaves the package.
   -> PackageId
   -> FilePath   -- ^ Source directory (resolved upstream).
   -> Text       -- ^ Module path (dotted).
   -> Maybe Text -- ^ Optional symbol name.
   -> IO (Either HyphaError (Outcome Value))
-runSourceFromDir _env pid srcDir modPath mSym =
-  runExceptT (sourceFromDirE pid srcDir modPath mSym)
+runSourceFromDir reach pid srcDir modPath mSym =
+  runExceptT (sourceFromDirE reach pid srcDir modPath mSym)
 
 -- | Shared ExceptT body: find the module file, locate the (optional)
 -- symbol, then build the snippet.
 sourceFromDirE
-  :: PackageId -> FilePath -> Text -> Maybe Text
+  :: OutsideReach IO -> PackageId -> FilePath -> Text -> Maybe Text
   -> ExceptT HyphaError IO (Outcome Value)
-sourceFromDirE pid srcDir modPath mSym = do
+sourceFromDirE reach pid srcDir modPath mSym = do
   -- Split, because the two cases fail differently and the merged version
   -- could build a 'NotFoundSymbol' carrying an empty symbol name -- a
   -- value no caller could ever produce.  It also stopped locating a
@@ -110,7 +110,7 @@ sourceFromDirE pid srcDir modPath mSym = do
       pure (SourceLocation filePath 1)
     Just sym -> liftMaybe
       (NotFound (NotFoundSymbol pid modPath sym))
-      =<< liftIO (locateSymbolLoc pid srcDir modPath sym)
+      =<< liftIO (locateSymbolLoc reach pid srcDir modPath sym)
   content <- liftIO (TIO.readFile (slPath loc))
   let snippet = extractSnippet (slLine loc) (Text.lines content)
       result = SourceResult
@@ -134,14 +134,18 @@ sourceFromDirE pid srcDir modPath mSym = do
 -- came back as @Data\/IntMap\/Internal.hs@.  The sweep survives only for
 -- packages whose cabal we cannot read, and says so.
 --
--- No imported modules are supplied: a bare package directory comes with no
--- build plan, so there is no dependency graph to find the owner of a
--- cross-package re-export in.  'locateDefinitionInComponent' reports those
--- rather than guessing — @hypha server@, which does have a plan, resolves
--- them.
+-- The reach is how a re-export that leaves the package gets followed.  It
+-- is built from the build plan (see "Hypha.Source.Dependencies"), which is
+-- what @Data.List@ needs: since GHC 9.10 @base@ is a facade over
+-- @ghc-internal@, so nearly every @base@ symbol is defined in another
+-- package.  A caller with no plan — a bare package directory with no
+-- project context — passes 'Hypha.Search.Index.noOutsideReach' and gets
+-- the honest report 'locateDefinitionInComponent' makes rather than a
+-- guess.
 locateSymbolLoc
-  :: PackageId -> FilePath -> Text -> Text -> IO (Maybe SourceLocation)
-locateSymbolLoc pid srcDir modPath sym = do
+  :: OutsideReach IO -> PackageId -> FilePath -> Text -> Text
+  -> IO (Maybe SourceLocation)
+locateSymbolLoc reach pid srcDir modPath sym = do
   comps <- Indexer.packageSources srcDir
   -- The component key comes from the 'PackageId' the caller already
   -- holds.  Deriving it from the cabal file's basename was a second,
@@ -157,7 +161,7 @@ locateSymbolLoc pid srcDir modPath sym = do
   case matching of
     ((langs, kind, sources) : _) -> do
       mLd <- locateDefinitionInComponent langs (compKey kind) sources
-               noImportedDefinitions (ModulePath modPath) (SymbolName sym)
+               reach (ModulePath modPath) (SymbolName sym)
       case mLd of
         Just ld -> pure (Just (ldLocation ld))
         Nothing -> pure Nothing

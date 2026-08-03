@@ -261,7 +261,7 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
                 cn      = parseComponentName pkgT
                 compKey = componentKeyOf (cnPackage cn) (cnKind cn)
             mLd <- Locate.locateDefinitionInComponent langs compKey sources
-                     imported (ModulePath modT) (SymbolName symT)
+                     (Index.reachFrom imported) (ModulePath modT) (SymbolName symT)
             case mLd of
               Nothing -> pure Nothing
               Just ld -> do

@@ -25,7 +25,7 @@ import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
 import Hypha.Search.Index
   ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource (..)
-  , Visibility (..) )
+  , Visibility (..), reachFrom )
 import Hypha.Search.PackageCache
   ( CacheOrigin (..), openPackageCacheAt, writeCachedIndex )
 import Hypha.Source.Extensions (defaultLanguageSettings)
@@ -101,7 +101,7 @@ tests = testGroup "Unit.ImportedSources"
           [ ( "test/fixtures/reexport/src/Fixture/Imported.hs"
             , "Fixture.Imported", Exposed ) ]
         mLd <- locateDefinitionInComponent defaultLanguageSettings
-                 (ComponentKey "reexport") sources imported
+                 (ComponentKey "reexport") sources (reachFrom imported)
                  (ModulePath "Fixture.Imported") (SymbolName "depThing")
         case mLd of
           Nothing -> fail "the definition was not located"

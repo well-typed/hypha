@@ -53,6 +53,7 @@ import qualified Unit.SearchIndexCache
 import qualified Unit.SearchReexport
 import qualified Unit.SourceInterface
 import qualified Unit.SourceExtract
+import qualified Unit.SourceDependencies
 import qualified Unit.SourceLocate
 import qualified Unit.SourceOrigins
 import qualified Unit.SourceParser
@@ -120,6 +121,7 @@ allTests = testGroup "hypha"
   , Unit.SearchReexport.tests
   , Unit.SourceInterface.tests
   , Unit.SourceExtract.tests
+  , Unit.SourceDependencies.tests
   , Unit.SourceLocate.tests
   , Unit.SourceOrigins.tests
   , Unit.SourceParser.tests

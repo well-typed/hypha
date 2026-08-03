@@ -127,6 +127,7 @@ library
     Hypha.Search.PackageCache
     Hypha.Search.Fuzzy
     Hypha.Search.Reexport
+    Hypha.Source.Dependencies
     Hypha.Source.Extensions
     Hypha.Source.Interface
     Hypha.Source.Extract
@@ -261,6 +262,7 @@ test-suite hypha-tests
     Util.Row
     Unit.SourceInterface
     Unit.SourceExtract
+    Unit.SourceDependencies
     Unit.SourceLocate
     Unit.SourceOrigins
     Unit.SourceParser

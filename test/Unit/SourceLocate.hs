@@ -18,8 +18,8 @@ import qualified GHC.LanguageExtensions as LangExt
 import qualified Hypha.Source.Locate as Locate
 import           Hypha.Search.Index
                    ( DefinitionRef (..), ImportedDefinitions (..)
-                   , ModuleSource (..), Visibility (..)
-                   , noImportedDefinitions )
+                   , ModuleSource (..), OutsideReach, Visibility (..)
+                   , noOutsideReach, reachFrom )
 import           Hypha.Source.Extensions
                    (LanguageSettings (..), defaultLanguageSettings)
 import           Hypha.Types.ComponentName (ComponentKey (..))
@@ -39,17 +39,22 @@ depDefinitions dep = ImportedDefinitions
   }
 
 -- | The dependency's sources with no resolved definition site, which is
--- what the index leaves behind for a name it could not place.  Forces the
--- locator down its own resolution path instead of the index's answer.
+-- what the index leaves behind for a name it could not place — and what
+-- the CLI has always, since it has no index at all.  Forces the locator
+-- down its own resolution path instead of the index's answer.
 depSourcesOnly :: [ModuleSource] -> ImportedDefinitions
 depSourcesOnly dep = (depDefinitions dep) { idSites = Map.empty }
+
+depReach, depReachSourcesOnly :: [ModuleSource] -> OutsideReach IO
+depReach            = reachFrom . depDefinitions
+depReachSourcesOnly = reachFrom . depSourcesOnly
 
 tests :: TestTree
 tests = testGroup "Unit.SourceLocate"
   [ testCase "an intra-component re-export resolves to its definition" $ do
       srcs <- fixtureSources
       mLd  <- Locate.locateDefinitionInComponent defaultLanguageSettings
-                (ComponentKey "reexport") srcs noImportedDefinitions
+                (ComponentKey "reexport") srcs noOutsideReach
                 (ModulePath "Fixture.Wrapper") (SymbolName "insertBag")
       case mLd of
         Just ld -> do
@@ -61,7 +66,7 @@ tests = testGroup "Unit.SourceLocate"
       srcs <- fixtureSources
       dep  <- depSources
       mLd <- Locate.locateDefinitionInComponent defaultLanguageSettings
-               (ComponentKey "reexport") srcs (depDefinitions dep)
+               (ComponentKey "reexport") srcs (depReach dep)
                (ModulePath "Fixture.Imported") (SymbolName "depThing")
       case mLd of
         Just ld -> do
@@ -79,13 +84,33 @@ tests = testGroup "Unit.SourceLocate"
       srcs <- fixtureSources
       dep  <- depSources
       mLd <- Locate.locateDefinitionInComponent defaultLanguageSettings
-               (ComponentKey "reexport") srcs (depDefinitions dep)
+               (ComponentKey "reexport") srcs (depReach dep)
                (ModulePath "Fixture.TwoHop") (SymbolName "depThing")
       case mLd of
         Just ld -> do
           Locate.ldModule ld    @?= ModulePath "Dep.Internal"
           Locate.ldComponent ld @?= ComponentKey "reexport-dep"
         Nothing -> fail "expected to locate depThing through the two-hop chain"
+
+  , testCase "a two-hop re-export resolves with no index answer to lean on" $ do
+      -- The same chain, minus the definition site: the CLI's position,
+      -- which has a build plan and no index.  Fixture.TwoHop imports only
+      -- Dep.Facade, so the ranked candidates stop one module short of the
+      -- declaration and the second hop has to come from asking Dep.Facade
+      -- which of /its/ imports could supply the name.  This is issue #20:
+      -- `hypha source base/Data.List/sortOn` gave up here.
+      srcs <- fixtureSources
+      dep  <- depSources
+      mLd <- Locate.locateDefinitionInComponent defaultLanguageSettings
+               (ComponentKey "reexport") srcs (depReachSourcesOnly dep)
+               (ModulePath "Fixture.TwoHop") (SymbolName "depThing")
+      case mLd of
+        Just ld -> do
+          Locate.ldModule ld    @?= ModulePath "Dep.Internal"
+          Locate.ldComponent ld @?= ComponentKey "reexport-dep"
+          assertBool "points into the dependency's tree"
+            ("reexport-dep" `isInfixOf` Locate.slPath (Locate.ldLocation ld))
+        Nothing -> fail "expected the descent to reach Dep.Internal"
 
   , testCase "resolution tries every candidate, not the first one supplied" $ do
       -- Fixture.ViaFacade imports Dep.Facade and Dep.Internal; both sources
@@ -97,7 +122,7 @@ tests = testGroup "Unit.SourceLocate"
           , "Fixture.ViaFacade", Exposed) ]
       dep  <- depSources
       mLd <- Locate.locateDefinitionInComponent defaultLanguageSettings
-               (ComponentKey "reexport") srcs (depSourcesOnly dep)
+               (ComponentKey "reexport") srcs (depReachSourcesOnly dep)
                (ModulePath "Fixture.ViaFacade") (SymbolName "depThing")
       case mLd of
         Just ld -> do
@@ -108,7 +133,7 @@ tests = testGroup "Unit.SourceLocate"
   , testCase "a symbol whose dependency source is absent is not guessed at" $ do
       srcs <- fixtureSources
       mLd  <- Locate.locateDefinitionInComponent defaultLanguageSettings
-                (ComponentKey "reexport") srcs noImportedDefinitions
+                (ComponentKey "reexport") srcs noOutsideReach
                 (ModulePath "Fixture.Imported") (SymbolName "depThing")
       mLd @?= Nothing
 
@@ -123,7 +148,7 @@ tests = testGroup "Unit.SourceLocate"
       let magicHash = defaultLanguageSettings
             { lsDefaultOn = [LangExt.MagicHash, LangExt.UnboxedTuples] }
       mLd <- Locate.locateDefinitionInComponent magicHash
-               (ComponentKey "reexport") srcs noImportedDefinitions
+               (ComponentKey "reexport") srcs noOutsideReach
                (ModulePath "Fixture.Unboxed") (SymbolName "unboxedAdd")
       case mLd of
         Just ld -> Locate.ldModule ld @?= ModulePath "Fixture.Unboxed"
@@ -136,7 +161,7 @@ tests = testGroup "Unit.SourceLocate"
       srcs <- sourcesFor
         [ ("test/fixtures/reexport/src/Fixture/Unboxed.hs", "Fixture.Unboxed", Exposed) ]
       mLd <- Locate.locateDefinitionInComponent defaultLanguageSettings
-               (ComponentKey "reexport") srcs noImportedDefinitions
+               (ComponentKey "reexport") srcs noOutsideReach
                (ModulePath "Fixture.Unboxed") (SymbolName "unboxedAdd")
       mLd @?= Nothing
   ]

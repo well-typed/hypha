@@ -61,6 +61,7 @@ import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (loadBuildPlan, planHash)
 import Hypha.Search.PackageCache qualified as PC
+import Hypha.Source.Dependencies (dependencyReach)
 import Hypha.Types
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId
@@ -201,6 +202,17 @@ enrichPlanFromStore env plan
 -- @--package-override@ values, surfaced as 'UserError'.
 loadResolver :: Hypha (PackageResolver IO, BuildEnv IO)
 loadResolver = do
+  (resolver, env, _plan) <- loadResolverAndPlan
+  pure (resolver, env)
+
+-- | 'loadResolver', keeping the plan it was built from.
+--
+-- The plan is what tells @source@ which packages a re-export may leave
+-- into, so a caller that has to follow one needs the same plan the
+-- resolver was configured with — a second 'loadProjectAndPlan' would
+-- re-read @plan.json@ and could disagree about the overrides.
+loadResolverAndPlan :: Hypha (PackageResolver IO, BuildEnv IO, BuildPlan)
+loadResolverAndPlan = do
   opts      <- askOpts
   cacheRoot <- asks heCacheDir
   hclient   <- mkHackageClientForOpts
@@ -210,7 +222,7 @@ loadResolver = do
   liftIO $ do
     env      <- mkBuildEnvFor mRoot plan
     resolver <- mkPackageResolver env hclient cacheRoot plan
-    pure (resolver, env)
+    pure (resolver, env, plan)
 
 -- | Create a basic BuildEnv (store only, no project source dirs).
 -- The active GHC's version is sniffed from @PATH@ via
@@ -393,11 +405,16 @@ bindAddrFromFlags port mBind =
 runSourceArm
   :: PackageRef -> Text -> Maybe Text -> Hypha (Outcome Value)
 runSourceArm ref modPath mSym = do
-  (resolver, env) <- loadResolver
+  (resolver, _env, plan) <- loadResolverAndPlan
   rp  <- liftEitherIO (resolveRef resolver ref)
   let pid = rpPkgId rp
   dir <- liftEitherIO (resolveSrc resolver pid)
-  oc  <- liftEitherIO (Source.runSourceFromDir env pid dir modPath mSym)
+  -- The plan is the dependency graph a cross-package re-export is
+  -- followed through.  Outside a project it is empty, which makes the
+  -- reach empty too: the plan-less path keeps reporting the re-export it
+  -- cannot follow rather than guessing at one.
+  reach <- liftIO (dependencyReach plan resolver pid)
+  oc  <- liftEitherIO (Source.runSourceFromDir reach pid dir modPath mSym)
   pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
 -- | Drive the tiered @lookup@ command.  Builds the package cache
