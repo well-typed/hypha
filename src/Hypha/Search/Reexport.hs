@@ -41,7 +41,8 @@ import Data.Text qualified as Text
 import Hypha.Source.Interface
   ( ExportItem (..), ImportItem (..), ModuleInterface (..) )
 import Hypha.Source.Interface qualified as Interface
-import Hypha.Types.SymbolPath (ModulePath (..), SymbolName)
+import Hypha.Source.Parser qualified as Parser
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 
 -- | Where an exported name is declared.
 data DefinitionSite
@@ -58,9 +59,10 @@ data DefinitionSite
     -- and keeps the first that really exports the name.
   | NoSupplier
     -- ^ No module of this component declares it, and no import could
-    -- have supplied it either.  A class method is the common case: the
-    -- parser reports top-level declarations only, so the method is a
-    -- name the component exports and nothing accounts for.
+    -- have supplied it either.  The common case is a name from outside
+    -- the component: a module re-exports something the component does
+    -- not contain.  (Class methods used to land here too, before the
+    -- parser emitted them as declarations.)
   deriving stock (Show, Eq)
 
 -- | Fold 'DefinedHere' back to the asking module, so callers that only
@@ -220,16 +222,40 @@ expandedExportNames ifaces = expandedExportNamesIn (interfacesByName ifaces)
 -- each call made that quadratic in the size of the component.
 expandedExportNamesIn
   :: Map ModulePath ModuleInterface -> ModulePath -> [SymbolName]
-expandedExportNamesIn byName asking = case Map.lookup asking byName of
+expandedExportNamesIn byName asking = nubOrd $ case Map.lookup asking byName of
   Nothing -> []
   Just i  -> Interface.interfaceExportedNames i ++ moduleFormNames i
+    ++ [ n
+       | wc <- wildcardNames i
+       , n <- subordinatesIn byName wc
+       ]
   where
+    wildcardNames i =
+      [ wc | Just items <- [miExports i], ExportSymbolAll wc <- items ]
+
     moduleFormNames i =
       [ n
       | m      <- moduleForms i
       , Just target <- [Map.lookup m byName]
       , n      <- Interface.interfaceExportedNames target
       ]
+
+-- | The subordinate names a @T(..)@ export contributes, resolved
+-- against the component: a class's methods, a data type's constructors.
+-- A wildcard naming something no module of the component declares
+-- expands to nothing — the subordinates live at the definition site, and
+-- that site is out of reach.
+subordinatesIn
+  :: Map ModulePath ModuleInterface -> SymbolName -> [SymbolName]
+subordinatesIn byName wc =
+  [ SymbolName (Parser.declName child)
+  | i <- Map.elems byName
+  , host <- miDecls i
+  , Parser.declName host == unSymbolName wc
+  , Parser.declKind host `elem` [ Parser.DkClass, Parser.DkData, Parser.DkNewtype ]
+  , child <- miDecls i
+  , Parser.declParent child == Just (Parser.declName host)
+  ]
 
 -- | Index modules by the name their source declares.
 interfacesByName :: [ModuleInterface] -> Map ModulePath ModuleInterface

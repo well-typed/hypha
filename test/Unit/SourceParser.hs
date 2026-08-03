@@ -111,12 +111,51 @@ tests = testGroup "Unit.SourceParser"
           kindOf "Elem"   @?= Just DkTypeFamily
           kindOf "None"   @?= Just DkPatternSyn
           kindOf "run"    @?= Just DkFunction
-          -- class methods stay inside the class body: not top-level rows
-          kindOf "pretty" @?= Nothing
+          -- class methods are declarations in their own right, carrying
+          -- the enclosing class as their parent (issue 12 / 043)
+          kindOf "pretty" @?= Just DkClassMethod
+          declParent <$> findDecl "pretty" ds @?= Just (Just "Pretty")
+          (declSigLine =<< findDecl "pretty" ds) @?= Just 6
           -- span slicing support for multi-line type decls
           (declDefLine    =<< findDecl "Colour" ds) @?= Just 3
           (declDefEndLine =<< findDecl "Colour" ds) @?= Just 3
           (declDefEndLine =<< findDecl "Pretty" ds) @?= Just 6
+
+  , testCase "class methods and data constructors are declarations in their own right" $ do
+      let src = Text.unlines
+            [ "{-# LANGUAGE DefaultSignatures #-}"
+            , "module M where"
+            , "class C a where"
+            , "  -- | An operation."
+            , "  op :: a -> a"
+            , "  default op :: Eq a => a -> a"
+            , "  op = id"
+            , "data Colour = Red | Green"
+            , "newtype Wrap = Wrap Int"
+            ]
+      case parseDecls "M.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> show e)
+        Right ds -> do
+          op <- maybe (fail "op missing") pure (findDecl "op" ds)
+          -- sig + default sig + default body merge into one method decl
+          declKind op      @?= DkClassMethod
+          declParent op    @?= Just "C"
+          declSigLine op   @?= Just 5
+          declDefLine op   @?= Just 7
+          declDoc op       @?= Just " An operation."
+          -- the class itself keeps its own decl and kind
+          c <- maybe (fail "C missing") pure (findDecl "C" ds)
+          declKind c @?= DkClass
+          declParent c @?= Nothing
+          -- data constructors are declarations with the type as parent
+          red <- maybe (fail "Red missing") pure (findDecl "Red" ds)
+          declKind red     @?= DkConstructor
+          declParent red   @?= Just "Colour"
+          declDefLine red  @?= Just 8
+          -- a constructor sharing the type's name merges into the
+          -- type's declaration: the page and the index see one entry
+          declKind <$> findDecl "Wrap" ds @?= Just DkNewtype
+          declParent <$> findDecl "Wrap" ds @?= Just Nothing
 
   , testCase "merged sig+def carries kind and both spans" $ do
       let src = Text.unlines

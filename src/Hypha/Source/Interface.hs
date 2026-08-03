@@ -65,6 +65,11 @@ data ExportItem
     -- ^ A name and its explicitly listed subordinates.  @Map(..)@ lists
     -- none of its own: the wildcard's contents are known at the
     -- definition site, not here.
+  | ExportSymbolAll !SymbolName
+    -- ^ The @T(..)@ form: the name and everything subordinate to it —
+    -- a class's methods, a data type's constructors.  The subordinates
+    -- are known at the definition site, so expansion happens against the
+    -- component's declarations (see "Hypha.Search.Reexport"), not here.
   | ExportModule !ModulePath
     -- ^ The @module M@ re-export form.  Kept rather than flattened,
     -- because flattening it needs the target module's export list, which
@@ -181,7 +186,7 @@ exportItem :: IE GhcPs -> Maybe ExportItem
 exportItem = \case
   IEVar          _ n _      -> Just (ExportSymbol (wrapped n) [])
   IEThingAbs     _ n _      -> Just (ExportSymbol (wrapped n) [])
-  IEThingAll     _ n _      -> Just (ExportSymbol (wrapped n) [])
+  IEThingAll     _ n _      -> Just (ExportSymbolAll (wrapped n))
   IEThingWith    _ n _ ss _ -> Just (ExportSymbol (wrapped n) (map wrapped ss))
   IEModuleContents _ lm     ->
     Just (ExportModule (ModulePath (Text.pack (moduleNameString (unLoc lm)))))
@@ -208,8 +213,9 @@ importsOf m =
 -- included: @import M (Map(..), insertWith)@ can supply either.
 importedName :: IE GhcPs -> Maybe SymbolName
 importedName ie = case exportItem ie of
-  Just (ExportSymbol n _) -> Just n
-  _                       -> Nothing
+  Just (ExportSymbol n _)   -> Just n
+  Just (ExportSymbolAll n)  -> Just n
+  _                         -> Nothing
 
 -- | Borrow "Hypha.Source.Parser"'s occurrence rendering so an export
 -- list entry is spelled exactly as the declaration it refers to.
@@ -221,7 +227,11 @@ wrapped = SymbolName . Parser.renderRdrName . ieWrappedName . unLoc
 interfaceExportedNames :: ModuleInterface -> [SymbolName]
 interfaceExportedNames i = case miExports i of
   Nothing    -> declaredNames i
-  Just items -> concat [ n : subs | ExportSymbol n subs <- items ]
+  Just items -> concatMap namesOf items
+  where
+    namesOf (ExportSymbol n subs) = n : subs
+    namesOf (ExportSymbolAll n)   = [n]
+    namesOf (ExportModule _)      = []
 
 -- | The names a module declares itself, re-exports excluded.
 declaredNames :: ModuleInterface -> [SymbolName]

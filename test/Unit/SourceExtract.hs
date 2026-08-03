@@ -62,14 +62,18 @@ tests = testGroup "Unit.SourceExtract"
         Right d -> do
           fmap unDocText (mdiHeader d)
             @?= Just " Fixture module header.\n\n Second paragraph."
-          map deName (mdiEntries d) @?= ["Colour", "run"]
-          map deKind (mdiEntries d) @?= [Just Parser.DkData, Just Parser.DkFunction]
+          -- constructors are declarations in their own right now, so the
+          -- page lists them after the type that contains them
+          map deName (mdiEntries d) @?= ["Colour", "Red", "Green", "run"]
+          map deKind (mdiEntries d)
+            @?= [ Just Parser.DkData, Just Parser.DkConstructor
+                , Just Parser.DkConstructor, Just Parser.DkFunction ]
           case mdiEntries d of
-            [colour, run] -> do
+            [colour, _, _, run] -> do
               deSignature colour @?= Just "data Colour = Red | Green"
               deSignature run    @?= Just "run :: Int -> Int"
               fmap unDocText (deHaddock colour) @?= Just " A colour."
-            es -> assertFailure ("expected two entries, got " <> show (length es))
+            es -> assertFailure ("expected four entries, got " <> show (length es))
 
   , testCase "module without header prose yields Nothing" $ do
       let src = Text.unlines

@@ -248,19 +248,25 @@ tests = testGroup "Unit.SearchIndexBuild"
       ciExternalModuleForms ci
         @?= [(ModulePath "Fixture.Reflect", ModulePath "Data.List")]
 
-  , testCase "an exported class method gets no row, and is reported" $ do
-      -- The parser reports top-level declarations only, so a class method
-      -- is a name the component exports and declares nowhere (issue 043).
-      -- It must not be silently absent: it resolves to DefinedOutside and
-      -- travels out through ciUnresolved, naming the module that could not
-      -- account for it.
+  , testCase "an exported class method gets a row on the declaring module" $ do
+      -- Class methods were a name the component exported and declared
+      -- nowhere (issue 043): the parser reported top-level declarations
+      -- only, so the index had no row and the server could not search for
+      -- e.g. foldMap.  Now the method is its own declaration, so it must
+      -- get a row with the signature GHC attaches to it, and leave the
+      -- unresolved report.
       srcs <- sourcesFor
         [ ("test/fixtures/reexport/src/Fixture/Klass.hs", "Fixture.Klass", Exposed) ]
       let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
                  defaultLanguageSettings srcs
-      rowsFor ci "klassMethod" @?= []
-      assertBool ("expected klassMethod in " <> show (ciUnresolved ci))
-        (SymbolName "klassMethod" `elem` map oeName (ciUnresolved ci))
+      case rowsFor ci "klassMethod" of
+        [r] -> do
+          rowDefinition r @?= DefinitionRef (ComponentKey "reexport")
+                                           (ModulePath "Fixture.Klass")
+          rowSignature r  @?= Signature "klassMethod :: a -> Int"
+        other -> fail ("expected one klassMethod row, got " <> show (length other))
+      assertBool "klassMethod leaves the unresolved report"
+        (SymbolName "klassMethod" `notElem` map oeName (ciUnresolved ci))
 
   , testCase "an export no import explains is repaired from the interface" $ do
       -- Fixture.Blind's only import has no depThing, and the module that

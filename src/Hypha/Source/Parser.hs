@@ -29,6 +29,9 @@ module Hypha.Source.Parser
   ) where
 
 import Control.Exception.Safe (SomeException, displayException, try)
+import Data.Foldable qualified as Foldable
+import Data.List (sortOn)
+import Data.List.NonEmpty qualified as NE
 import Data.Maybe (listToMaybe)
 import Data.Text qualified as Text
 import Data.Text (Text)
@@ -55,6 +58,11 @@ data Decl = Decl
   { declName       :: !Text
   , declSiblings   :: ![Text]
   , declKind       :: !DeclKind
+  , declParent     :: !(Maybe Text)
+    -- ^ The enclosing class or data type, for names that live inside a
+    -- body (class methods, data constructors); 'Nothing' for a top-level
+    -- declaration.  Lets a card say "method of @FromJSON@" and lets the
+    -- @T(..)@ export form expand to its subordinates.
   , declSigLine    :: !(Maybe Int)
     -- ^ Start line of the @sym :: ...@ signature, 1-based.
   , declSigEndLine :: !(Maybe Int)
@@ -89,6 +97,10 @@ data DeclKind
   | DkTypeFamily
   | DkPatternSyn
   | DkForeign
+  | DkClassMethod
+    -- ^ A method of a class, anchored inside its body.
+  | DkConstructor
+    -- ^ A data constructor, anchored inside its type's body.
   deriving stock (Show, Eq)
 
 -- | Carrier for any parser failure surfaced from @ghc-lib-parser@.
@@ -345,11 +357,25 @@ associateDocs = go Nothing []
       -- doc binds to the declaration immediately following it, even one
       -- we don't emit (e.g. an instance), so the pending doc is cleared
       -- either way.
-      _ -> let ds = [ dcl { declDoc = pending } | dcl <- declsFromTop ld ]
+      _ -> let ds = nodeDecls pending ld
            in go Nothing (reverse ds ++ acc) rest
 
     attachPrev _   []       = []
     attachPrev txt (d : ds) = d { declDoc = declDoc d `appendDoc` Just txt } : ds
+
+-- | The declarations a top-level node contributes, with the node's
+-- pending @-- |@ doc applied.  A @-- |@ block before a type or class
+-- names the type or class itself, not every declaration its body
+-- contains: stapling it onto the methods and constructors too would hand
+-- the type's prose to its members.  Everything else (a multi-name
+-- signature, a function) belongs to one declaration, so its doc goes to
+-- each sibling.
+nodeDecls :: Maybe Text -> LHsDecl GhcPs -> [Decl]
+nodeDecls pending ld = case unLoc ld of
+  TyClD{} -> case declsFromTop ld of
+    []         -> []
+    (d : rest) -> d { declDoc = pending } : rest
+  _ -> [ dcl { declDoc = pending } | dcl <- declsFromTop ld ]
 
 -- | Combine two optional doc blocks, joining with a blank line so a
 -- @-- |@ / @-- ^@ pair on the same binding reads as two paragraphs.
@@ -370,6 +396,11 @@ mergeByName = go []
       (_,    [])      -> go (d : acc) ds
       (pre, e : post) -> go (reverse pre ++ merge e d : post) ds
 
+    -- Merging is by name, as before.  A data constructor sharing its
+    -- type's name (@data Wrap = Wrap Int@) merges into the type's decl,
+    -- which is what the page and the index should show for @Wrap@ — one
+    -- entry whose span covers the whole declaration.  Constructors with
+    -- their own names (@Red@, @Green@) are separate decls and never meet.
     merge a b = Decl
       { declName       = declName a
       , declSiblings   = declSiblings a `orEmpty` declSiblings b
@@ -377,12 +408,19 @@ mergeByName = go []
         -- signature defaults to it), so any more specific kind from
         -- the other half of the merge wins.
       , declKind       = if declKind a == DkFunction then declKind b else declKind a
+      , declParent     = parentOf (declParent a) (declParent b)
       , declSigLine    = declSigLine a    `orFirst` declSigLine b
       , declSigEndLine = declSigEndLine a `orFirst` declSigEndLine b
       , declDefLine    = declDefLine a    `orFirst` declDefLine b
       , declDefEndLine = declDefEndLine a `orFirst` declDefEndLine b
       , declDoc        = declDoc a        `appendDoc` declDoc b
       }
+
+    -- A merged type and its same-named constructor is the type: parent
+    -- wins only when both halves carry one (a method's signature and its
+    -- default body name the same class).
+    parentOf (Just x) (Just _) = Just x
+    parentOf _        _        = Nothing
 
     orFirst (Just x) _ = Just x
     orFirst Nothing  y = y
@@ -395,60 +433,160 @@ declsFromTop ld = case unLoc ld of
   SigD _ (TypeSig _ lnames _ty) ->
     let names    = map (rdrText . unLoc) lnames
         (mS, mE) = locLines ld
-    in [ sigDecl nm names mS mE DkFunction | nm <- names ]
+    in [ sigDecl nm names mS mE DkFunction Nothing | nm <- names ]
   SigD _ (PatSynSig _ lnames _ty) ->
     let names    = map (rdrText . unLoc) lnames
         (mS, mE) = locLines ld
-    in [ sigDecl nm names mS mE DkPatternSyn | nm <- names ]
+    in [ sigDecl nm names mS mE DkPatternSyn Nothing | nm <- names ]
   ValD _ (FunBind { fun_id = L _ rn }) ->
     let (mS, mE) = locLines ld
-    in [ defDecl (rdrText rn) mS mE DkFunction ]
+    in [ defDecl (rdrText rn) mS mE DkFunction Nothing ]
   ValD _ (PatSynBind _ (PSB { psb_id = L _ rn })) ->
     let (mS, mE) = locLines ld
-    in [ defDecl (rdrText rn) mS mE DkPatternSyn ]
+    in [ defDecl (rdrText rn) mS mE DkPatternSyn Nothing ]
   TyClD _ tc ->
     let (mS, mE) = locLines ld
     in case tc of
          SynDecl { tcdLName = L _ rn } ->
-           [ defDecl (rdrText rn) mS mE DkTypeSyn ]
+           [ defDecl (rdrText rn) mS mE DkTypeSyn Nothing ]
          FamDecl { tcdFam = FamilyDecl { fdLName = L _ rn } } ->
-           [ defDecl (rdrText rn) mS mE DkTypeFamily ]
-         ClassDecl { tcdLName = L _ rn } ->
-           [ defDecl (rdrText rn) mS mE DkClass ]
+           [ defDecl (rdrText rn) mS mE DkTypeFamily Nothing ]
+         ClassDecl { tcdLName = L _ rn, tcdSigs = sigs, tcdMeths = meths
+                   , tcdDocs = docs } ->
+           let cls = rdrText rn
+           in defDecl cls mS mE DkClass Nothing
+                : classMethods cls sigs meths docs
          DataDecl { tcdLName = L _ rn, tcdDataDefn = defn } ->
            let k = case dd_cons defn of
                      NewTypeCon {} -> DkNewtype
                      _             -> DkData
-           in [ defDecl (rdrText rn) mS mE k ]
+           in defDecl (rdrText rn) mS mE k Nothing
+                : constructorsOf (rdrText rn) defn
   ForD _ (ForeignImport { fd_name = L _ rn }) ->
     let (mS, mE) = locLines ld
-    in [ defDecl (rdrText rn) mS mE DkForeign ]
+    in [ defDecl (rdrText rn) mS mE DkForeign Nothing ]
   _ -> []
+
+-- | A signature declaration: one 'Decl' per bound name, sharing the
+-- signature's span and sibling list.
+sigDecl :: Text -> [Text] -> Maybe Int -> Maybe Int -> DeclKind -> Maybe Text -> Decl
+sigDecl nm names mS mE k parent = Decl
+  { declName       = nm
+  , declSiblings   = filter (/= nm) names
+  , declKind       = k
+  , declParent     = parent
+  , declSigLine    = mS
+  , declSigEndLine = mE
+  , declDefLine    = Nothing
+  , declDefEndLine = Nothing
+  , declDoc        = Nothing
+  }
+
+-- | A definition declaration.
+defDecl :: Text -> Maybe Int -> Maybe Int -> DeclKind -> Maybe Text -> Decl
+defDecl nm mS mE k parent = Decl
+  { declName       = nm
+  , declSiblings   = []
+  , declKind       = k
+  , declParent     = parent
+  , declSigLine    = Nothing
+  , declSigEndLine = Nothing
+  , declDefLine    = mS
+  , declDefEndLine = mE
+  , declDoc        = Nothing
+  }
+
+-- | The class body's methods as declarations in their own right: every
+-- @ClassOpSig@ (ordinary or generic @default@) and every default-method
+-- binding, parented on the class so the @C(..)@ export form can expand
+-- to them and a card can say "method of @C@".  Doc comments inside the
+-- class body are stapled positionally, exactly as the top-level pass
+-- staples the module's.
+classMethods :: Text -> [LSig GhcPs] -> LHsBinds GhcPs -> [LDocDecl GhcPs] -> [Decl]
+classMethods cls sigs meths docs = go Nothing [] (sortOn fst items)
   where
-    sigDecl nm names mS mE k = Decl
-      { declName       = nm
-      , declSiblings   = filter (/= nm) names
-      , declKind       = k
-      , declSigLine    = mS
-      , declSigEndLine = mE
-      , declDefLine    = Nothing
-      , declDefEndLine = Nothing
-      , declDoc        = Nothing
-      }
-    defDecl nm mS mE k = Decl
-      { declName       = nm
-      , declSiblings   = []
-      , declKind       = k
-      , declSigLine    = Nothing
-      , declSigEndLine = Nothing
-      , declDefLine    = mS
-      , declDefEndLine = mE
-      , declDoc        = Nothing
-      }
+    items =
+      [ (declStartLine d, BodyDecl d) | s <- sigs, d <- methodSigDecls cls s ]
+        ++ [ (declStartLine d, BodyDecl d)
+           | b <- Foldable.toList meths, Just d <- [methodBindDecl cls b] ]
+        ++ [ (docLine ld, BodyNextDoc (docTextOf t))
+           | ld <- docs, DocCommentNext t <- [unLoc ld] ]
+        ++ [ (docLine ld, BodyPrevDoc (docTextOf t))
+           | ld <- docs, DocCommentPrev t <- [unLoc ld] ]
+
+    -- Sigs and binds anchor at their own span; docs sort by theirs.  A
+    -- zero line is impossible for real source, so it only ties items the
+    -- parser did not anchor — order among those is stable and irrelevant.
+    declStartLine d = case declSigLine d of
+      Just l  -> l
+      Nothing -> case declDefLine d of
+        Just l  -> l
+        Nothing -> 0
+
+    docLine ld = case locA (getLoc ld) of
+      RealSrcSpan r _ -> srcSpanStartLine r
+      _               -> 0
+
+    go _       acc []          = reverse acc
+    go pending acc ((_, BodyDecl d) : rest) =
+      go Nothing (d { declDoc = pending } : acc) rest
+    go pending acc ((_, BodyNextDoc t) : rest) =
+      go (pending `appendDoc` Just t) acc rest
+    go pending acc ((_, BodyPrevDoc t) : rest) =
+      go pending (attachPrev t acc) rest
+
+    attachPrev _   []       = []
+    attachPrev txt (d : ds) = d { declDoc = declDoc d `appendDoc` Just txt } : ds
+
+-- | A class body item reduced to what doc association needs.
+data BodyItem
+  = BodyDecl !Decl
+  | BodyNextDoc !Text
+  | BodyPrevDoc !Text
+
+-- | A method's type signature, ordinary or generic @default@.
+methodSigDecls :: Text -> LSig GhcPs -> [Decl]
+methodSigDecls cls sigL = case unLoc sigL of
+  ClassOpSig _ _ lnames _ty ->
+    let names    = map (rdrText . unLoc) lnames
+        (mS, mE) = spanLines (locA (getLoc sigL))
+    in [ sigDecl nm names mS mE DkClassMethod (Just cls) | nm <- names ]
+  _ -> []
+
+-- | A default-method binding inside the class body.
+methodBindDecl :: Text -> LHsBind GhcPs -> Maybe Decl
+methodBindDecl cls b = case unLoc b of
+  FunBind { fun_id = L _ rn } ->
+    let (mS, mE) = spanLines (locA (getLoc b))
+    in Just (defDecl (rdrText rn) mS mE DkClassMethod (Just cls))
+  _ -> Nothing
+
+-- | A data type's constructors, each a declaration parented on the type.
+constructorsOf :: Text -> HsDataDefn GhcPs -> [Decl]
+constructorsOf tyName defn =
+  [ defDecl nm mS mE DkConstructor (Just tyName)
+  | con <- conDeclsOf defn
+  , nm <- constructorNames (unLoc con)
+  , let (mS, mE) = spanLines (locA (getLoc con))
+  ]
+
+conDeclsOf :: HsDataDefn GhcPs -> [LConDecl GhcPs]
+conDeclsOf defn = case dd_cons defn of
+  NewTypeCon c     -> [c]
+  DataTypeCons _ cs -> cs
+
+constructorNames :: ConDecl GhcPs -> [Text]
+constructorNames = \case
+  ConDeclGADT { con_names = names } -> map (rdrText . unLoc) (NE.toList names)
+  ConDeclH98  { con_name = L _ nm } -> [rdrText nm]
 
 locLines :: LHsDecl GhcPs -> (Maybe Int, Maybe Int)
-locLines ld = case locA (getLoc ld) of
-  RealSrcSpan s _ -> (Just (srcSpanStartLine s), Just (srcSpanEndLine s))
+locLines ld = spanLines (locA (getLoc ld))
+
+-- | The start and end lines of a source span.
+spanLines :: SrcSpan -> (Maybe Int, Maybe Int)
+spanLines s = case s of
+  RealSrcSpan r _ -> (Just (srcSpanStartLine r), Just (srcSpanEndLine r))
   _               -> (Nothing, Nothing)
 
 rdrText :: RdrName -> Text

@@ -53,6 +53,18 @@ loosely follows [Semantic Versioning](https://semver.org/).
   `base` went from 308 index rows to 1450; `Data.Traversable`,
   `Control.Monad`, `Data.Foldable`, `Data.List`, `Data.Maybe` and
   `Prelude` had contributed none.
+- **Class methods and data constructors are indexed.** The parser now
+  emits them as declarations in their own right (`DkClassMethod` /
+  `DkConstructor`, parented on the enclosing class or type), and the
+  resolver expands `T(..)` wildcard exports to the class's methods and
+  the type's constructors. The index had no row for a class method —
+  `foldMap`, `traverse`, `fmap`, `Just`, `mempty` all came up empty in
+  the server's search — and `hypha source`/`hypha symbol` could not
+  resolve a method (issue 12). A method now resolves to the module that
+  declares it with the signature GHC attaches to it, and `lookup`'s
+  cache tier surfaces the canonical package instead of only fringe
+  packages that happened to declare a top-level function of the same
+  name.
 - **Search results collapse to one hit per definition**, with the most
   public presentation winning. A `+N` disclosure names every package and
   module folded in, each a link, with the defining one tagged; scoping to

@@ -510,10 +510,11 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
     --
     -- 'findDecl' cannot miss here: a site is only "inside" when
     -- 'Interface.declaredNames' found the name, and that reads the very
-    -- 'miDecls' list 'findDecl' searches.  A name this component exports
-    -- but declares nowhere -- every class method, since the parser
-    -- reports top-level declarations only -- resolves to 'DefinedOutside'
-    -- instead and is reported through 'ciUnresolved'.
+    -- 'miDecls' list 'findDecl' searches.  Class methods and data
+    -- constructors are declarations in their own right now (they were
+    -- the names this filter dropped before the parser learned to emit
+    -- them), so a method resolves here and gets a row like any other
+    -- declaration.
     localRows =
       [ IndexRow
           { rowComponent  = compKey
