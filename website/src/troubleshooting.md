@@ -112,7 +112,8 @@ Two known gaps, both reported on stderr as they happen:
   `liftA2` have none at all. Declaration scanning sees top-level
   declarations, and a class's methods are not top-level. `hypha lookup`
   still answers for these through Hoogle; `hypha server`'s search does
-  not.
+  not, and a module page lists them as "re-exported, origin unresolved"
+  even though the interface file names the module that declares them.
 - **Modules that need CPP are skipped.** A module whose source does not
   parse without preprocessing (`parse error on input '#'`, or an
   `#error` guarded on a macro only a real GHC invocation defines)

@@ -2,6 +2,8 @@
 
 **Status:** todo
 **Type:** bug
+**Tracked as:** well-typed/hypha#12 on GitLab — resolved outside the
+`adinapoli/more-server-improvements` PR.
 **Found by:** verification during `adinapoli/more-server-improvements`
 
 ## Problem

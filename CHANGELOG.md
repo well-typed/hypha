@@ -203,7 +203,10 @@ loosely follows [Semantic Versioning](https://semver.org/).
   `Traversable` has a row; `traverse`, `fmap`, `Just` and `mempty` have
   none. Declaration scanning sees top-level declarations only, and a
   class's methods are not top-level. `hypha lookup` still answers for
-  these through Hoogle.
+  these through Hoogle. A module page lists them as "re-exported, origin
+  unresolved" — the interface file names the module that declares them,
+  and there is still no declaration to read a signature from:
+  `ListLike/Data.ListLike` shows 113 of them.
 - **159 modules of a 283-package plan do not parse without CPP
   preprocessing**, and every module re-exporting from one loses exactly
   what it re-exported — which is why `Prelude` is sparse. Each is
