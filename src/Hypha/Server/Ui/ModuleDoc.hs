@@ -248,8 +248,12 @@ isTypeKind = \case
   DkClass       -> True
   DkTypeSyn     -> True
   DkTypeFamily  -> True
+  DkFunction    -> False
+  DkPatternSyn  -> False
+  DkForeign     -> False
+  DkClassMethod -> False
   DkConstructor -> False
-  _             -> False
+  DkRecordField -> False
 
 -- | Small badge naming the declaration form.  Functions carry no badge
 -- — they are the common case and the signature already says it all.
@@ -270,6 +274,7 @@ kindBadge = maybe mempty badgeFor
       DkForeign      -> badge "kb-foreign" "foreign"
       DkClassMethod  -> badge "kb-method"  "method"
       DkConstructor  -> badge "kb-con"     "constructor"
+      DkRecordField  -> badge "kb-field"   "field"
 
     badge :: Text -> Text -> Html ()
     badge cls label =

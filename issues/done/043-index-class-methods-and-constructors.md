@@ -1,6 +1,6 @@
 # Index class methods and data constructors
 
-**Status:** todo
+**Status:** done
 **Type:** bug
 **Tracked as:** well-typed/hypha#12 on GitLab — resolved outside the
 `adinapoli/more-server-improvements` PR.
@@ -56,3 +56,21 @@ what `Parser.findDecl` has to learn.
   including a record field.
 - Remove the corresponding entry from `website/src/troubleshooting.md` and
   from `CHANGELOG.md`'s Known limitations.
+
+## Outcome
+
+Done. `Parser` emits `DkClassMethod`, `DkConstructor` and
+`DkRecordField`, each parented on its class or type; `Reexport` expands
+`T(..)` against a subordinate map built once per component. Record fields
+were part of the acceptance criteria and are the selector names users
+actually search for (`getSum`, `appEndo`, `runReaderT`).
+
+What is *not* fixed, and is a different limitation: a member declared in a
+module the parser cannot read without CPP still has no row —
+`GHC.Internal.Base` is one, so `liftA2` and `pure` have no `base` row.
+That is the CPP entry in `CHANGELOG.md`'s Known limitations, not this
+issue; both doc files now say so.
+
+Slicing stays line-granular, so a constructor's signature carries the
+punctuation sharing its line (`= Circle { radius :: Int }`). Trimming it
+needs column spans, which nothing else in the module keeps.

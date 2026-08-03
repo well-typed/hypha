@@ -157,6 +157,77 @@ tests = testGroup "Unit.SourceParser"
           declKind <$> findDecl "Wrap" ds @?= Just DkNewtype
           declParent <$> findDecl "Wrap" ds @?= Just Nothing
 
+  , testCase "record fields are declarations parented on the type" $ do
+      -- A field is the selector function users search for -- getSum,
+      -- appEndo, runReaderT -- and had no declaration to be found by, so
+      -- no index row (issue 12 / 043).  Parented on the type rather than
+      -- the constructor, so a field shared by two constructors is one
+      -- declaration and @T(..)@ reaches it.
+      let src = Text.unlines
+            [ "module M where"
+            , "data Person = Person"
+            , "  { name :: String  -- ^ Their name."
+            , "  , age  :: Int"
+            , "  }"
+            , "data T = A { shared :: Int } | B { shared :: Int }"
+            ]
+      case parseDecls "M.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> show e)
+        Right ds -> do
+          nameF <- maybe (fail "name missing") pure (findDecl "name" ds)
+          declKind nameF    @?= DkRecordField
+          declParent nameF  @?= Just "Person"
+          -- anchored on its own @field :: Type@ entry, so the field reads
+          -- as the signature it is rather than as its type's whole body
+          declSigLine nameF @?= Just 3
+          declDoc nameF     @?= Just " Their name."
+          (declSigLine =<< findDecl "age" ds) @?= Just 4
+          -- one entry for a field both constructors declare
+          length (filter ((== "shared") . declName) ds) @?= 1
+          declParent <$> findDecl "shared" ds @?= Just (Just "T")
+
+  , testCase "a constructor and an unrelated same-named type stay apart" $ do
+      -- Type and value namespaces are separate, so aeson's own shape --
+      -- @type Object@ beside @data Value = Object Object@ -- is two
+      -- declarations.  Merging by name alone swallowed one of them: the
+      -- constructor vanished into the synonym, or (in the other source
+      -- order) the synonym inherited the constructor's kind and span.
+      let srcs =
+            [ ( "synonym first"
+              , [ "module M where", "type Object = Int"
+                , "data Value = Object Object | Null" ]
+              , [ (DkTypeSyn, Nothing, 2 :: Int)
+                , (DkConstructor, Just "Value", 3) ] )
+            , ( "data first"
+              , [ "module M where", "data Value = Object Object | Null"
+                , "type Object = Int" ]
+              , [ (DkConstructor, Just "Value", 2)
+                , (DkTypeSyn, Nothing, 3) ] )
+            ]
+      sequence_
+        [ case parseDecls "M.hs" (Text.unlines src) of
+            Left e   -> fail (lbl <> ": unexpected parse error: " <> show e)
+            Right ds ->
+              [ (declKind d, declParent d, declDefLine d)
+              | d <- ds, declName d == "Object"
+              ] @?= [ (k, p, Just l) | (k, p, l) <- expected ]
+        | (lbl, src, expected) <- srcs
+        ]
+
+  , testCase "a trailing doc names the type, not its last constructor" $ do
+      -- @-- ^@ binds to the declaration it follows, which is the type --
+      -- not whichever constructor that type's body contributed last.
+      let src = Text.unlines
+            [ "module M where"
+            , "data Colour = Red | Green"
+            , "-- ^ A colour."
+            ]
+      case parseDecls "M.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> show e)
+        Right ds -> do
+          declDoc <$> findDecl "Colour" ds @?= Just (Just " A colour.")
+          declDoc <$> findDecl "Green"  ds @?= Just Nothing
+
   , testCase "merged sig+def carries kind and both spans" $ do
       let src = Text.unlines
             [ "module M where"

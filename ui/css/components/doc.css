@@ -216,12 +216,23 @@ section.decl .haddock   { margin: 0.5rem 0 0; }
 .kb-class   { background: rgba(155, 89, 182, 0.14); color: #9b59b6; }
 .kb-pattern { background: rgba(46, 125, 79, 0.14);  color: var(--ok); }
 .kb-foreign { background: rgba(179, 115, 15, 0.14); color: var(--warn-c); }
+/* Members of a class or type: same hues as their container, dimmer, so a
+   page reads as types with members rather than as a flat list. */
+.kb-method  { background: rgba(155, 89, 182, 0.10); color: #8e6ba8; }
+.kb-con     { background: rgba(44, 111, 187, 0.10); color: #4a7cb0; }
+.kb-field   { background: rgba(44, 111, 187, 0.10); color: #4a7cb0; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .kb-type  { color: #7fb1ec; }
-  :root:not([data-theme="light"]) .kb-class { color: #c99ee0; }
+  :root:not([data-theme="light"]) .kb-type   { color: #7fb1ec; }
+  :root:not([data-theme="light"]) .kb-class  { color: #c99ee0; }
+  :root:not([data-theme="light"]) .kb-method { color: #b48fcc; }
+  :root:not([data-theme="light"]) .kb-con    { color: #8fb4dc; }
+  :root:not([data-theme="light"]) .kb-field  { color: #8fb4dc; }
 }
-:root[data-theme="dark"] .kb-type  { color: #7fb1ec; }
-:root[data-theme="dark"] .kb-class { color: #c99ee0; }
+:root[data-theme="dark"] .kb-type   { color: #7fb1ec; }
+:root[data-theme="dark"] .kb-class  { color: #c99ee0; }
+:root[data-theme="dark"] .kb-method { color: #b48fcc; }
+:root[data-theme="dark"] .kb-con    { color: #8fb4dc; }
+:root[data-theme="dark"] .kb-field  { color: #8fb4dc; }
 
 /* Symbol card header + copy button. */
 .symbol-head {

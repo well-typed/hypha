@@ -24,6 +24,7 @@ module Hypha.Source.Parser
   , findDecl
   , declSigText
   , declSigTextIn
+  , declSigOrSliceIn
   , numberedLines
   , renderRdrName
   ) where
@@ -101,6 +102,12 @@ data DeclKind
     -- ^ A method of a class, anchored inside its body.
   | DkConstructor
     -- ^ A data constructor, anchored inside its type's body.
+  | DkRecordField
+    -- ^ A record field, anchored on its @field :: Type@ entry.  A field
+    -- is a selector function in its own right — @getSum@, @appEndo@,
+    -- @runReaderT@ — and is parented on the /type/ rather than on the
+    -- constructor, so a field shared by several constructors is one
+    -- declaration and @T(..)@ reaches it.
   deriving stock (Show, Eq)
 
 -- | Carrier for any parser failure surfaced from @ghc-lib-parser@.
@@ -310,9 +317,27 @@ declSigText = declSigTextIn . numberedLines
 -- declarations out of one module: numbering the source per declaration is
 -- what made the batch path quadratic.
 declSigTextIn :: [(Int, Text)] -> Decl -> Maybe Text
-declSigTextIn ls d = do
-  startLn <- declSigLine d
-  let endLn = case declSigEndLine d of
+declSigTextIn ls d = sliceJoined ls (declSigLine d) (declSigEndLine d)
+
+-- | 'declSigTextIn', falling back to the definition span for a data
+-- constructor — the one kind that has real source worth showing and no
+-- @::@ line of its own.  Without the fallback every constructor row in
+-- the index carried an empty signature, which the search list rendered
+-- as a blank column and @hypha lookup@ emitted as @sig: \"\"@.
+declSigOrSliceIn :: [(Int, Text)] -> Decl -> Maybe Text
+declSigOrSliceIn ls d = case declSigTextIn ls d of
+  Just t  -> Just t
+  Nothing
+    | declKind d == DkConstructor ->
+        sliceJoined ls (declDefLine d) (declDefEndLine d)
+    | otherwise -> Nothing
+
+-- | The numbered lines @[start .. end]@ joined into one, whitespace
+-- collapsed.  @end@ defaults to @start@ and never precedes it.
+sliceJoined :: [(Int, Text)] -> Maybe Int -> Maybe Int -> Maybe Text
+sliceJoined ls mStart mEnd = do
+  startLn <- mStart
+  let endLn = case mEnd of
                 Just e  -> max startLn e
                 Nothing -> startLn
       slice = [ t | (i, t) <- ls, i >= startLn, i <= endLn ]
@@ -360,8 +385,20 @@ associateDocs = go Nothing []
       _ -> let ds = nodeDecls pending ld
            in go Nothing (reverse ds ++ acc) rest
 
-    attachPrev _   []       = []
-    attachPrev txt (d : ds) = d { declDoc = declDoc d `appendDoc` Just txt } : ds
+    -- A @-- ^@ block names the declaration it follows, which is the
+    -- preceding /node/ — the type, class or function — not the last
+    -- constructor or method that node's body happened to contribute.
+    -- Body members are the ones carrying a parent, so skipping past them
+    -- lands on the node itself: @data Colour = Red | Green@ followed by
+    -- @-- ^ A colour.@ documents @Colour@, and used to document @Green@.
+    -- (A body member's own @-- ^@ never reaches here: it lives inside the
+    -- body and is associated by 'classMethods'.)
+    attachPrev txt acc = case break isTopLevel acc of
+      (_,    [])       -> acc
+      (subs, d : rest) ->
+        subs ++ (d { declDoc = declDoc d `appendDoc` Just txt } : rest)
+
+    isTopLevel d = declParent d == Nothing
 
 -- | The declarations a top-level node contributes, with the node's
 -- pending @-- |@ doc applied.  A @-- |@ block before a type or class
@@ -392,9 +429,34 @@ mergeByName :: [Decl] -> [Decl]
 mergeByName = go []
   where
     go acc []     = reverse acc
-    go acc (d:ds) = case break ((== declName d) . declName) acc of
+    go acc (d:ds) = case break (sameEntity d) acc of
       (_,    [])      -> go (d : acc) ds
       (pre, e : post) -> go (reverse pre ++ merge e d : post) ds
+
+    -- Equal names are not enough: Haskell keeps type and value names in
+    -- separate namespaces, so a constructor can share a name with an
+    -- unrelated type in the same module —
+    --
+    -- >  type Object = Int
+    -- >  data Value  = Object Object   -- aeson's own shape
+    --
+    -- and folding those two together loses one of them outright (the
+    -- @Object@ constructor vanished into the synonym's decl, or the
+    -- synonym inherited the constructor's kind, span and @v:@ anchor,
+    -- depending on which came first).  Two decls are the same entity
+    -- when their names agree /and/ their parents relate them: both
+    -- top-level, or a member of the very type it is named after.
+    sameEntity d e = declName e == declName d && relatedParents d e
+
+    relatedParents d e = case (declParent d, declParent e) of
+      (Nothing, Nothing) -> True
+      -- @data Wrap = Wrap Int@: the constructor is the type's own, so the
+      -- two are one declaration seen twice and merge into a single entry
+      -- whose span covers the whole thing.
+      (Just p,  Nothing) -> p == declName e
+      (Nothing, Just q)  -> q == declName d
+      -- A method's signature and its default body name the same class.
+      (Just p,  Just q)  -> p == q
 
     -- Merging is by name, as before.  A data constructor sharing its
     -- type's name (@data Wrap = Wrap Int@) merges into the type's decl,
@@ -561,13 +623,21 @@ methodBindDecl cls b = case unLoc b of
     in Just (defDecl (rdrText rn) mS mE DkClassMethod (Just cls))
   _ -> Nothing
 
--- | A data type's constructors, each a declaration parented on the type.
+-- | A data type's constructors and record fields, each a declaration
+-- parented on the type.  Both carry whatever Haddock GHC attached to
+-- them (@-- ^@ after a constructor, @-- ^@ after a field), which is the
+-- only doc a constructor ever has.
 constructorsOf :: Text -> HsDataDefn GhcPs -> [Decl]
 constructorsOf tyName defn =
-  [ defDecl nm mS mE DkConstructor (Just tyName)
-  | con <- conDeclsOf defn
-  , nm <- constructorNames (unLoc con)
-  , let (mS, mE) = spanLines (locA (getLoc con))
+  [ d
+  | lcon <- conDeclsOf defn
+  , let con      = unLoc lcon
+        (mS, mE) = spanLines (locA (getLoc lcon))
+  , d <- [ (defDecl nm mS mE DkConstructor (Just tyName))
+             { declDoc = fmap docTextOf (conDoc con) }
+         | nm <- constructorNames con
+         ]
+           ++ fieldsOf tyName con
   ]
 
 conDeclsOf :: HsDataDefn GhcPs -> [LConDecl GhcPs]
@@ -579,6 +649,35 @@ constructorNames :: ConDecl GhcPs -> [Text]
 constructorNames = \case
   ConDeclGADT { con_names = names } -> map (rdrText . unLoc) (NE.toList names)
   ConDeclH98  { con_name = L _ nm } -> [rdrText nm]
+
+conDoc :: ConDecl GhcPs -> Maybe (LHsDoc GhcPs)
+conDoc = \case
+  ConDeclGADT { con_doc = d } -> d
+  ConDeclH98  { con_doc = d } -> d
+
+-- | A constructor's record fields as declarations of their own, anchored
+-- on the @field :: Type@ entry so the field reads as the selector it is.
+-- A field group binding several names (@x, y :: Int@) shares one span and
+-- one sibling list, exactly as a multi-name top-level signature does.
+fieldsOf :: Text -> ConDecl GhcPs -> [Decl]
+fieldsOf tyName con =
+  [ (sigDecl nm names mS mE DkRecordField (Just tyName))
+      { declDoc = fmap docTextOf mdoc }
+  | lfld <- recordFieldsOf con
+  , ConDeclField { cd_fld_names = lnames, cd_fld_doc = mdoc } <- [unLoc lfld]
+  , let (mS, mE) = spanLines (locA (getLoc lfld))
+        names    = [ rdrText rn
+                   | lname <- lnames
+                   , FieldOcc { foLabel = L _ rn } <- [unLoc lname]
+                   ]
+  , nm <- names
+  ]
+
+recordFieldsOf :: ConDecl GhcPs -> [LConDeclField GhcPs]
+recordFieldsOf = \case
+  ConDeclH98  { con_args   = RecCon flds }      -> unLoc flds
+  ConDeclGADT { con_g_args = RecConGADT _ flds } -> unLoc flds
+  _                                             -> []
 
 locLines :: LHsDecl GhcPs -> (Maybe Int, Maybe Int)
 locLines ld = spanLines (locA (getLoc ld))

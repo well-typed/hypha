@@ -523,9 +523,11 @@ indexParsedComponent compKey deps env parsed = ComponentIndex
             -- The signature is read from the module the resolver landed
             -- on.  Looking it up in a component-wide name map is what
             -- published Data.IntMap.Lazy.insertWith with Data.Map's
-            -- signature.
+            -- signature.  Empty only for the kinds that genuinely have no
+            -- signature line — a type, class or plain binding without one
+            -- — never for a constructor, which has its declaration.
           , rowSignature  = Signature
-              (fromMaybe "" (Parser.declSigTextIn (linesFor defMod) decl))
+              (fromMaybe "" (Parser.declSigOrSliceIn (linesFor defMod) decl))
           , rowDefinition = DefinitionRef compKey defMod
           , rowVisibility = visibilityFor presented
           }

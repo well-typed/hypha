@@ -268,6 +268,29 @@ tests = testGroup "Unit.SearchIndexBuild"
       assertBool "klassMethod leaves the unresolved report"
         (SymbolName "klassMethod" `notElem` map oeName (ciUnresolved ci))
 
+  , testCase "constructors and record fields reached through (..) get rows" $ do
+      -- Shape's members are exported only as @Shape (..)@, so nothing
+      -- names them in the export list: the wildcard has to expand against
+      -- the declarations.  A constructor carries no signature line of its
+      -- own, and used to get an empty one -- a blank column in the search
+      -- list and @sig: ""@ out of hypha lookup.
+      srcs <- sourcesFor
+        [ ("test/fixtures/reexport/src/Fixture/Klass.hs", "Fixture.Klass", Exposed) ]
+      let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
+                 defaultLanguageSettings srcs
+          sigOf n = map rowSignature (rowsFor ci n)
+      -- Slicing is line-granular throughout this module, so a member
+      -- carries whatever punctuation shares its line -- the same text the
+      -- module page shows.  Trimming it would need column spans.
+      sigOf "Circle" @?= [Signature "= Circle { radius :: Int }"]
+      sigOf "Square" @?= [Signature "| Square Int"]
+      sigOf "radius" @?= [Signature "{ radius :: Int"]
+      sequence_
+        [ assertBool (show n <> " leaves the unresolved report")
+            (n `notElem` map oeName (ciUnresolved ci))
+        | n <- map SymbolName ["Circle", "Square", "radius"]
+        ]
+
   , testCase "an export no import explains is repaired from the interface" $ do
       -- Fixture.Blind's only import has no depThing, and the module that
       -- declares it is never named in the source.  Syntax has nothing
