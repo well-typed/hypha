@@ -14,9 +14,24 @@ import Data.Text.Lazy qualified as LText
 import Lucid (renderText)
 
 import Hypha.Command.Server
-  ( BindAddr (..), BindError (..), briefException, collectModuleRows, parseBind )
-import Hypha.Server.App (mimeFor, sanitizeSegments, scopeSearchRows)
-import Hypha.Server.Ui.Search (highlightTokens)
+  ( BindAddr (..), BindError (..), briefException, parseBind )
+import Hypha.Search.Collapse (collapseRows)
+import Hypha.Search.Index (DefinitionRef (..))
+import Hypha.Source.Extract
+  ( DocEntry (..), EntryOrigin (..), ModuleDocInfo (..) )
+import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Search.Fuzzy (mkSymbolRow)
+import Hypha.Search.Index (Visibility (..))
+import Hypha.Server.ModuleDoc
+  ( ModuleDocView (..), SourceDoc (..), SymbolCardData (..) )
+import Hypha.Server.Ui.Doc (symbolCard)
+import Hypha.Source.Parser (DeclKind (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.SymbolPath (ModulePath (..))
+import Util.Row (rowIn)
+import Hypha.Server.App (mimeFor, sanitizeSegments)
+import Hypha.Server.Ui.ModuleDoc (modulePage)
+import Hypha.Server.Ui.Search (highlightTokens, resultsFragment)
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 
@@ -29,14 +44,15 @@ mkIPv6 = IPv6 . toIPv6
 tests :: TestTree
 tests = testGroup "Unit.Server"
   [ testGroup "Server.parseBind" parseBindTests
-  , testGroup "Server.collectModuleRows" collectModuleRowsTests
   , testGroup "Server.briefException" briefExceptionTests
   , testGroup "App.sanitizeSegments" sanitizeSegmentsTests
   , testGroup "App.mimeFor" mimeForTests
-  , testGroup "App.scopeSearchRows" scopeSearchRowsTests
   , testGroup "Tree.splitByOrigin" splitByOriginTests
   , testGroup "Tree.hackageLink" hackageLinkTests
+  , testGroup "Doc.symbolCard" symbolCardTests
   , testGroup "Search.highlightTokens" highlightTokensTests
+  , testGroup "Search.resultsFragment" resultsFragmentTests
+  , testGroup "ModuleDoc.modulePage" modulePageTests
   ]
 
 sanitizeSegmentsTests :: [TestTree]
@@ -67,22 +83,6 @@ mimeForTests =
       mimeFor "LICENSE" @?= "application/octet-stream"
   ]
 
-scopeSearchRowsTests :: [TestTree]
-scopeSearchRowsTests =
-  [ testCase "no scope parameter keeps every row" $
-      scopeSearchRows Nothing rows @?= rows
-  , testCase "empty scope parameter keeps every row" $
-      scopeSearchRows (Just "") rows @?= rows
-  , testCase "non-empty scope keeps only matching rows" $
-      scopeSearchRows (Just "aeson") rows @?= [aesonRow]
-  , testCase "scope matching no package yields no rows" $
-      scopeSearchRows (Just "nope") rows @?= []
-  ]
-  where
-    aesonRow      = ("aeson", "Data.Aeson", "encode", "Value -> ByteString")
-    containersRow = ("containers", "Data.Map", "lookup", "k -> Map k v -> Maybe v")
-    rows = [aesonRow, containersRow]
-
 splitByOriginTests :: [TestTree]
 splitByOriginTests =
   [ testCase "local packages land in the project group, rest are dependencies" $ do
@@ -96,28 +96,35 @@ splitByOriginTests =
 
 hackageLinkTests :: [TestTree]
 hackageLinkTests =
-  [ testCase "hackage-origin package links to the exact pinned version" $ do
-      let html = renderLink "aeson" "2.2.1.0" OriginHackage
-      assertBool "expected the Hackage href"
-        ("href=\"https://hackage.haskell.org/package/aeson-2.2.1.0\"" `Text.isInfixOf` html)
-      assertBool "expected target=_blank"
-        ("target=\"_blank\"" `Text.isInfixOf` html)
-      assertBool "expected rel=noopener"
-        ("rel=\"noopener\"" `Text.isInfixOf` html)
-  , testCase "local package renders nothing" $
-      renderLink "mylib" "0.1.0.0" (OriginLocal "./mylib") @?= ""
-  , testCase "source-repo package renders nothing" $
-      renderLink "foo" "1.0" (OriginSourceRepo Nothing Nothing Nothing) @?= ""
-  , testCase "local tarball package renders nothing" $
-      renderLink "foo" "1.0" (OriginLocalTarball "./foo-1.0.tar.gz") @?= ""
-  , testCase "remote tarball package renders nothing" $
-      renderLink "foo" "1.0" (OriginRemoteTarball "https://example.com/foo-1.0.tar.gz") @?= ""
-  , testCase "distribution package (e.g. base) renders nothing" $
-      renderLink "base" "4.19.0.0" OriginDistribution @?= ""
+  [ testCase "Hackage origin links to the pinned version" $
+      renderLink "aeson" "2.2.1.0" OriginHackage
+        `shouldContain` "https://hackage.haskell.org/package/aeson-2.2.1.0"
+
+  , testCase "distribution (boot) packages link too" $
+      -- containers, base and every other boot library IS published on
+      -- Hackage; withholding the link was the bug.
+      renderLink "containers" "0.7" OriginDistribution
+        `shouldContain` "https://hackage.haskell.org/package/containers-0.7"
+
+  , testCase "local packages get no link" $
+      renderLink "myapp" "0.1.0" (OriginLocal "/src/myapp") @?= ""
+
+  , testCase "source-repository-package gets no link" $
+      renderLink "forked" "1.0" (OriginSourceRepo Nothing Nothing Nothing) @?= ""
+
+  , testCase "local tarball gets no link" $
+      renderLink "tar" "1.0" (OriginLocalTarball "/t.tar.gz") @?= ""
+
+  , testCase "remote tarball gets no link" $
+      renderLink "tar" "1.0" (OriginRemoteTarball "https://x/t.tar.gz") @?= ""
   ]
   where
-    renderLink :: Text.Text -> Text.Text -> PackageOrigin -> Text.Text
-    renderLink pkg ver origin = LText.toStrict (renderText (hackageLink pkg ver origin))
+    renderLink pkg ver origin = LText.toStrict
+      (renderText (hackageLink (PackageName pkg) (Version ver) origin))
+
+    shouldContain hay needle =
+      assertBool (show needle <> " not in " <> show hay) (needle `Text.isInfixOf` hay)
+
 
 highlightTokensTests :: [TestTree]
 highlightTokensTests =
@@ -134,6 +141,137 @@ highlightTokensTests =
   ]
   where
     renderHl toks t = LText.toStrict (renderText (highlightTokens toks t))
+
+-- | What the reader actually sees behind a @+N@ badge.
+--
+-- The collapse model was tested and the renderer was not, which is how a
+-- flagship case shipped listing the defining module twice: the definition
+-- is usually a presentation as well, so it was in 'srAlternates' /and/ in
+-- a prepended "defines it" row.
+-- | What a module page /claims/, which is a different question from what
+-- the extractor returned.
+modulePageTests :: [TestTree]
+modulePageTests =
+  [ testCase "an entry we could not place makes no claim and no link" $ do
+      -- The live server said "from base:GHC.Internal.Control.Monad" for
+      -- Bool, True, Just and map on base/Prelude -- one guess, presented
+      -- as fact and linked, for every name it failed to resolve.
+      let html = renderPage (entry (EntryUnplaced (ModulePath "GHC.Internal.Control.Monad")))
+      assertBool "hedges instead of naming a definition site"
+        ("re-exported, origin unresolved" `Text.isInfixOf` html)
+      assertBool "does not present the guess as the origin"
+        (not ("from GHC.Internal.Control.Monad" `Text.isInfixOf` html))
+      assertBool "and does not link anywhere for it"
+        (not ("/pkg/base/GHC.Internal.Control.Monad" `Text.isInfixOf` html))
+
+  , testCase "a resolved re-export still names its definition site" $ do
+      let def  = DefinitionRef (ComponentKey "ghc-internal")
+                               (ModulePath "GHC.Internal.Data.Traversable")
+          html = renderPage (entry (EntryReexport def))
+      assertBool "names the defining component and module"
+        ("from ghc-internal:GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "and links there"
+        ("/pkg/ghc-internal/GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+  ]
+  where
+    entry origin = DocEntry
+      { deName      = "mapAccumL"
+      , deKind      = Just DkFunction
+      , deSignature = Nothing
+      , deHaddock   = Nothing
+      , deSigLine   = Nothing
+      , deDefLine   = Nothing
+      , deOrigin    = origin
+      }
+
+    renderPage e = LText.toStrict . renderText $
+      modulePage "base" "Prelude"
+        (ViewFromSource (SourceDoc (ModuleDocInfo Nothing [e] []) Nothing))
+
+resultsFragmentTests :: [TestTree]
+resultsFragmentTests =
+  [ testCase "the defining module is listed once, tagged, not repeated" $ do
+      -- The whole group: Data.Map.Strict presents insertWith and wins,
+      -- Data.Map.Strict.Internal both defines and exposes it.  So the
+      -- definition is in srAlternates, and a separate "defines it" row
+      -- listed it twice behind a badge that said "+1".
+      let opened = altList (renderResults ["insertwith"]
+            [ mapRow "Data.Map.Strict"          "Data.Map.Strict.Internal"
+            , mapRow "Data.Map.Strict.Internal" "Data.Map.Strict.Internal"
+            ])
+      countOf "containers:Data.Map.Strict.Internal" opened @?= 1
+      countOf "alt-tag" opened @?= 1
+      countOf "<li>" opened @?= 1
+
+  , testCase "the badge counts the rows it opens" $ do
+      let html = renderResults ["insertwith"]
+            [ mapRow "Data.Map.Strict"          "Data.Map.Strict.Internal"
+            , mapRow "Data.Map.Strict.Internal" "Data.Map.Strict.Internal"
+            ]
+      assertBool ("expected +1 in " <> show html) ("+1" `Text.isInfixOf` html)
+
+  , testCase "a definition that is no presentation is still named" $ do
+      -- base's Data.List and Data.Traversable both expose mapAccumL; the
+      -- module that defines it exposes nothing the search indexed, so the
+      -- disclosure has to append it rather than find it among the folded-in
+      -- presentations.
+      let opened = altList (renderResults ["mapaccuml"]
+            [ rowIn "base" "Data.Traversable" "mapAccumL" "sig"
+                    "GHC.Internal.Data.Traversable" Exposed
+            , rowIn "base" "Data.List" "mapAccumL" "sig"
+                    "GHC.Internal.Data.Traversable" Exposed
+            ])
+      countOf "base:Data.Traversable" opened             @?= 1
+      countOf "base:GHC.Internal.Data.Traversable" opened @?= 1
+      countOf "alt-tag" opened                           @?= 1
+      countOf "<li>" opened                              @?= 2
+
+  , testCase "a result with nothing folded in gets no disclosure" $ do
+      let html = renderResults ["insertwith"]
+                   [ mapRow "Data.Map.Strict" "Data.Map.Strict" ]
+      countOf "alt-group" html @?= 0
+
+  , testCase "a lone presentation still discloses its definition site" $ do
+      -- One indexed row, defined somewhere else.  srAlternates is empty
+      -- -- there is no other presentation to fold in -- but altRows
+      -- appends the definition, so gating the disclosure on srAlternates
+      -- rendered no badge and left the definition unreachable.  237 groups
+      -- in a real index have this shape.
+      let html = renderResults ["asyncbound"]
+            [ rowIn "async-pool" "Control.Concurrent.Async.Pool" "asyncBound"
+                    "sig" "Control.Concurrent.Async.Pool.Async" Exposed
+            ]
+      assertBool ("expected +1 in " <> show html) ("+1" `Text.isInfixOf` html)
+      countOf "alt-group" html @?= 1
+      let opened = altList html
+      countOf "async-pool:Control.Concurrent.Async.Pool.Async" opened @?= 1
+      countOf "<li>" opened @?= 1
+
+  , testCase "an operator's link is escaped, not concatenated raw" $ do
+      -- '#' would truncate the URL at the fragment and land the reader on
+      -- the module page, with no error to notice.
+      let html = renderResults ["unpackcstring"]
+            [ rowIn "ghc-prim" "GHC.CString" "unpackCString#" "sig"
+                    "GHC.CString" Exposed
+            ]
+      assertBool ("expected an escaped '#' in " <> show html)
+        ("/pkg/ghc-prim/GHC.CString/unpackCString%23" `Text.isInfixOf` html)
+      countOf "/pkg/ghc-prim/GHC.CString/unpackCString#" html @?= 0
+  ]
+  where
+    mapRow presented defined =
+      rowIn "containers" presented "insertWith"
+        "insertWith :: Ord k => k -> a -> Map k a -> Map k a" defined Exposed
+
+    renderResults tokens =
+      LText.toStrict . renderText . resultsFragment tokens
+        . collapseRows . map mkSymbolRow
+
+    -- Only what the disclosure opens: the badge's tooltip names the same
+    -- modules, and counting both would not say which side listed one twice.
+    altList = snd . Text.breakOn "<ul class=\"alt-list\">"
+
+    countOf needle = length . Text.breakOnAll needle
 
 parseBindTests :: [TestTree]
 parseBindTests =
@@ -171,38 +309,6 @@ parseBindTests =
       parseBind "::1:4287" @?= Left (BindMalformed "::1:4287")
   ]
 
-collectModuleRowsTests :: [TestTree]
-collectModuleRowsTests =
-  [ testCase "ordinary module yields a row per top-level decl" $ do
-      rows <- collectModuleRows "pkg-1.0:lib" "Foo" "Foo.hs" plainSrc
-      assertBool "expected a row for foo" (any (\(_, _, nm, _) -> nm == "foo") rows)
-
-  , testCase "CPP #error on a build-time-only macro is skipped, not thrown" $ do
-      -- Mirrors OneTuple's Data.Tuple.Solo.TH: a hard #error guarding a
-      -- macro (CURRENT_PACKAGE_KEY) only a real GHC invocation defines.
-      -- hypha's cpphs pass has no compiler session, so this can never
-      -- succeed — the regression is the exception escaping and
-      -- aborting every other package's indexing, not this one module.
-      rows <- collectModuleRows "pkg-1.0:lib" "Foo" "Foo.hs" cppErrorSrc
-      rows @?= []
-  ]
-  where
-    plainSrc = Text.pack [r|module Foo where
-
-foo :: Int
-foo = 1
-|]
-    cppErrorSrc = Text.pack [r|{-# LANGUAGE CPP #-}
-module Foo where
-
-#ifndef CURRENT_PACKAGE_KEY
-#error "CURRENT_PACKAGE_KEY undefined"
-#endif
-
-foo :: Int
-foo = 1
-|]
-
 briefExceptionTests :: [TestTree]
 briefExceptionTests =
   [ testCase "ErrorCall message preserved exactly, CallStack stripped" $ do
@@ -239,3 +345,75 @@ line3|] :: ()))
         Left e  -> briefException e @?= "divide by zero"
         Right _ -> assertFailure "division by zero must throw"
   ]
+
+symbolCardTests :: [TestTree]
+symbolCardTests =
+  [ testCase "a re-exported symbol names both modules" $ do
+      let html = renderCard SymbolCardData
+            { scdSignature  = Just "insertWith :: Ord k => k -> a"
+            , scdHaddock    = Nothing
+            , scdModule     = "Data.Map.Strict.Internal"
+            , scdComponent  = "containers"
+            , scdRequested  = "Data.Map.Strict"
+            , scdLine       = Just 552
+            , scdKind       = Just DkFunction
+            }
+      assertBool "mentions the presentation module"
+        ("Data.Map.Strict" `Text.isInfixOf` html)
+      assertBool "mentions the definition module"
+        ("Data.Map.Strict.Internal" `Text.isInfixOf` html)
+      assertBool "says it is a re-export"
+        ("Re-exported by" `Text.isInfixOf` html)
+
+  , testCase "a locally defined symbol does not claim a re-export" $ do
+      let html = renderCard SymbolCardData
+            { scdSignature  = Just "insertWith :: Ord k => k -> a"
+            , scdHaddock    = Nothing
+            , scdModule     = "Data.Map.Internal"
+            , scdComponent  = "containers"
+            , scdRequested  = "Data.Map.Internal"
+            , scdLine       = Just 552
+            , scdKind       = Just DkFunction
+            }
+      assertBool "no re-export line"
+        (not ("Re-exported by" `Text.isInfixOf` html))
+
+  , testCase "a missing signature says so instead of rendering blank" $ do
+      let html = renderCard SymbolCardData
+            { scdSignature  = Nothing
+            , scdHaddock    = Nothing
+            , scdModule     = "Data.Map.Internal"
+            , scdComponent  = "containers"
+            , scdRequested  = "Data.Map.Internal"
+            , scdLine       = Nothing
+            , scdKind       = Nothing
+            }
+      assertBool "explains the absence"
+        ("no signature" `Text.isInfixOf` Text.toLower html)
+
+  , testCase "a cross-package definition names and links the owning package" $ do
+      -- base's Data.Traversable documents mapAccumL; ghc-internal declares
+      -- it.  Every link to the definition has to leave base, or it points
+      -- at a module base does not have.
+      let html = renderCard SymbolCardData
+            { scdSignature  = Just "mapAccumL :: a"
+            , scdHaddock    = Nothing
+            , scdModule     = "GHC.Internal.Data.Traversable"
+            , scdComponent  = "ghc-internal"
+            , scdRequested  = "Data.Traversable"
+            , scdLine       = Just 120
+            , scdKind       = Just DkFunction
+            }
+      assertBool "names the defining package"
+        ("ghc-internal:GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "module link leaves the asking package"
+        ("/pkg/ghc-internal/GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "source link leaves the asking package"
+        ("/source/ghc-internal/GHC.Internal.Data.Traversable" `Text.isInfixOf` html)
+      assertBool "never links the definition under the asking package"
+        (not ("/pkg/containers/GHC.Internal" `Text.isInfixOf` html))
+  ]
+  where
+    -- The page is reached as containers/… in every case above; the
+    -- cross-package case deliberately disagrees with it.
+    renderCard = LText.toStrict . renderText . symbolCard "insertWith" "containers"

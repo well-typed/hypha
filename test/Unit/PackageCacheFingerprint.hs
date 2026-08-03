@@ -52,4 +52,32 @@ tests = testGroup "Unit.PackageCacheFingerprint"
         createDirectoryIfMissing True d
         fp <- componentFingerprint [d]
         assertBool "non-empty even for empty dir" (not (Text.null fp))
+  
+  , testCase "build output does not enter the fingerprint" $
+      withSystemTempDirectory "hypha-fp" $ \tmp -> do
+        let src  = tmp </> "src"
+            dist = tmp </> "dist-newstyle" </> "build" </> "autogen"
+        createDirectoryIfMissing True src
+        createDirectoryIfMissing True dist
+        writeFile (src </> "Foo.hs") "module Foo where"
+        before <- componentFingerprint [tmp]
+        -- What cabal rewrites on every build.  Counting it re-indexed the
+        -- project's own package after each `cabal build`.
+        threadDelay 1100000
+        writeFile (dist </> "Paths_pkg.hs") "module Paths_pkg where"
+        after <- componentFingerprint [tmp]
+        after @?= before
+
+  , testCase "a sibling worktree does not enter the fingerprint" $
+      withSystemTempDirectory "hypha-fp" $ \tmp -> do
+        let src = tmp </> "src"
+            wt  = tmp </> ".worktrees" </> "agent-1" </> "src"
+        createDirectoryIfMissing True src
+        createDirectoryIfMissing True wt
+        writeFile (src </> "Foo.hs") "module Foo where"
+        before <- componentFingerprint [tmp]
+        threadDelay 1100000
+        writeFile (wt </> "Other.hs") "module Other where"
+        after <- componentFingerprint [tmp]
+        after @?= before
   ]

@@ -18,11 +18,16 @@ sharing is out of scope on purpose.
 | Path | Returns |
 |------|---------|
 | `/` | HTML shell with sidebar + search |
-| `/search?q=...` | HTMX results fragment (fuzzy ranked) |
+| `/search?q=...[&pkg=<component>]` | HTMX results fragment: fuzzy ranked, and collapsed to one hit per definition. `pkg` scopes to a single component and is applied *before* the fold, so a symbol two packages present still appears under either |
 | `/progress` | HTMX progress-bar fragment (self-polling) |
 | `/pkg/<pkg>` or `/pkg/<pkg>:<sublib>` | Package / sublib overview |
-| `/pkg/<pkg>/<Mod>` | Module page |
+| `/pkg/<pkg>/<Mod>` | Module page, re-exported entries included |
 | `/pkg/<pkg>/<Mod>/<sym>` | Symbol card |
 | `/source/<pkg>/<Mod>` | Highlighted source |
 | `/haddock/<pkg>-<ver>/...` | Rewritten Haddock HTML |
 | `/healthz` | `ok` (plain text) |
+
+Links out of a module page or a symbol card may name a different component
+from the one in the URL: a re-exported symbol is documented where it is
+*defined*, and that can be another package (`base`'s `Data.Traversable`
+resolves into `ghc-internal`).

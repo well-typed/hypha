@@ -15,6 +15,13 @@ Every subcommand takes an [identifier](identifiers.md) and honours the
 | `doctor` | — | Environment health check |
 | `server` | `[--port N] [--bind H:P] [--prebuild]` | [Doc-browser HTTP server](../server/index.md) |
 
+`source` resolves a symbol through its component's export lists, so a
+re-exported name lands on its declaration rather than on whichever
+same-named binding the package happens to enumerate first —
+`Data.Map.Strict.insertWith` used to come back as
+`Data/IntMap/Internal.hs`. A package whose `.cabal` cannot be read falls
+back to a package-wide scan and says so on stderr.
+
 > **MCP.** There is no `hypha mcp` subcommand. The MCP surface is a
 > separate binary, `hypha-mcp` — see **[MCP Host Integration](../mcp/index.md)**.
 

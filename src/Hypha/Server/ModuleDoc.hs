@@ -55,14 +55,27 @@ data SourceDoc = SourceDoc
 -- | Everything the symbol card renders.  Replaces the anonymous
 -- 5-tuple that used to travel through 'scSymbolLookup'.
 data SymbolCardData = SymbolCardData
-  { scdSignature :: !Text
-  , scdHaddock   :: !Text
+  { scdSignature  :: !(Maybe Text)
+    -- ^ 'Nothing' when the source declares no signature.  Previously the
+    -- empty string, which the UI rendered as a blank box and which could
+    -- not be told apart from \"we could not read the module\".
+  , scdHaddock    :: !(Maybe Text)
     -- ^ Raw comment text; rendered by the UI layer.
-  , scdModule    :: !Text
-    -- ^ The module that actually defines the symbol (re-exports
-    -- collapse to their definition site).
-  , scdLine      :: !(Maybe Int)
+  , scdModule     :: !Text
+    -- ^ The module that defines the symbol, as resolved — never derived
+    -- from a file path.
+  , scdComponent  :: !Text
+    -- ^ The component that /defines/ the symbol, which need not be the one
+    -- the URL asked for: @base@'s @Data.Traversable@ re-exports from
+    -- @ghc-internal@.  Links to the definition are built from this, so they
+    -- cannot point at a module the page's package does not have.
+  , scdRequested  :: !Text
+    -- ^ The module the URL asked for.  Kept alongside 'scdModule' so the
+    -- card can say \"re-exported by X, defined in Y\" instead of silently
+    -- swapping one for the other.
+    -- sweep.  A guess that renders like a fact is worse than no answer.
+  , scdLine       :: !(Maybe Int)
     -- ^ Source line when a faithful anchor exists.
-  , scdKind      :: !(Maybe DeclKind)
+  , scdKind       :: !(Maybe DeclKind)
     -- ^ Declaration kind when the parser could classify it.
   }

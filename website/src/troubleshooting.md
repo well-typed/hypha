@@ -94,3 +94,30 @@ sbox \
 Plus whatever paths the harness itself needs (e.g. `~/.pi` for the `pi`
 harness's model config). Without these, hypha sees `TOOL_MISSING` for the
 toolchain and TLS failures for the remote tier.
+
+## Search is empty right after upgrading hypha
+
+Expected, once. The search index is versioned, and a format change clears
+it on first open — see [Index format
+generations](guide/caching.md#index-format-generations). Start `hypha
+server` and let the background index finish; `hypha lookup` keeps working
+in the meantime by falling through to Hoogle.
+
+## A symbol I know exists is not in the index
+
+Two known gaps, both reported on stderr as they happen:
+
+- **Class methods and data constructors are not indexed.** `Traversable`
+  gets a row; `traverse` does not, and `fmap`, `Just`, `mempty` and
+  `liftA2` have none at all. Declaration scanning sees top-level
+  declarations, and a class's methods are not top-level. `hypha lookup`
+  still answers for these through Hoogle; `hypha server`'s search does
+  not, and a module page lists them as "re-exported, origin unresolved"
+  even though the interface file names the module that declares them.
+- **Modules that need CPP are skipped.** A module whose source does not
+  parse without preprocessing (`parse error on input '#'`, or an
+  `#error` guarded on a macro only a real GHC invocation defines)
+  contributes no rows, and every module that re-exports from it loses
+  exactly what it re-exported — which is why `Prelude` is sparse. On a
+  283-package plan this is 159 modules; each one is named on stderr with
+  GHC's own message.

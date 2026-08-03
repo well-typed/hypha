@@ -1,7 +1,7 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.Ui.Search
   ( searchInput
-  , searchPanel
   , resultsFragment
   , emptyResults
   , buildingFragment
@@ -14,12 +14,13 @@ import qualified Data.Text as Text
 import Lucid
 import Lucid.Base (makeAttributes)
 
--- | Search input + empty results container. HTMX swaps content into
--- @#results@ as the user types.
-searchPanel :: Html ()
-searchPanel = do
-  searchInput
-  ul_ [class_ "results", id_ "results"] (pure ())
+import Hypha.Search.Collapse
+  ( Presentation (..), SearchResult (..), SymbolResult (..)
+  , definitionPresentation, presentationHref, presentationLabel
+  , resultHref )
+import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 
 -- | Search input bar with HTMX live-search attributes and an inline
 -- progress spinner controlled by the @htmx-request@ class.
@@ -60,22 +61,95 @@ searchInput = do
     ul_ [class_ "results", id_ "results"] (pure ())
 
 -- | Render search results as an unordered list.
--- Each row carries (package, module path, symbol name, signature);
--- the query tokens drive @\<mark\>@ highlighting on the symbol name.
--- An empty hit list still produces a visible "No matches." row — use
--- 'emptyResults' for the truly-empty case (no query in flight).
-resultsFragment :: [Text] -> [(Text, Text, Text, Text)] -> Html ()
-resultsFragment tokens rows = ul_ [class_ "results", id_ "results"] $
-  if null rows
+--
+-- The three result kinds render differently because they /are/ different:
+-- a package row shows its pinned version, a module row its component, and
+-- a symbol row its signature plus, when other presentations of the same
+-- definition were folded in, a @+N@ affordance linking the definition
+-- site.  An empty hit list still produces a visible \"No matches.\" row —
+-- use 'emptyResults' for the truly-empty case (no query in flight).
+resultsFragment :: [Text] -> [SearchResult] -> Html ()
+resultsFragment tokens results = ul_ [class_ "results", id_ "results"] $
+  if null results
     then li_ [class_ "empty"] "No matches."
-    else mapM_ row rows
+    else mapM_ entry results
   where
-    row :: (Text, Text, Text, Text) -> Html ()
-    row (pkg, modPath, name, sig) = li_ $ do
-      a_ [href_ ("/pkg/" <> pkg <> "/" <> modPath <> "/" <> name)] $ do
-        span_ [class_ "name"]   (highlightTokens tokens name)
-        span_ [class_ "sig"]    (toHtml sig)
-        span_ [class_ "pkgmod"] (toHtml (pkg <> " \183 " <> modPath))
+    entry :: SearchResult -> Html ()
+    entry r = li_ $ do
+      a_ [href_ (resultHref r)] (body r)
+      case r of
+        -- Gated on 'altRows', not on 'srAlternates': the append clause in
+        -- 'altRows' fires exactly when the definition module is no
+        -- presentation at all, which is the re-export case and the reason
+        -- that clause exists.  Gating on 'srAlternates' hid the disclosure
+        -- for precisely those groups, leaving the definition site
+        -- unreachable from the result that folded it in.
+        ResultSymbol s | not (null (altRows s)) -> alternates s
+        _                                      -> mempty
+
+    body :: SearchResult -> Html ()
+    body = \case
+      ResultPackage pkg ver -> do
+        span_ [class_ "name"] (highlightTokens tokens (unPackageName pkg))
+        span_ [class_ "sig"]  (toHtml ("package" :: Text))
+        span_ [class_ "pkgmod"] (toHtml (unVersion ver))
+      ResultModule comp modPath _ -> do
+        span_ [class_ "name"] (highlightTokens tokens (unModulePath modPath))
+        span_ [class_ "sig"]  (toHtml ("module" :: Text))
+        span_ [class_ "pkgmod"] (toHtml (unComponentKey comp))
+      ResultSymbol s -> do
+        span_ [class_ "name"] (highlightTokens tokens (unSymbolName (srName s)))
+        span_ [class_ "sig"]  (toHtml (unSignature (srSignature s)))
+        span_ [class_ "pkgmod"]
+          (toHtml (unComponentKey (srComponent s) <> " \183 "
+                     <> unModulePath (srModule s)))
+
+    -- Nothing is hidden by collapse, and the affordance has to prove it.
+    -- A bare count could while every alternate was a module of the same
+    -- package; once a group spans packages, "+1" on a base result that
+    -- folded in ghc-internal tells the reader nothing they wanted to know.
+    -- So every folded-in presentation is named, and each is a link.
+    alternates :: SymbolResult -> Html ()
+    alternates s = details_ [class_ "alt-group"] $ do
+      summary_ [ class_ "alt-count"
+               , title_ (altSummary s)
+               ]
+               (toHtml ("+" <> tshow (length (altRows s))))
+      ul_ [class_ "alt-list"] $ mapM_ (altItem s) (altRows s)
+
+    -- One row per module the reader might have expected to find this
+    -- under, with the defining one tagged rather than repeated: the
+    -- definition module is usually a presentation as well, so emitting a
+    -- separate row for it listed it twice and opened N+1 rows behind
+    -- "+N".  It is appended only when it is neither the presentation the
+    -- reader landed on nor one of the folded-in ones -- which is the
+    -- re-export case, where the defining module is not indexed as a
+    -- presentation at all.
+    altRows :: SymbolResult -> [(Presentation, Bool)]
+    altRows s =
+      [ (p, p == defined) | p <- srAlternates s ]
+        ++ [ (defined, True) | defined /= landed, defined `notElem` srAlternates s ]
+      where
+        defined = definitionPresentation (srDefinition s)
+        landed  = Presentation (srComponent s) (srModule s)
+
+    altItem :: SymbolResult -> (Presentation, Bool) -> Html ()
+    altItem s (p, defines) = li_ $ do
+      a_ [href_ (presentationHref (srName s) p)]
+         (toHtml (presentationLabel p))
+      if defines then span_ [class_ "alt-tag"] "defines it" else mempty
+
+    -- The same rows in the tooltip, so hovering answers the question
+    -- without opening the list -- and each module named once, which the
+    -- previous "also exposed by X; defined in X" could not manage when
+    -- the defining module was itself a presentation.
+    altSummary s = "also under " <> Text.intercalate ", "
+      [ presentationLabel p <> if defines then " (defines it)" else ""
+      | (p, defines) <- altRows s
+      ]
+
+    tshow :: Int -> Text
+    tshow = Text.pack . show
 
 -- | Wrap the first case-insensitive occurrence of every token in
 -- @\<mark\>@.  Matches are claimed left-to-right and never overlap or

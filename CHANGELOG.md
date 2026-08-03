@@ -29,6 +29,48 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The compiler answers where a re-export comes from.** An export list
+  says *which* names a module exports and never *whence*, so a syntactic
+  pass has to guess between the imports that could plausibly supply one —
+  and `base`'s `Control.Concurrent` lists `Prelude` first, which is how
+  `isCurrentThreadBound` came to be "re-exported, origin unresolved" while
+  Hackage documents it fine. The index build now asks GHC, which already
+  ran the renamer and wrote one fully-qualified origin per export into the
+  `.hi` file: an export syntax could not place is repaired by reading
+  `ghc --show-iface` for the module that exports it, and by trying every
+  ranked candidate import rather than committing to the first.
+
+  This needs the compiler the plan was solved with — `ghc-<version>` or a
+  bare `ghc` reporting that version, alongside its `ghc-pkg`; interface
+  files are patch-exact and a mismatched compiler reads nothing at all.
+  When there is no such compiler, or a cabal store cannot be listed, the
+  reason is reported **once** and re-exports are resolved from source
+  alone, as before. The project's own packages are read from the build
+  tree the plan names, so a local façade is repaired like any dependency.
+- **Cross-package re-exports are indexed.** A façade module now
+  contributes rows for what it re-exports from a dependency, resolved
+  transitively through that dependency's own already-resolved rows.
+  `base` went from 308 index rows to 1450; `Data.Traversable`,
+  `Control.Monad`, `Data.Foldable`, `Data.List`, `Data.Maybe` and
+  `Prelude` had contributed none.
+- **Search results collapse to one hit per definition**, with the most
+  public presentation winning. A `+N` disclosure names every package and
+  module folded in, each a link, with the defining one tagged; scoping to
+  a package applies before the fold, so a definition two packages present
+  still appears under either. Package and module names are results in
+  their own right, ranked above the symbols beneath them.
+- **Module pages list re-exported entries** with real signatures and
+  Haddock, tagged with the defining module — and the defining package
+  when it differs. Source links follow the definition across the package
+  boundary.
+- **Language extensions are read, not guessed.** A module is parsed under
+  its own `{-# LANGUAGE #-}` pragmas plus its cabal stanza's
+  `default-extensions` / `default-language`, resolved through GHC's own
+  flag table, instead of a hand-written whitelist that failed on the
+  first construct nobody had thought to add (`type role`, `MagicHash`).
+- Boot libraries shipped with GHC now get a "view on Hackage" link; they
+  are published there at the version the plan pins.
+
 - **`hypha server` module pages now show real documentation** instead
   of a bare export list, resolved through a typed priority chain:
   prebuilt Haddock (hypha cache → local dist-dir → cabal store) is
@@ -64,6 +106,79 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Conditional cabal stanzas are read.** `if`/`elif`/`else` branches were
+  discarded, so `base` contributed no `GHC.Event` and no
+  `System.CPUTime.Posix.*` on any non-Windows machine — both are declared
+  only in an `else` branch — and around 25 other cached packages lost
+  modules the same way.
+- **A facade over a facade resolves.** A re-export was matched against the
+  *definition's* package rather than the module's own; since GHC 9.10 a
+  package re-exporting `Data.Foldable.foldl'` from `base` was told the
+  definition lives in `ghc-internal`, which it does not depend on, and the
+  row was dropped.
+- **The index expires.** Cache warmth was "a row exists for this
+  `(package, version)`", so editing your own package and restarting the
+  server served the previous run's index forever, a component that indexed
+  to zero rows stayed warm, and the host-wide cache served one project's
+  rows to another. Entries now carry a fingerprint over the source bytes,
+  the compiler, the language settings, whether the cabal stanzas were
+  readable, and the resolved dependency versions.
+- **The parser no longer throws.** `cpphs` reports `#error` by calling
+  `error` from pure code, which escaped the `Either`: `hypha symbol` on a
+  module guarded by `#error "CURRENT_PACKAGE_KEY undefined"` aborted with a
+  raw `ErrorCall`. Module parsing also no longer swallows the server's
+  request-timeout cancellation and reports it as a parse failure.
+- **An unplaced entry is not filed as a function.** It carried a
+  fabricated `DkFunction`, which put `Bool`, `Maybe` and `Functor` under
+  "Values" in `base/Prelude`'s rail with `#v:` anchors no `#t:` link
+  resolves. Such entries now carry no kind and get their own rail group.
+- **A `module M` re-export of a module outside the component is
+  reported.** Those names cannot be expanded, so they reached neither the
+  index nor the unresolved report — `mtl`'s `Control.Monad.State` exports
+  `module Control.Monad` and contributed none of its names, silently.
+
+- **A symbol card or module page resolves a re-export through the index**
+  rather than one hop of imports, so a two-hop chain (`Data.List` →
+  `GHC.Internal.Data.List` → `GHC.Internal.Data.Traversable`) no longer
+  reports "symbol not found". `base/Data.List` renders 121 entries where
+  it rendered none.
+- **Links to symbols with operator characters work.** `#`, `/` and `?` in
+  a symbol name are percent-encoded, so `unpackCString#` reaches its card
+  instead of silently landing on the module page, and `System.FilePath.</>`
+  no longer 404s.
+- **The `+N` disclosure appears for a re-exported definition.** It was
+  gated on the folded-in presentations, so a result whose definition module
+  is no presentation at all — the re-export case the affordance exists for
+  — showed no badge and left the definition unreachable.
+- **`--quiet` does something.** It was parsed and read nowhere; it now
+  overrides `--verbose`. It still does not silence the indexer's stderr
+  diagnostics.
+- **One unparseable module no longer degrades a whole component.** Every
+  other module page keeps its entries, and the skipped module is named on
+  stderr. A module `cpphs` cannot preprocess — an `#error` guarded on a
+  macro only a real compiler defines — is skipped rather than answering
+  the request with a 500.
+- **A module page no longer presents a guess as a definition site.** An
+  entry whose definition could not be resolved is listed as "re-exported,
+  origin unresolved" rather than attributed to the nearest candidate
+  import: `base/Prelude` had been telling the reader that `Bool`, `True`,
+  `Just` and `map` are all defined in `GHC.Internal.Control.Monad`, with a
+  link there, while the index knew `Bool` is `ghc-prim`'s.
+- **Signatures are read at the definition site**, never matched by name,
+  so `Data.IntMap` symbols no longer show `Map k a` signatures.
+- **Indexed module names come from the parse tree**, not from file paths,
+  so a stray `examples/race.hs` no longer becomes a module called `race`,
+  and module enumeration comes from the cabal stanza. The package
+  overview page still enumerates by walking the source tree, so it can
+  still list a name a file path suggested.
+- `hypha source pkg/Mod/sym` resolves through the component's exports
+  instead of scanning the package for a same-named binding;
+  `Data.Map.Strict.insertWith` used to resolve to
+  `Data/IntMap/Internal.hs`.
+- Haddock now comes from the GHC parse tree rather than a line scanner:
+  `haddock_raw` in `hypha symbol` output no longer carries `-- |` comment
+  markers, and a doc block separated from its declaration by a blank line
+  binds correctly.
 - `hypha lookup` no longer aborts with a misleading `NETWORK_ERROR`
   when the local Hoogle tier cannot run `haddock` (e.g. when the
   binary is genuinely missing, or when Claude Code's sandbox hides
@@ -76,6 +191,26 @@ loosely follows [Semantic Versioning](https://semver.org/).
 - `ensureProjectHoogle` is now actually best-effort (matching its
   docstring): any failure regenerating the project Hoogle DB is
   swallowed so the lookup cascade continues to the remote tier.
+
+### Known limitations
+
+- **An existing `hypha.db` is cleared on first open** and rebuilt in the
+  background: index rows now carry a definition site and a visibility, and
+  old rows may hold path-derived module names or signatures matched by
+  name — defects that are not detectable row by row. See
+  [Caching](website/src/guide/caching.md) for what to expect.
+- **Class methods and data constructors are not indexed.**
+  `Traversable` has a row; `traverse`, `fmap`, `Just` and `mempty` have
+  none. Declaration scanning sees top-level declarations only, and a
+  class's methods are not top-level. `hypha lookup` still answers for
+  these through Hoogle. A module page lists them as "re-exported, origin
+  unresolved" — the interface file names the module that declares them,
+  and there is still no declaration to read a signature from:
+  `ListLike/Data.ListLike` shows 113 of them.
+- **159 modules of a 283-package plan do not parse without CPP
+  preprocessing**, and every module re-exporting from one loses exactly
+  what it re-exported — which is why `Prelude` is sparse. Each is
+  reported on stderr with GHC's own message.
 
 ## [0.2.0] — unreleased
 

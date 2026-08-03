@@ -15,8 +15,13 @@ import qualified Data.Text as Text
 import Lucid
 
 import qualified Hypha.Server.Ui.Haddock as Haddock
+import           Hypha.Search.Index (DefinitionRef (..))
 import           Hypha.Server.ModuleDoc
-import           Hypha.Source.Extract (DocEntry (..), ModuleDocInfo (..))
+import           Hypha.Types.ComponentName (ComponentKey (..))
+import           Hypha.Types.Route qualified as Route
+import           Hypha.Types.SymbolPath (ModulePath (..))
+import           Hypha.Source.Extract
+                   (DocEntry (..), EntryOrigin (..), ModuleDocInfo (..))
 import           Hypha.Source.Parser (DeclKind (..))
 import           Hypha.Types.Doc (DocText (..))
 
@@ -36,10 +41,10 @@ moduleHead pkgT modT view = header_ [class_ "mod-head"] $ do
   h1_ [class_ "mod-title"] (toHtml modT)
   p_ [class_ "meta"] $ do
     toHtml ("in package " :: Text)
-    a_ [href_ ("/pkg/" <> pkgT)] (toHtml pkgT)
+    a_ [href_ (Route.hrefFrom ["pkg", pkgT])] (toHtml pkgT)
   div_ [class_ "mod-actions"] $ do
     sourceBadge
-    a_ [class_ "action", href_ ("/source/" <> pkgT <> "/" <> modT)]
+    a_ [class_ "action", href_ (Route.hrefFrom ["source", pkgT, modT])]
        "View source"
     rawHaddockAction
   where
@@ -101,7 +106,7 @@ entrySection pkgT modT e =
     div_ [class_ "decl-head"] $ do
       kindBadge (deKind e)
       a_ [ class_ "decl-name"
-         , href_ ("/pkg/" <> pkgT <> "/" <> modT <> "/" <> deName e)
+         , href_ (Route.hrefFrom ["pkg", pkgT, modT, deName e])
          ]
          (toHtml (deName e))
       a_ [ class_ "decl-anchor"
@@ -110,6 +115,7 @@ entrySection pkgT modT e =
          ]
          "#"
       srcLink
+      reexportNote
     maybe mempty
           (\sig -> pre_ [class_ "signature"] (code_ (toHtml sig)))
           (deSignature e)
@@ -117,15 +123,59 @@ entrySection pkgT modT e =
       Nothing          -> mempty
       Just (DocText t) -> div_ [class_ "haddock"] (Haddock.renderHaddockHtml t)
   where
-    srcLink = case anchorLine of
-      Nothing -> mempty
-      Just n  ->
+    -- A wrapper module's entries are documented here but defined
+    -- elsewhere.  Saying so, with a link, is the difference between a
+    -- page the reader can trust and one that quietly implies the code
+    -- lives here.
+    reexportNote = case deOrigin e of
+      EntryLocal        -> mempty
+      -- No link and no claim: we do not know where this is defined, and
+      -- the module that came closest is a guess.  Linking it sent the
+      -- reader to a page that does not have the symbol.
+      EntryUnplaced believed ->
+        span_ [ class_ "decl-origin decl-unplaced"
+              , title_ ("Re-exported. hypha could not resolve where this is"
+                          <> " defined; the nearest candidate import is "
+                          <> unModulePath believed)
+              ]
+              (toHtml ("re-exported, origin unresolved" :: Text))
+      EntryReexport def ->
+        a_ [ class_ "decl-origin"
+           , href_ (Route.hrefFrom [ "pkg", unComponentKey (drComponent def)
+                                   , unModulePath (drModule def), deName e ])
+           , title_ (if unComponentKey (drComponent def) == pkgT
+                       then "Defined in another module of this package"
+                       else "Defined in another package")
+           ]
+           (toHtml ("from " <> originLabel def))
+
+    -- The package is named only when it differs, so an intra-package
+    -- re-export reads exactly as it did before.
+    originLabel def
+      | unComponentKey (drComponent def) == pkgT = unModulePath (drModule def)
+      | otherwise =
+          unComponentKey (drComponent def) <> ":" <> unModulePath (drModule def)
+
+    -- The source link follows the definition, because that is where the
+    -- lines this entry reports actually are — including into another
+    -- package.
+    -- 'Nothing' for an entry we could not place: there is no module we
+    -- can honestly send the reader to.
+    srcTarget = case deOrigin e of
+      EntryLocal        -> Just (pkgT, modT)
+      EntryReexport def -> Just ( unComponentKey (drComponent def)
+                                , unModulePath (drModule def) )
+      EntryUnplaced _   -> Nothing
+
+    srcLink = case (srcTarget, anchorLine) of
+      (Just (srcComponent, srcModule), Just n) ->
         a_ [ class_ "decl-src"
-           , href_ ("/source/" <> pkgT <> "/" <> modT
+           , href_ (Route.hrefFrom ["source", srcComponent, srcModule]
                      <> "?line=" <> tshow n <> "#L" <> tshow n)
            , title_ "Jump to source"
            ]
            "src"
+      _ -> mempty
     anchorLine = case deSigLine e of
       Just n  -> Just n
       Nothing -> deDefLine e
@@ -137,8 +187,12 @@ tocRail entries
   | null entries = mempty
   | otherwise = nav_ [class_ "toc-rail"] $ do
       div_ [class_ "toc-title"] "On this page"
-      tocGroup "Types"  [ e | e <- entries, isTypeKind (deKind e) ]
-      tocGroup "Values" [ e | e <- entries, not (isTypeKind (deKind e)) ]
+      tocGroup "Types"  [ e | e <- entries, kindGroup e == GroupType ]
+      tocGroup "Values" [ e | e <- entries, kindGroup e == GroupValue ]
+      -- Its own group rather than folded into "Values": we do not know
+      -- which namespace these belong to, and guessing is what put every
+      -- type in base's Prelude under "Values".
+      tocGroup "Unresolved" [ e | e <- entries, kindGroup e == GroupUnknown ]
   where
     tocGroup :: Text -> [DocEntry] -> Html ()
     tocGroup _ [] = mempty
@@ -159,17 +213,33 @@ exportsBody pkgT modT names reason = div_ [class_ "doc-body"] $ do
     then p_ [class_ "hint"] "No exports detected."
     else ul_ [class_ "export-list"] $
       mapM_ (\nm -> li_ $
-               a_ [href_ ("/pkg/" <> pkgT <> "/" <> modT <> "/" <> nm)]
+               a_ [href_ (Route.hrefFrom ["pkg", pkgT, modT, nm])]
                   (code_ (toHtml nm)))
             names
 
 -- | Haddock-compatible anchor for a declaration: values get @v:@,
 -- types get @t:@ — matching the anchors prebuilt pages use, so
 -- @#frag@ links resolve the same whichever view renders the module.
-anchorFor :: DeclKind -> Text -> Text
-anchorFor k nm
-  | isTypeKind k = "t:" <> nm
-  | otherwise    = "v:" <> nm
+-- An entry we could not place gets the bare name: @v:@ would be a claim
+-- about a namespace we do not know, and a wrong one breaks the @t:@ links
+-- prebuilt pages emit.
+anchorFor :: Maybe DeclKind -> Text -> Text
+anchorFor mk nm = case kindNamespace mk of
+  GroupType    -> "t:" <> nm
+  GroupValue   -> "v:" <> nm
+  GroupUnknown -> nm
+
+-- | Which \"On this page\" group an entry belongs to.
+data KindGroup = GroupType | GroupValue | GroupUnknown
+  deriving Eq
+
+kindGroup :: DocEntry -> KindGroup
+kindGroup = kindNamespace . deKind
+
+kindNamespace :: Maybe DeclKind -> KindGroup
+kindNamespace = \case
+  Nothing -> GroupUnknown
+  Just k  -> if isTypeKind k then GroupType else GroupValue
 
 isTypeKind :: DeclKind -> Bool
 isTypeKind = \case
@@ -182,17 +252,22 @@ isTypeKind = \case
 
 -- | Small badge naming the declaration form.  Functions carry no badge
 -- — they are the common case and the signature already says it all.
-kindBadge :: DeclKind -> Html ()
-kindBadge = \case
-  DkFunction   -> mempty
-  DkData       -> badge "kb-type"    "data"
-  DkNewtype    -> badge "kb-type"    "newtype"
-  DkClass      -> badge "kb-class"   "class"
-  DkTypeSyn    -> badge "kb-type"    "type"
-  DkTypeFamily -> badge "kb-type"    "type family"
-  DkPatternSyn -> badge "kb-pattern" "pattern"
-  DkForeign    -> badge "kb-foreign" "foreign"
+-- An entry with no declaration behind it carries no badge either: there
+-- is nothing to name.
+kindBadge :: Maybe DeclKind -> Html ()
+kindBadge = maybe mempty badgeFor
   where
+    badgeFor :: DeclKind -> Html ()
+    badgeFor = \case
+      DkFunction   -> mempty
+      DkData       -> badge "kb-type"    "data"
+      DkNewtype    -> badge "kb-type"    "newtype"
+      DkClass      -> badge "kb-class"   "class"
+      DkTypeSyn    -> badge "kb-type"    "type"
+      DkTypeFamily -> badge "kb-type"    "type family"
+      DkPatternSyn -> badge "kb-pattern" "pattern"
+      DkForeign    -> badge "kb-foreign" "foreign"
+
     badge :: Text -> Text -> Html ()
     badge cls label =
       span_ [class_ ("kind-badge " <> cls)] (toHtml label)

@@ -12,13 +12,21 @@ library: hypha
   ├── Project ........ plan.json → BuildPlan + per-package components
   ├── Hoogle ......... Per-project DB + freshness via plan-hash
   ├── Hackage ........ JSON API + ETag/Last-Modified cache
-  ├── Search ......... SQLite-backed fuzzy index + FZF-style scorer
+  ├── Search ......... Index (typed rows carrying a definition site),
+  │                    Indexer (the build pass), Reexport (resolution
+  │                    within a component), Exports (the cross-package
+  │                    environment), Collapse (one result per definition),
+  │                    Cache / PackageCache (SQLite, WAL), Fuzzy (FZF-style
+  │                    scorer)
+  ├── Source ......... Extensions (language settings from pragmas + cabal),
+  │                    Parser / Interface (GHC parse tree → declarations,
+  │                    exports, imports), Extract (docs and entries),
+  │                    Locate (definition sites)
   ├── Output ......... Compact/full YAML (default) + JSON envelope, --select
   └── Server ......... HTMX-driven doc browser with command-palette UX
 ```
 
-For full details see the design specs and implementation plans in the
-repository, under
+For full details see the design specs in the repository, under
 [`docs/superpowers/`](https://gitlab.well-typed.com/well-typed/hypha/-/tree/main/docs/superpowers).
 
 ## Development

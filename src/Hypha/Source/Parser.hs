@@ -17,26 +17,33 @@ module Hypha.Source.Parser
   ( Decl (..)
   , DeclKind (..)
   , ParseError (..)
+  , parseErrorMessage
   , parseDecls
-  , parseDeclsIO
+  , parseModuleDoc
+  , parseModuleWith
   , findDecl
   , declSigText
+  , declSigTextIn
+  , numberedLines
+  , renderRdrName
   ) where
 
+import Control.Exception.Safe (SomeException, displayException, try)
 import Data.Maybe (listToMaybe)
 import Data.Text qualified as Text
 import Data.Text (Text)
-import GHC.Data.EnumSet qualified as EnumSet
 import GHC.Data.FastString (mkFastString)
 import GHC.Data.StringBuffer qualified as SB
 import GHC.Hs
-import GHC.LanguageExtensions qualified as LangExt
 import GHC.Parser.Lexer qualified as L
 import GHC.Parser qualified as P
 import GHC.Types.Name.Occurrence qualified as Occ
 import GHC.Types.Name.Reader (RdrName, rdrNameOcc)
+import GHC.Data.Bag qualified as Bag
+import GHC.Types.Error (errMsgSpan, getMessages)
 import GHC.Types.SrcLoc
-import GHC.Utils.Error (emptyDiagOpts)
+
+import Hypha.Source.Extensions qualified as Extensions
 import Language.Preprocessor.Cpphs qualified as Cpphs
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -60,6 +67,13 @@ data Decl = Decl
     -- ^ End line of the definition span (inclusive, 1-based).  For
     -- data\/class declarations this delimits the whole body so callers
     -- can slice the constructor\/method block out of the source.
+  , declDoc        :: !(Maybe Text)
+    -- ^ The Haddock documentation attached to this declaration, as
+    -- rendered by GHC (comment markers already stripped, contiguous
+    -- @-- |@ lines merged, non-doc comments dropped).  Populated from
+    -- the parse tree's 'DocD' nodes, not by line scanning, so blank
+    -- lines / stray comments / CPP between the doc and the declaration
+    -- are handled exactly as Haddock handles them.
   }
   deriving stock (Show, Eq)
 
@@ -78,57 +92,166 @@ data DeclKind
   deriving stock (Show, Eq)
 
 -- | Carrier for any parser failure surfaced from @ghc-lib-parser@.
-newtype ParseError = ParseError { parseErrorMessage :: Text }
+--
+-- The message is GHC's own rendered diagnostic.  It used to be the
+-- literal string @\"parse error\"@, which is what the server's module
+-- page showed the user — a report that named neither the problem nor its
+-- location.  'peUnknownExtensions' and 'peDiagnostics' carry the pragma
+-- names GHC's flag table rejected and its complaints about the pragma
+-- block: both are plausible causes of the failure, so neither is
+-- dropped.
+data ParseError = ParseError
+  { peMessage           :: !Text
+  , peLine              :: !(Maybe Int)
+  , peUnknownExtensions :: ![Extensions.UnknownExtension]
+  , peDiagnostics       :: ![Text]
+  }
   deriving stock (Show, Eq)
+
+-- | The rendered diagnostic.  Kept as a function so existing callers
+-- that only want something printable need not know the record.
+parseErrorMessage :: ParseError -> Text
+parseErrorMessage = peMessage
 
 -- | Parse @source@ as a Haskell module and return its top-level
 -- declarations.  @path@ is used only as the source-span file name.
 --
 -- When the source carries CPP directives (@\{\-# LANGUAGE CPP #\-\}@,
--- @\#ifdef@, ...) @cpphs@ is run as a preprocessor first.  The whole
--- pipeline is pure: cpphs is normally @IO@ to resolve @#include@
--- directives, but we hold those off (@locations = False@,
--- @hashline   = False@) and feed it source bytes we already own, so
--- the @IO@ is artefactual.  We pin the purity at the boundary with
--- 'unsafePerformIO' rather than push @IO@ through every caller.
+-- @\#ifdef@, ...) @cpphs@ is run as a preprocessor first, and that step
+-- does real IO: an @#include@ is resolved by reading the named file from
+-- the including module's directory.  'unsafePerformIO' pins the result at
+-- the boundary rather than pushing @IO@ through every caller, which is a
+-- deliberate trade and not a claim that nothing happens.  What makes it
+-- defensible is that 'parseModuleIO' catches the preprocessor's failures,
+-- so this is total: it returns a 'ParseError', never a thrown 'ErrorCall'.
 parseDecls :: FilePath -> Text -> Either ParseError [Decl]
-parseDecls path source = unsafePerformIO (parseDeclsIO path source)
+parseDecls path source =
+  unsafePerformIO (parseDeclsIO Extensions.defaultLanguageSettings path source)
 {-# NOINLINE parseDecls #-}
 
 -- | 'IO' variant of 'parseDecls' for callers that already live in
 -- 'IO' and would prefer not to thread an 'unsafePerformIO' through
 -- their stack.
-parseDeclsIO :: FilePath -> Text -> IO (Either ParseError [Decl])
-parseDeclsIO path source = do
-  preprocessed <- if needsCpp source
-    then Text.pack <$> Cpphs.runCpphs cpphsOpts path (Text.unpack source)
-    else pure source
-  let buf  = SB.stringToStringBuffer (Text.unpack preprocessed)
-      loc  = mkRealSrcLoc (mkFastString path) 1 1
-      opts = L.mkParserOpts
-               enabledExtensions
-               emptyDiagOpts
-               []      -- supported langexts (only used for error messages)
-               False   -- safeImports
-               False   -- isHaddock — set False; we attach docs out-of-band
-               False   -- keep raw token stream
-               True    -- honour @{-# LINE #-}@ pragmas
-      st   = L.initParserState opts buf loc
-  pure $ case L.unP P.parseModule st of
-    L.POk _ (L _ hsMod) -> Right (declsFromModule hsMod)
-    L.PFailed _         -> Left (ParseError "parse error")
+parseDeclsIO
+  :: Extensions.LanguageSettings -> FilePath -> Text -> IO (Either ParseError [Decl])
+parseDeclsIO ls path source =
+  fmap (fmap (\(_, _, ds) -> ds)) (parseModuleIO ls path source)
+
+-- | Parse a module and return its Haddock header (the @-- |@ block
+-- above the @module@ keyword, if any) alongside its top-level
+-- declarations.  Both the header and each declaration's doc come from
+-- the parse tree, so this is the single authoritative doc source — no
+-- line scanning anywhere.
+parseModuleDoc :: FilePath -> Text -> Either ParseError (Maybe Text, [Decl])
+parseModuleDoc path source =
+  fmap (\(_, hdr, ds) -> (hdr, ds))
+       (parseModuleWith Extensions.defaultLanguageSettings path source)
+
+-- | Parse a module and hand back the whole parse tree alongside the
+-- header doc and declarations.  "Hypha.Source.Interface" needs the tree
+-- itself (module name, export list, imports); everything else takes the
+-- narrower views above.
+parseModuleWith
+  :: Extensions.LanguageSettings -> FilePath -> Text
+  -> Either ParseError (HsModule GhcPs, Maybe Text, [Decl])
+parseModuleWith ls path source = unsafePerformIO (parseModuleIO ls path source)
+{-# NOINLINE parseModuleWith #-}
+
+parseModuleIO
+  :: Extensions.LanguageSettings -> FilePath -> Text
+  -> IO (Either ParseError (HsModule GhcPs, Maybe Text, [Decl]))
+parseModuleIO ls path source = do
+  ePre <- preprocess
+  case ePre of
+    Left  e            -> pure (Left e)
+    Right preprocessed -> parsePreprocessed preprocessed
+  where
+   -- cpphs reports @#error@ and an unparseable @#if@ by calling 'error'
+   -- from pure code, so the failure escapes the 'Either' its type
+   -- advertises.  Catching it here is what makes every entry point below
+   -- total, including the 'unsafePerformIO' ones: without it, @hypha
+   -- symbol@ on a module guarded by @#error "CURRENT_PACKAGE_KEY
+   -- undefined"@ aborted with a raw 'ErrorCall' instead of a
+   -- 'Hypha.Error.HyphaError'.
+   --
+   -- 'Control.Exception.Safe.try' rethrows asynchronous exceptions, so a
+   -- timed-out server request still dies rather than being reported as a
+   -- broken module.
+   preprocess
+     | not (needsCpp source) = pure (Right source)
+     | otherwise = do
+         out <- try (Text.pack <$> Cpphs.runCpphs cpphsOpts path
+                                     (Text.unpack source))
+         pure $ case out of
+           Right t                   -> Right t
+           Left (e :: SomeException) -> Left ParseError
+             { peMessage = "the C preprocessor rejected this module: "
+                             <> firstLine (Text.pack (displayException e))
+             , peLine              = Nothing
+             , peUnknownExtensions = []
+             , peDiagnostics       = []
+             }
+
+   firstLine = Text.strip . Text.takeWhile (/= '\n')
+
+   -- The module states its own requirements; read them rather than
+   -- guessing at a whitelist (see "Hypha.Source.Extensions").  Pragmas
+   -- are read from the *preprocessed* text so a pragma inside a live
+   -- @#if@ branch counts.
+   parsePreprocessed preprocessed = do
+     scan <- Extensions.scanPragmas path preprocessed
+     let (exts, unknown) =
+           Extensions.resolveExtensions ls (Extensions.psExtensionNames scan)
+         buf  = SB.stringToStringBuffer (Text.unpack preprocessed)
+         loc  = mkRealSrcLoc (mkFastString path) 1 1
+         st   = L.initParserState (Extensions.parserOptsFor exts) buf loc
+     pure $ case L.unP P.parseModule st of
+       L.POk _ (L _ hsMod) ->
+         Right (hsMod, moduleHeaderDoc hsMod, declsFromModule hsMod)
+       L.PFailed st' ->
+         Left (parseFailure unknown (Extensions.psDiagnostics scan) st')
+
+-- | Turn a failed parser state into our typed error, keeping GHC's own
+-- diagnostic and the line it points at.
+parseFailure
+  :: [Extensions.UnknownExtension] -> [Text] -> L.PState -> ParseError
+parseFailure unknown diags st =
+  let msgs   = L.getPsErrorMessages st
+      firstD = listToMaybe (Bag.bagToList (getMessages msgs))
+  in ParseError
+       { peMessage = case Extensions.renderDiagnostics msgs of
+           (m : _) -> m
+           []      -> "parse error"
+       , peLine = do
+           d <- firstD
+           case errMsgSpan d of
+             RealSrcSpan s _ -> Just (srcSpanStartLine s)
+             _               -> Nothing
+       , peUnknownExtensions = unknown
+       , peDiagnostics       = diags
+       }
+
+-- | The module-level Haddock header, as rendered by GHC.
+moduleHeaderDoc :: HsModule GhcPs -> Maybe Text
+moduleHeaderDoc m = docTextOf <$> hsmodHaddockModHeader (hsmodExt m)
 
 -- | Cheap pre-flight check: only invoke cpphs when the source
 -- actually contains CPP directives.  Most Hackage modules don't, and
 -- the preprocessor pass is non-trivial.
 needsCpp :: Text -> Bool
 needsCpp src =
-     "{-# LANGUAGE CPP" `Text.isInfixOf` src
-  || "\n#if"    `Text.isInfixOf` src
-  || "\n#ifdef" `Text.isInfixOf` src
-  || "\n#ifndef" `Text.isInfixOf` src
-  || "\n#define" `Text.isInfixOf` src
-  || "\n#include" `Text.isInfixOf` src
+     "CPP" `Text.isInfixOf` pragmaHead
+  || any (`Text.isInfixOf` src) directives
+  where
+    -- @{-# LANGUAGE CPP #-}@ is one spelling; @{-# LANGUAGE
+    -- ScopedTypeVariables, CPP #-}@ is another, and matching the literal
+    -- @{-# LANGUAGE CPP@ missed it.  Pragmas precede the module header,
+    -- so there is no need to scan a 5000-line file for one.
+    pragmaHead = Text.take 4096 src
+
+    -- @#ifdef@ and @#ifndef@ need no probes of their own: both start
+    -- with @#if@.
+    directives = ["\n#if", "\n#define", "\n#include"]
 
 -- | cpphs configuration: behave like ghc -E, expand the conditional
 -- branches reachable under no externally-supplied symbol table, and
@@ -169,46 +292,28 @@ findDecl q ds =
 -- source bytes you pass to this function, not into the post-cpphs
 -- ones.
 declSigText :: Text -> Decl -> Maybe Text
-declSigText source d = do
+declSigText = declSigTextIn . numberedLines
+
+-- | 'declSigText' over lines already numbered, for callers slicing many
+-- declarations out of one module: numbering the source per declaration is
+-- what made the batch path quadratic.
+declSigTextIn :: [(Int, Text)] -> Decl -> Maybe Text
+declSigTextIn ls d = do
   startLn <- declSigLine d
   let endLn = case declSigEndLine d of
                 Just e  -> max startLn e
                 Nothing -> startLn
-      ls    = zip [1 :: Int ..] (Text.lines source)
       slice = [ t | (i, t) <- ls, i >= startLn, i <= endLn ]
   case slice of
     []    -> Nothing
     parts -> Just (Text.unwords (filter (not . Text.null) (map Text.strip parts)))
 
+-- | A module's lines, 1-based, the form every line-slicing helper takes.
+numberedLines :: Text -> [(Int, Text)]
+numberedLines = zip [1 :: Int ..] . Text.lines
+
 -- Internals --------------------------------------------------------
 
--- | A generous bouquet of language extensions so we accept the long
--- tail of real-world Haskell without first parsing each file's
--- @LANGUAGE@ pragmas.  Most extensions only enable /semantics/ the
--- parser already accepts; the ones below are the ones with a real
--- /syntactic/ impact.
-enabledExtensions :: EnumSet.EnumSet LangExt.Extension
-enabledExtensions = EnumSet.fromList
-  [ LangExt.BangPatterns
-  , LangExt.DataKinds
-  , LangExt.ExistentialQuantification
-  , LangExt.FlexibleContexts
-  , LangExt.FlexibleInstances
-  , LangExt.GADTs
-  , LangExt.KindSignatures
-  , LangExt.LambdaCase
-  , LangExt.MultiParamTypeClasses
-  , LangExt.PatternSynonyms
-  , LangExt.PolyKinds
-  , LangExt.RankNTypes
-  , LangExt.RecordWildCards
-  , LangExt.ScopedTypeVariables
-  , LangExt.StandaloneDeriving
-  , LangExt.TupleSections
-  , LangExt.TypeApplications
-  , LangExt.TypeFamilies
-  , LangExt.TypeOperators
-  ]
 
 declsFromModule :: HsModule GhcPs -> [Decl]
 declsFromModule m =
@@ -217,7 +322,45 @@ declsFromModule m =
   -- returns one record carrying both line numbers (sig + def) rather
   -- than whichever appeared first.  Order of first appearance is
   -- preserved.
-  mergeByName (concatMap declsFromTop (hsmodDecls m))
+  mergeByName (associateDocs (hsmodDecls m))
+
+-- | Walk the top-level nodes in source order, stapling each
+-- @DocCommentNext@ (@-- |@) block onto the declaration that follows it
+-- and each @DocCommentPrev@ (@-- ^@) block onto the declaration that
+-- precedes it.  GHC has already dropped non-doc comments and merged
+-- each contiguous doc block into a single node, so association is a
+-- plain left fold — blank lines, stray comments, and CPP @{-# LINE #-}@
+-- pragmas between a doc and its declaration are invisible here just as
+-- they are to Haddock itself.
+associateDocs :: [LHsDecl GhcPs] -> [Decl]
+associateDocs = go Nothing []
+  where
+    go _       acc []          = reverse acc
+    go pending acc (ld : rest) = case unLoc ld of
+      DocD _ (DocCommentNext d) -> go (pending `appendDoc` Just (docTextOf d)) acc rest
+      DocD _ (DocCommentPrev d) -> go pending (attachPrev (docTextOf d) acc) rest
+      -- Named chunks and section headers are not a declaration's doc.
+      DocD _ _                  -> go pending acc rest
+      -- Any real top-level node consumes the pending @-- |@ block: a
+      -- doc binds to the declaration immediately following it, even one
+      -- we don't emit (e.g. an instance), so the pending doc is cleared
+      -- either way.
+      _ -> let ds = [ dcl { declDoc = pending } | dcl <- declsFromTop ld ]
+           in go Nothing (reverse ds ++ acc) rest
+
+    attachPrev _   []       = []
+    attachPrev txt (d : ds) = d { declDoc = declDoc d `appendDoc` Just txt } : ds
+
+-- | Combine two optional doc blocks, joining with a blank line so a
+-- @-- |@ / @-- ^@ pair on the same binding reads as two paragraphs.
+appendDoc :: Maybe Text -> Maybe Text -> Maybe Text
+appendDoc Nothing    y          = y
+appendDoc x          Nothing    = x
+appendDoc (Just a)   (Just b)   = Just (a <> "\n\n" <> b)
+
+-- | Render a located Haddock doc to plain text via GHC's own renderer.
+docTextOf :: LHsDoc GhcPs -> Text
+docTextOf = Text.pack . renderHsDocString . hsDocString . unLoc
 
 mergeByName :: [Decl] -> [Decl]
 mergeByName = go []
@@ -238,6 +381,7 @@ mergeByName = go []
       , declSigEndLine = declSigEndLine a `orFirst` declSigEndLine b
       , declDefLine    = declDefLine a    `orFirst` declDefLine b
       , declDefEndLine = declDefEndLine a `orFirst` declDefEndLine b
+      , declDoc        = declDoc a        `appendDoc` declDoc b
       }
 
     orFirst (Just x) _ = Just x
@@ -289,6 +433,7 @@ declsFromTop ld = case unLoc ld of
       , declSigEndLine = mE
       , declDefLine    = Nothing
       , declDefEndLine = Nothing
+      , declDoc        = Nothing
       }
     defDecl nm mS mE k = Decl
       { declName       = nm
@@ -298,6 +443,7 @@ declsFromTop ld = case unLoc ld of
       , declSigEndLine = Nothing
       , declDefLine    = mS
       , declDefEndLine = mE
+      , declDoc        = Nothing
       }
 
 locLines :: LHsDecl GhcPs -> (Maybe Int, Maybe Int)
@@ -307,3 +453,9 @@ locLines ld = case locA (getLoc ld) of
 
 rdrText :: RdrName -> Text
 rdrText = Text.pack . Occ.occNameString . rdrNameOcc
+
+-- | Public alias for 'rdrText'.  "Hypha.Source.Interface" renders export
+-- and import list entries and must spell names exactly as the decls do,
+-- so it borrows this rather than growing a second implementation.
+renderRdrName :: RdrName -> Text
+renderRdrName = rdrText

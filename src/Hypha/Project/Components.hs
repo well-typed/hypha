@@ -11,13 +11,16 @@
 module Hypha.Project.Components
   ( ComponentInfo (..)
   , ComponentKind (..)
+  , renderComponentKind
   , parseLibComponents
   , findCabalFile
   , getExposedModules
   ) where
 
-import Control.Exception.Safe (IOException, try)
+import Control.Exception.Safe (IOException, displayException, try)
 import Data.ByteString qualified as BS
+import Data.Containers.ListUtils (nubOrd)
+import Data.List (intercalate)
 import Data.Text qualified as T
 import Data.Text qualified as Text
 import Data.Text (Text)
@@ -26,7 +29,12 @@ import Distribution.PackageDescription qualified as PD
 import Distribution.Pretty (pretty)
 import Distribution.Types.UnqualComponentName qualified as UC
 import Distribution.Utils.Path qualified as UP
+import Language.Haskell.Extension qualified as Cabal
+import GHC.Driver.Session qualified as GHCLang
+import Hypha.Source.Extensions
+  ( LanguageSettings (..), UnknownExtension (..), extensionFromFlagName )
 import System.Directory (doesDirectoryExist, listDirectory)
+import System.IO (hPutStrLn, stderr)
 import System.FilePath ((</>), takeExtension)
 import Text.PrettyPrint (render)
 
@@ -40,6 +48,15 @@ data ComponentKind
   | Exe    !Text
   deriving stock (Show, Eq, Ord)
 
+-- | The suffix a kind contributes to a component name: nothing for the
+-- main library, @:name@ for a sub-library, @:exe:name@ for an executable.
+-- Lives here, with the type, so the wire form has one definition.
+renderComponentKind :: ComponentKind -> Text
+renderComponentKind k = case k of
+  MainLib  -> ""
+  SubLib n -> ":" <> n
+  Exe    n -> ":exe:" <> n
+
 -- | One library or executable component of a package.
 data ComponentInfo = ComponentInfo
   { ciKind         :: !ComponentKind
@@ -48,6 +65,21 @@ data ComponentInfo = ComponentInfo
     -- stanza omits @hs-source-dirs@ (cabal default).
   , ciExposedModules :: ![Text]
     -- ^ The textual rendition of modules exposed by this library
+  , ciOtherModules :: ![Text]
+    -- ^ @other-modules@: present in the component, absent from its
+    -- public surface.  The indexer needs them (their symbols are still
+    -- searchable and still define re-exports) and search ranks them
+    -- below the exposed ones.
+  , ciLanguageSettings :: !LanguageSettings
+    -- ^ @default-language@ + @default-extensions@, resolved to the form
+    -- "Hypha.Source.Parser" wants.  Without these, a module that relies
+    -- on a stanza-wide extension parses differently for us than for the
+    -- compiler.
+  , ciUnknownExtensions :: ![UnknownExtension]
+    -- ^ @default-extensions@ entries GHC's flag table did not recognise.
+    -- Carried rather than dropped: an unrecognised extension is a
+    -- plausible cause of a downstream parse failure, and the indexer
+    -- reports these alongside the failures they might explain.
   }
   deriving stock (Show, Eq)
 
@@ -74,36 +106,140 @@ parseLibComponents
 parseLibComponents cabalPath pkgRoot = do
   eBs <- try @IO @IOException (BS.readFile cabalPath)
   case eBs of
-    Left _   -> pure []
+    Left err -> do
+      report ("could not be read: " <> displayException err)
+      pure []
     Right bs -> case PDP.parseGenericPackageDescriptionMaybe bs of
-      Nothing  -> pure []
+      Nothing  -> do
+        report "is not a cabal file we can parse"
+        pure []
       Just gpd ->
         let mainComp =
-              [ toComponent MainLib (PD.condTreeData ct)
+              [ toComponent MainLib (flattenCondTree ct)
               | ct <- maybe [] (:[]) (PD.condLibrary gpd)
               ]
             subComps =
-              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n))) (PD.condTreeData ct)
+              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n))) (flattenCondTree ct)
               | (n, ct) <- PD.condSubLibraries gpd
               ]
             exeComps =
               [ toComponent (Exe (Text.pack (UC.unUnqualComponentName n)))
-                  (PD.emptyLibrary { PD.libBuildInfo = (PD.buildInfo (PD.condTreeData ct)) })
+                  (PD.emptyLibrary { PD.libBuildInfo = PD.buildInfo (flattenCondTree ct) })
               | (n, ct) <- PD.condExecutables gpd
               ]
-        in pure (mainComp ++ subComps ++ exeComps)
+            comps    = mainComp ++ subComps ++ exeComps
+        in do mapM_ reportUnknownExtensions comps
+              pure comps
   where
+    -- Neither failure is silent: a caller told only "no components"
+    -- falls back to guessing, and the guess is what the component list
+    -- exists to replace.
+    report why = hPutStrLn stderr $
+      "hypha: " <> cabalPath <> " " <> why
+        <> "; its module lists and language settings are unavailable"
+
+    -- An extension name cabal accepted and GHC's own table does not know.
+    -- Rare, but it silently changes how we parse every module of the
+    -- component, so it is said out loud rather than carried unread.
+    reportUnknownExtensions ci = case ciUnknownExtensions ci of
+      []   -> pure ()
+      exts -> hPutStrLn stderr $
+        "hypha: " <> cabalPath <> " sets default-extensions GHC does not"
+          <> " recognise (" <> intercalate ", "
+               [ T.unpack (unUnknownExtension e) | e <- exts ]
+          <> "); modules of " <> T.unpack (describeKind (ciKind ci))
+          <> " are parsed without them"
+
+    describeKind k = case k of
+      MainLib  -> "its library"
+      SubLib n -> "its sub-library " <> n
+      Exe    n -> "its executable " <> n
+
     toComponent kind lib =
       let bi   = PD.libBuildInfo lib
-          raw  = map UP.getSymbolicPath (PD.hsSourceDirs bi)
+          raw  = nubOrd (map UP.getSymbolicPath (PD.hsSourceDirs bi))
           dirs = if null raw
                    then [pkgRoot]
                    else map (pkgRoot </>) raw
+          (on, off, unknown) = splitExtensions (PD.defaultExtensions bi)
       in ComponentInfo {
            ciKind         = kind
          , ciHsSourceDirs = dirs
-         , ciExposedModules = map (T.pack . render . pretty) $ PD.exposedModules lib
+         , ciExposedModules = nubOrd (map renderModule (PD.exposedModules lib))
+         , ciOtherModules   = nubOrd (map renderModule (PD.otherModules bi))
+         , ciLanguageSettings = LanguageSettings
+             { lsLanguage   = ghcLanguageOf =<< PD.defaultLanguage bi
+             , lsDefaultOn  = on
+             , lsDefaultOff = off
+             }
+         , ciUnknownExtensions = unknown
          }
+
+    renderModule = T.pack . render . pretty
+
+    -- Every branch of a conditional stanza, unioned with the
+    -- unconditional node.
+    --
+    -- @condTreeData@ alone is only the unconditional part, and cabal files
+    -- put real module lists behind conditions: @base@ declares
+    -- @GHC.Event@ solely in the @else@ of @if os(windows)@, and
+    -- @System.CPUTime.Posix.*@ solely in the @else@ of an @elif@ chain.
+    -- Reading only the unconditional node left those modules out of the
+    -- component's list, and since the indexer treats a non-empty list as
+    -- authoritative, they were never indexed at all.
+    --
+    -- The union is the right answer rather than resolving the flags: we
+    -- cannot know the flag assignment the package was built with, and
+    -- 'loadModuleSources' already drops a name whose file is not on disk,
+    -- so a Windows-only module simply does not resolve on Linux.
+    flattenCondTree :: Monoid a => PD.CondTree v c a -> a
+    flattenCondTree ct =
+      mconcat (PD.condTreeData ct : concatMap branch (PD.condTreeComponents ct))
+      where
+        branch b =
+          flattenCondTree (PD.condBranchIfTrue b)
+            : maybe [] (pure . flattenCondTree) (PD.condBranchIfFalse b)
+
+    -- cabal models an extension as (name, enabled), and the name it
+    -- carries can itself be negated (@NoImplicitPrelude@), so the two
+    -- polarities compose by XNOR rather than conjunction: cabal's
+    -- @DisableExtension ImplicitPrelude@ and an @EnableExtension
+    -- (UnknownExtension \"NoImplicitPrelude\")@ must reach the same answer.
+    splitExtensions exts =
+      let resolved =
+            [ (x, cabalOn == flagOn)
+            | e <- exts
+            , let (nm, cabalOn) = cabalExtensionName e
+            , Right pairs <- [extensionFromFlagName nm]
+            , (x, flagOn) <- pairs
+            ]
+          unknown =
+            [ u
+            | e <- exts
+            , let (nm, _) = cabalExtensionName e
+            , Left u <- [extensionFromFlagName nm]
+            ]
+      in ( [ x | (x, True)  <- resolved ]
+         , [ x | (x, False) <- resolved ]
+         , unknown
+         )
+
+    cabalExtensionName e = case e of
+      Cabal.EnableExtension  k  -> (T.pack (show k), True)
+      Cabal.DisableExtension k  -> (T.pack (show k), False)
+      Cabal.UnknownExtension nm -> (T.pack nm, True)
+
+-- | Translate cabal's @default-language@ into the parser's language
+-- selector.  Cabal admits @UnknownLanguage@ for forward compatibility;
+-- an unrecognised value means \"no opinion\", which leaves the GHC2021
+-- floor in charge rather than inventing a language.
+ghcLanguageOf :: Cabal.Language -> Maybe GHCLang.Language
+ghcLanguageOf lang = case lang of
+  Cabal.Haskell98         -> Just GHCLang.Haskell98
+  Cabal.Haskell2010       -> Just GHCLang.Haskell2010
+  Cabal.GHC2021           -> Just GHCLang.GHC2021
+  Cabal.GHC2024           -> Just GHCLang.GHC2024
+  Cabal.UnknownLanguage _ -> Nothing
 
 -- | Get /ALL/ the exposed modules from a package source directory. This returns
 -- the list of all the modules for all the stanzas.

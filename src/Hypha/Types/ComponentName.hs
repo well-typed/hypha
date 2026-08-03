@@ -16,12 +16,14 @@ module Hypha.Types.ComponentName
   ( ComponentName (..)
   , parseComponentName
   , renderComponentName
+  , ComponentKey (..)
+  , componentKeyOf
   ) where
 
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Hypha.Project.Components (ComponentKind (..))
+import Hypha.Project.Components (ComponentKind (..), renderComponentKind)
 import Hypha.Types.PackageId    (PackageName (..))
 
 -- | Reference to a single library or executable component.
@@ -60,6 +62,20 @@ parseComponentName raw =
 
 -- | Inverse of 'parseComponentName'.
 renderComponentName :: ComponentName -> Text
-renderComponentName (ComponentName (PackageName p) MainLib)    = p
-renderComponentName (ComponentName (PackageName p) (SubLib s)) = p <> ":" <> s
-renderComponentName (ComponentName (PackageName p) (Exe    s)) = p <> ":exe:" <> s
+renderComponentName (ComponentName (PackageName p) kind) =
+  p <> renderComponentKind kind
+
+-- | The rendered component reference, as it appears in the @pkg@ column
+-- of the search cache and in @\/pkg\/…@ URLs.
+--
+-- A newtype because the encoding matters: @containers@,
+-- @hypha:hypha-internal@ and @hypha:exe:hypha-mcp@ are three shapes of
+-- one thing, and code that takes a bare 'Text' here cannot say whether
+-- it holds a key, a package name, or a module path.
+newtype ComponentKey = ComponentKey { unComponentKey :: Text }
+  deriving stock (Show, Eq, Ord)
+
+-- | Build the key for a package's component.
+componentKeyOf :: PackageName -> ComponentKind -> ComponentKey
+componentKeyOf pkg kind = ComponentKey (renderComponentName (ComponentName pkg kind))
+

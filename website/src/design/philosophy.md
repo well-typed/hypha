@@ -14,7 +14,7 @@ honours them:
 | **Human + machine output modes** | YAML for agents/terminals, `--json` for pipelines, HTMX-rendered HTML for the `server` UI — same data, three surfaces. |
 | **Actionable errors** | Every failure envelope carries a stable `code` and an `actions` map suggesting the next command to try. |
 | **Verified, not vibes** | Property tests via `falsify`, golden output regressions via `tasty-golden`, edge cases via `tasty-hunit`. CI gates merges. |
-| **Non-obvious insight** | Symbols resolve to the canonical declaration even across re-exports and CPP `#ifdef` branches — the value that raw Hackage HTML cannot give you. |
+| **Non-obvious insight** | Symbols resolve to the canonical declaration across re-exports — through several modules, and into another package, so `base`'s façades resolve into `ghc-internal` — which is the value raw Hackage HTML cannot give you. Modules that require CPP preprocessing are skipped and reported rather than guessed at. |
 | **Dual interface from one spec** | The `hypha` CLI, the `hypha-mcp` JSON-RPC shim, and the `hypha server` HTML UI share one library — no duplicated client/store code. |
 
 ## CLI vs MCP — the cli-pp split

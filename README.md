@@ -19,7 +19,8 @@ you can trim it further with `--select`.
 It is **plan-aware**: `hypha` reads your `dist-newstyle/cache/plan.json`, so
 answers reflect the exact versions you build against — including your local
 project — and symbols point to the `file:line` where they are actually
-defined, even across re-exports and CPP `#ifdef` branches. One library
+defined, following a re-export through as many modules as it takes and into
+another package when that is where the declaration lives. One library
 powers both the CLI and a local doc-browser server, so agents and humans see
 the same data.
 

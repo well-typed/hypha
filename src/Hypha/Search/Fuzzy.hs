@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Tiny, dependency-free fuzzy scorer used by the live search index.
 --
@@ -20,56 +21,148 @@
 -- ('mkIndexedRow').  The hot path only does pure 'Text.isInfixOf' /
 -- 'Text.isPrefixOf' calls — no per-query 'Text.toLower' allocations.
 module Hypha.Search.Fuzzy
-  ( IndexedRow (..)
-  , mkIndexedRow
-  , displayRow
+  ( Entity (..)
+  , IndexedRow (..)
+  , mkSymbolRow
+  , mkPackageRow
+  , mkModuleRow
+  , moduleRows
+  , scopeRows
   , scoreRow
   , tokenize
   ) where
 
+import Data.Containers.ListUtils (nubOrd)
 import Data.Text (Text)
 import qualified Data.Text as Text
 
--- | A search-index row with both display fields (preserved as-is for
--- rendering) and precomputed lowercase fields for matching.
+import Hypha.Search.Index (IndexRow (..), Visibility (..))
+import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
+
+-- | What a search result is /about/.
+--
+-- A package result has no signature and a module result has no definition
+-- site, so the payload is a sum rather than a record with fields that are
+-- meaningless for two of its three shapes.
+data Entity
+  = EntityPackage !PackageName !Version
+  | EntityModule  !ComponentKey !ModulePath !Visibility
+  | EntitySymbol  !IndexRow
+  deriving stock (Show, Eq)
+
+-- | The scoring discriminant.  Derived from 'Entity' rather than stored
+-- beside it, so the two cannot disagree.
+data ResultKind = KindPackage | KindModule | KindSymbol
+  deriving stock (Show, Eq, Ord)
+
+entityKind :: Entity -> ResultKind
+entityKind e = case e of
+  EntityPackage{} -> KindPackage
+  EntityModule{}  -> KindModule
+  EntitySymbol{}  -> KindSymbol
+
+-- | A search-index row: the typed payload plus the precomputed lowercase
+-- fields used for matching.
+--
+-- The payload sits beside the match fields rather than being flattened
+-- into 'Text': scoring touches only the lowercase fields (so the hot path
+-- stays allocation-free), while rendering reads 'irEntity' directly
+-- instead of re-wrapping 'Text' back into a 'ModulePath' at the edge.
 data IndexedRow = IndexedRow
-  { irPkg   :: !Text
-  , irMod   :: !Text
-  , irName  :: !Text
-  , irSig   :: !Text
-  , irPkgL  :: !Text
-  , irModL  :: !Text
-  , irNameL :: !Text
-  , irQualL :: !Text   -- ^ "<pkg>.<mod>.<name>" lowercased; used as the
-                       --   haystack for dotted qualified queries.
-  , irNameLen :: !Int  -- ^ Cached @Text.length irName@; used for the
-                       --   shortest-name tie-breaker.
+  { irEntity  :: !Entity
+  , irPkgL    :: !Text
+  , irModL    :: !Text
+  , irNameL   :: !Text
+  , irQualL   :: !Text   -- ^ "<pkg>.<mod>.<name>" lowercased; the haystack
+                         --   for dotted qualified queries.
+  , irNameLen :: !Int    -- ^ Cached name length for the shortest-name
+                         --   tie-breaker.
   }
   deriving stock (Show, Eq)
 
--- | Build an 'IndexedRow' from raw display fields.
-mkIndexedRow :: Text -> Text -> Text -> Text -> IndexedRow
-mkIndexedRow pkg modPath name sig =
+-- | A symbol row.
+mkSymbolRow :: IndexRow -> IndexedRow
+mkSymbolRow r = indexedRow
+  (EntitySymbol r)
+  (unComponentKey (rowComponent r))
+  (unModulePath (rowModule r))
+  (unSymbolName (rowName r))
+
+-- | A package row, so a query naming a package can land on the package.
+mkPackageRow :: PackageName -> Version -> IndexedRow
+mkPackageRow pkg ver =
+  indexedRow (EntityPackage pkg ver) (unPackageName pkg) "" ""
+
+-- | A module row, so a query naming a module can land on the module.
+mkModuleRow :: ComponentKey -> ModulePath -> Visibility -> IndexedRow
+mkModuleRow comp modPath vis = indexedRow
+  (EntityModule comp modPath vis)
+  (unComponentKey comp)
+  (unModulePath modPath)
+  ""
+
+indexedRow :: Entity -> Text -> Text -> Text -> IndexedRow
+indexedRow ent pkg modPath name =
   let pkgL  = Text.toLower pkg
       modL  = Text.toLower modPath
       nameL = Text.toLower name
-      qualL = pkgL <> "." <> modL <> "." <> nameL
   in IndexedRow
-       { irPkg     = pkg
-       , irMod     = modPath
-       , irName    = name
-       , irSig     = sig
+       { irEntity  = ent
        , irPkgL    = pkgL
        , irModL    = modL
        , irNameL   = nameL
-       , irQualL   = qualL
+       , irQualL   = pkgL <> "." <> modL <> "." <> nameL
        , irNameLen = Text.length name
        }
 
--- | Recover the (pkg, module, name, signature) tuple expected by the
--- existing result-rendering code.
-displayRow :: IndexedRow -> (Text, Text, Text, Text)
-displayRow r = (irPkg r, irMod r, irName r, irSig r)
+-- | The module rows a set of symbol rows implies.
+--
+-- Synthesised rather than stored: they are a projection of rows we already
+-- have, and deriving them in one place is what stops the freshly-built
+-- index and the hydrated-from-cache index from disagreeing about which
+-- entities exist.  A module contributes one row however many of its
+-- symbols do.
+--
+-- The package row is /not/ here, because these rows are built per
+-- component and a package is not: emitting one alongside each component's
+-- modules put the package into the results once per component, so a
+-- project whose own package has a library and two executables answered
+-- its own name three times.
+moduleRows :: [IndexRow] -> [IndexedRow]
+moduleRows rows =
+  [ mkModuleRow c m v
+  | (c, m, v) <- nubOrd
+      [ (rowComponent r, rowModule r, rowVisibility r) | r <- rows ]
+  ]
+
+-- | Which component a row belongs to — the package itself for a package
+-- row, the owning component for a module or symbol row.
+entityComponent :: Entity -> Text
+entityComponent = \case
+  EntityPackage p _  -> unPackageName p
+  EntityModule c _ _ -> unComponentKey c
+  EntitySymbol r     -> unComponentKey (rowComponent r)
+
+-- | Restrict rows to one component.
+--
+-- Both 'Nothing' and an explicitly empty name mean "no scope".  The empty
+-- case is not defensive padding: it arrives once the scope chip has just
+-- been cleared, because the hidden input's now-empty value is still included
+-- in the htmx request.
+--
+-- Applied to /rows/, deliberately, and never to collapsed results.  A
+-- definition presented by both @base@ and @ghc-internal@ folds into a single
+-- result carrying the winning presentation's component, so filtering
+-- afterwards dropped it from the other package's view entirely — restricting
+-- search to @base@ found no @mapAccumL@ at all.  Filtering first means each
+-- scope collapses its own package's presentations and always sees them.
+scopeRows :: Maybe Text -> [IndexedRow] -> [IndexedRow]
+scopeRows mScope rows = case mScope of
+  Just s | not (Text.null s) ->
+    filter ((== s) . entityComponent . irEntity) rows
+  _ -> rows
 
 -- | Lower-case and split a query into tokens.  Empty input yields @[]@.
 tokenize :: Text -> [Text]
@@ -88,7 +181,7 @@ scoreRow tokens r = do
         Nothing -> Nothing
         Just s  -> go (acc + s) ts
   base <- go 0 tokens
-  pure (base + nameBonus (irNameLen r))
+  pure (base + nameBonus (irNameLen r) + kindBonus tokens r + visibilityBonus r)
 
 -- | Score one token against the row.  'Nothing' means the token didn't
 -- match the row at all.
@@ -116,6 +209,32 @@ tokenScore r tok
 -- when the user typed \"lookup\".
 nameBonus :: Int -> Int
 nameBonus nameLen = max 0 (60 - nameLen)
+
+-- | Entity kinds outrank field scores outright: a query that names a
+-- package wants the package, not one of its ten thousand symbols.  The
+-- bonus exceeds any reachable accumulation of field scores, so this is a
+-- tier rather than a nudge.
+--
+-- Single-token exactness is deliberate.  @Data.Map insertWith@ names a
+-- module in its first token but is a symbol query; only a query that is
+-- /nothing but/ an entity's name asks for that entity itself.
+kindBonus :: [Text] -> IndexedRow -> Int
+kindBonus tokens r = case entityKind (irEntity r) of
+  KindPackage | [t] <- tokens, t == irPkgL r -> 100000
+  KindModule  | [t] <- tokens, t == irModL r -> 50000
+  _                                          -> 0
+
+-- | A public presentation of a symbol never ties with an internal one.
+-- Small, because it breaks ties rather than reordering tiers — collapse is
+-- what actually folds the internal row away.
+visibilityBonus :: IndexedRow -> Int
+visibilityBonus r = case irEntity r of
+  EntitySymbol row     -> vis (rowVisibility row)
+  EntityModule _ _ v   -> vis v
+  EntityPackage _ _    -> 0
+  where
+    vis Exposed  = 20
+    vis Internal = 0
 
 -- | Is @needle@ a (not necessarily contiguous) subsequence of @hay@?
 isSubsequence :: Text -> Text -> Bool

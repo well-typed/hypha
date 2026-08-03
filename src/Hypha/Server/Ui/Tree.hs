@@ -2,9 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.Ui.Tree
   ( sidebar
-  , packageTree
   , splitByOrigin
-  , originBadge
   , originBadgeFull
   , hackageLink
   ) where
@@ -15,6 +13,8 @@ import qualified Data.Text as Text
 import Lucid
 
 import Hypha.Types.BuildPlan (PackageOrigin (..))
+import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.Route qualified as Route
 
 -- | Full sidebar: a client-side filter box above two collapsible
 -- groups — the project's own packages first, dependencies below.
@@ -60,15 +60,18 @@ packageTree = ul_ [class_ "tree"] . mconcat . map renderEntry
       let (pkgPart, tail_) = case Text.breakOn ":" compName of
             (a, b) | Text.null b -> (a, Nothing)
                    | otherwise   -> (a, Just (Text.drop 1 b))
-          (kindCls, suffix, hrefSuffix) = case tail_ of
-            Nothing  -> ("", Nothing, "")
+          -- The split is for the chip: the href is the component key
+          -- whole, escaped once by 'Route.hrefFrom' like every other link
+          -- on the site.  Hand-escaping the colons here was the one place
+          -- that spelled the same URL differently.
+          (kindCls, suffix) = case tail_ of
+            Nothing  -> ("", Nothing)
             Just t   -> case Text.stripPrefix "exe:" t of
-              Just e  -> ("exe-tag",    Just (":exe:" <> e), "%3Aexe%3A" <> e)
-              Nothing -> ("sublib-tag", Just (":"     <> t), "%3A"       <> t)
-          hrefText = pkgPart <> hrefSuffix
+              Just e  -> ("exe-tag",    Just (":exe:" <> e))
+              Nothing -> ("sublib-tag", Just (":"     <> t))
       in li_ [class_ "tree-row"] $ do
            originBadge origin
-           a_ [href_ ("/pkg/" <> hrefText)] $ do
+           a_ [href_ (Route.hrefFrom ["pkg", compName])] $ do
              toHtml pkgPart
              case suffix of
                Nothing -> pure ()
@@ -103,20 +106,37 @@ originBadgeFull o =
                                               (toHtml (" \x2014 " <> u))
          _                                -> pure ()
 
--- | Right-aligned "view on Hackage" link for the package page header.
--- Only 'OriginHackage' packages get one — a local, source-repo, or
--- tarball package has no matching Hackage listing, so showing the
--- link there would send the user to a 404 (or worse, someone else's
--- same-named package).
-hackageLink :: Text -> Text -> PackageOrigin -> Html ()
-hackageLink pkg ver OriginHackage =
-  a_ [ class_ "hackage-link"
-     , href_ ("https://hackage.haskell.org/package/" <> pkg <> "-" <> ver)
-     , target_ "_blank"
-     , rel_ "noopener"
-     ]
-     "\x2197 Hackage"
-hackageLink _ _ _ = mempty
+-- | Right-aligned \"view on Hackage\" link for the package page header.
+--
+-- Hackage-sourced /and/ distribution packages both get one: @containers@,
+-- @base@ and every other library shipped with GHC is published on Hackage
+-- at the version the plan pins, so withholding the link there was simply
+-- wrong.  A boot library from an unreleased GHC can 404, which is rare and
+-- honest.
+--
+-- Local, source-repo and tarball packages still get nothing: for those the
+-- version does not identify a Hackage listing, and a link would send the
+-- user to a 404 or, worse, to someone else's same-named package.
+--
+-- The match is per-constructor rather than a catch-all, so a new origin
+-- fails to compile here instead of silently losing its link.
+hackageLink :: PackageName -> Version -> PackageOrigin -> Html ()
+hackageLink pkg ver origin = case origin of
+  OriginHackage         -> link
+  OriginDistribution    -> link
+  OriginSourceRepo{}    -> mempty
+  OriginLocal{}         -> mempty
+  OriginLocalTarball{}  -> mempty
+  OriginRemoteTarball{} -> mempty
+  where
+    link =
+      a_ [ class_ "hackage-link"
+         , href_ ("https://hackage.haskell.org/package/"
+                    <> unPackageName pkg <> "-" <> unVersion ver)
+         , target_ "_blank"
+         , rel_ "noopener"
+         ]
+         "\x2197 Hackage"
 
 originDetails :: Maybe Text -> Maybe Text -> Maybe FilePath -> Html ()
 originDetails url ref subdir =

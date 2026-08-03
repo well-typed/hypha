@@ -13,8 +13,12 @@ import qualified Data.Text          as Text
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
+import Hypha.Source.Extensions
+  ( PragmaScan (..), UnknownExtension (..), defaultLanguageSettings
+  , resolveExtensions, scanPragmas )
 import Hypha.Source.Parser
-  ( Decl (..), DeclKind (..), parseDecls, findDecl, declSigText )
+  ( Decl (..), DeclKind (..), ParseError (..), parseDecls, parseErrorMessage
+  , parseModuleDoc, findDecl, declSigText )
 
 tests :: TestTree
 tests = testGroup "Unit.SourceParser"
@@ -129,4 +133,42 @@ tests = testGroup "Unit.SourceParser"
           declDefLine d    @?= Just 4
           declDefEndLine d @?= Just 4
         Left e -> fail (show e)
+  , testCase "role annotations and MagicHash parse (was: whitelist miss)" $ do
+      src <- Text.pack <$> readFile "test/fixtures/reexport/src/Fixture/Internal.hs"
+      case parseDecls "Fixture/Internal.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> Text.unpack (parseErrorMessage e))
+        Right ds -> do
+          let names = map declName ds
+          assertBool "insertBag found" ("insertBag" `elem` names)
+          assertBool "sizeBag found"   ("sizeBag"   `elem` names)
+
+  , testCase "parse failure carries GHC's message and a line" $ do
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "f x = case x of"
+            , "  -> 1"
+            ]
+      case parseDecls "M.hs" src of
+        Right _ -> fail "expected a parse error"
+        Left e  -> do
+          assertBool "message is not the literal 'parse error'"
+            (parseErrorMessage e /= "parse error")
+          assertBool "message is non-empty"
+            (not (Text.null (parseErrorMessage e)))
+          peLine e @?= Just 4
+
+  , testCase "unknown pragma name is reported, parse still succeeds" $ do
+      let src = Text.unlines
+            [ "{-# LANGUAGE OverloadedStrings #-}"
+            , "module M where"
+            , "f :: Int"
+            , "f = 1"
+            ]
+      case parseModuleDoc "M.hs" src of
+        Left e  -> fail ("unexpected parse error: " <> Text.unpack (parseErrorMessage e))
+        Right _ -> pure ()
+      scan <- scanPragmas "M.hs" src
+      let (_, unknown) = resolveExtensions defaultLanguageSettings (psExtensionNames scan)
+      map unUnknownExtension unknown @?= []
   ]

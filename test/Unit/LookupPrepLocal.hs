@@ -28,6 +28,7 @@ import Hypha.Hoogle.Remote (defaultRemoteOptions, roOffline)
 import Hypha.Hoogle.Type   (HoogleQuery (..))
 import Hypha.Search.PackageCache
   ( CacheOrigin (..), openPackageCacheAt, writeCachedIndex )
+import Util.Row (row)
 
 tests :: TestTree
 tests = testGroup "Unit.LookupPrepLocal"
@@ -35,7 +36,7 @@ tests = testGroup "Unit.LookupPrepLocal"
       withSystemTempDirectory "hypha-prep" $ \tmp -> do
         cache <- openPackageCacheAt (tmp </> "g.db") Nothing
         writeCachedIndex cache OriginGlobal "containers" "0.6.7"
-          [("containers", "Data.Map", "lookup", "")]
+          [row "containers" "Data.Map" "lookup" ""]
         hoogle <- openLocalHoogle (tmp </> "dh") (tmp </> "store") (tmp </> "dist")
         prepRef <- IORef.newIORef (0 :: Int)
         let opts = LookupOptions

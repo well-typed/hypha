@@ -41,12 +41,17 @@ instance MonadTrans HyphaM where
 type Hypha = HyphaM IO
 
 -- | Construct the environment and run a 'HyphaM' computation to
--- completion.  The tracer is chosen once, here, based on the
--- @--verbose@ flag — no per-call allocation.
+-- completion.  The tracer is chosen once, here — no per-call allocation.
+--
+-- @--quiet@ wins over @--verbose@.  It had no effect at all before: the
+-- flag was parsed, stored, and read nowhere, while the docs listed it as
+-- suppressing informational output.
 runHypha :: MonadIO m => HyphaOptions -> HyphaM m a -> m (Either HyphaError a)
 runHypha opts (HyphaM m) = do
   resolvedCacheDir <- liftIO $ maybe cacheRoot pure (hoCacheDir opts)
-  let env = HyphaEnv opts (if hoVerbose opts then verboseTracer else silentTracer) resolvedCacheDir
+  let verbose = hoVerbose opts && not (hoQuiet opts)
+      env = HyphaEnv opts (if verbose then verboseTracer else silentTracer)
+                     resolvedCacheDir
   runExceptT (runReaderT m env)
 
 -- | Get the 'HyphaOptions' from the environment.

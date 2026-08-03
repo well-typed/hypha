@@ -4,15 +4,20 @@ module Hypha.Source.Locate
   ( listExportedSymbols
   , locateSymbolDefinition
   , locateSymbolDefinitionInDir
+  , locateDefinitionInComponent
+  , LocatedDefinition (..)
   , findModuleFile
   , findModuleFileIn
   , SourceLocation (..)
     -- * Testing
-  , parseExports
+  , exportedNamesOf
   , modulePathToFile
   ) where
 
 import Control.Monad (filterM)
+import Data.List (intercalate, sortOn)
+import Data.List.NonEmpty qualified as NE
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TIO
@@ -20,8 +25,17 @@ import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 
 import Hypha.BuildEnv.Type     (BuildEnv (..))
+import Hypha.Search.Index
+  ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource (..) )
+import Hypha.Search.Reexport   (DefinitionSite (..))
+import qualified Hypha.Search.Reexport as Reexport
+import qualified Hypha.Source.Extensions as Extensions
+import qualified Hypha.Source.Interface as Interface
 import qualified Hypha.Source.Parser as Parser
+import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId   (PackageId (..))
+import Hypha.Types.SymbolPath  (ModulePath (..), SymbolName (..))
+import System.IO (hPutStrLn, stderr)
 
 -- | Location of a symbol definition in a source file.
 data SourceLocation = SourceLocation
@@ -30,10 +44,13 @@ data SourceLocation = SourceLocation
   }
   deriving stock (Show, Eq)
 
--- | Inspect the package source directory and list candidate exported symbols
--- by scraping the @module ... ( ... ) where@ header naïvely.
+-- | The symbols a module of a package exports, read from its parse tree.
 --
--- A future improvement (post-MVP) is to use ghc-lib-parser for accurate parsing.
+-- Its predecessor scraped the module header with a hand-rolled scanner
+-- that could not tell @Map(..)@ from @Map@ and dropped the @module N@
+-- re-export form -- the form @containers@' public modules are largely
+-- built from.  "Hypha.Source.Interface" replaced it; this call site
+-- outlived the replacement.
 listExportedSymbols :: BuildEnv IO -> PackageId -> Text -> IO [Text]
 listExportedSymbols env pid modPath = do
   mDir <- locatePackageSource env pid
@@ -44,7 +61,23 @@ listExportedSymbols env pid modPath = do
       ok <- doesFileExist f
       if not ok
         then pure []
-        else parseExports <$> TIO.readFile f
+        else exportedNamesOf Extensions.defaultLanguageSettings f
+               =<< TIO.readFile f
+
+-- | 'Interface.exportedNamesIO' with the failure reported rather than
+-- rendered as "this module exports nothing", which is what an empty list
+-- looks like to every caller.
+exportedNamesOf :: Extensions.LanguageSettings -> FilePath -> Text -> IO [Text]
+exportedNamesOf ls f src = do
+  r <- Interface.exportedNamesIO ls f src
+  case r of
+    Right ns -> pure (map unSymbolName ns)
+    Left e   -> do
+      hPutStrLn stderr $
+        "hypha: " <> f <> " could not be parsed: "
+          <> Text.unpack (Parser.parseErrorMessage e)
+          <> "; its export list is unavailable"
+      pure []
 
 -- | Convert a module path like @Control.Concurrent.Async@ to a file path
 -- like @Control/Concurrent/Async.hs@.
@@ -121,133 +154,6 @@ bfsFind root rel depth
       "benchmarks" -> True
       _           -> False
 
--- | Crude header parser.  Returns the comma-separated identifiers in the
--- module's explicit export list.  Designed to be conservative: when the
--- shape of the header is unfamiliar (no export list, missing @module@
--- keyword, exports written after @where@, etc.) it returns @[]@ rather
--- than guessing.
---
--- Specifically we require the @module@ keyword, an open paren that appears
--- before any @where@ token, and a matching close paren that appears before
--- the corresponding @where@.  Constructor lists @Foo(..)@, sub-exports
--- @Foo(Bar,Baz)@ and operators are tolerated but not deeply parsed; only the
--- leading identifier per entry is reported.
-parseExports :: Text -> [Text]
-parseExports src =
-  case findModuleHeader src of
-    Nothing  -> []
-    Just hdr ->
-      let (_, afterParen) = Text.breakOn "(" hdr
-      in if Text.null afterParen
-           then []
-           else
-             -- No cap: the list is naturally bounded by the header
-             -- size, and truncating it silently drops real exports
-             -- (Data.Map exports well over 100 names) — downstream
-             -- consumers use this as an export *filter*, so a cap
-             -- loses documentation, it doesn't just shorten a list.
-             let inside    = stripBalanced (Text.drop 1 afterParen)
-                 entries   = splitTopLevel inside
-             in [ ident | e <- entries
-                        , let ident = leading e
-                        , not (Text.null ident)
-                        ]
-  where
-    -- Find the slab from @module@ through the matching @where@.  Returns
-    -- 'Nothing' when no module header is present.  Strips line comments
-    -- inside the slab so '(' tokens inside @-- ...@ are ignored.
-    findModuleHeader :: Text -> Maybe Text
-    findModuleHeader t =
-      let ls       = Text.lines t
-          dropped  = map dropLineComment ls
-          startIx  = findStart 0 dropped
-      in case startIx of
-           Nothing -> Nothing
-           Just i  ->
-             let rest    = drop i dropped
-                 (h, _)  = breakIncludingWhere rest
-             in Just (Text.unlines h)
-
-    -- Index of the first line whose stripped prefix is @module @ (or @module\n@).
-    findStart :: Int -> [Text] -> Maybe Int
-    findStart _ []     = Nothing
-    findStart i (l:ls)
-      | startsModule l = Just i
-      | otherwise      = findStart (i + 1) ls
-
-    startsModule :: Text -> Bool
-    startsModule l =
-      let s = Text.dropWhile (`elem` (" \t" :: String)) l
-      in "module " `Text.isPrefixOf` s || s == "module"
-
-    -- Take lines up to and including the one containing "where" at top level.
-    breakIncludingWhere :: [Text] -> ([Text], [Text])
-    breakIncludingWhere = goB [] (0 :: Int)
-      where
-        goB acc _ []     = (reverse acc, [])
-        goB acc d (l:ls) =
-          let (d', sawWhere) = scanLine d l
-          in if sawWhere
-               then (reverse (l : acc), ls)
-               else goB (l : acc) d' ls
-
-        scanLine :: Int -> Text -> (Int, Bool)
-        scanLine d0 l = goS d0 l False
-          where
-            goS d txt found = case Text.uncons txt of
-              Nothing         -> (d, found)
-              Just ('(', rest) -> goS (d + 1) rest found
-              Just (')', rest) -> goS (max 0 (d - 1)) rest found
-              Just _           ->
-                if d == 0 && "where" `Text.isPrefixOf` txt
-                  then (d, True)
-                  else goS d (Text.drop 1 txt) found
-
-    dropLineComment :: Text -> Text
-    dropLineComment l = fst (Text.breakOn "--" l)
-
-    -- Pull the matched, balanced contents of an open '(' (we've already
-    -- dropped the '(' itself; return the bytes up to the matching ')').
-    stripBalanced :: Text -> Text
-    stripBalanced = goP 1 Text.empty
-      where
-        goP :: Int -> Text -> Text -> Text
-        goP _ acc t | Text.null t = acc
-        goP d acc t = case Text.uncons t of
-          Nothing             -> acc
-          Just ('(', rest)    -> goP (d + 1) (Text.snoc acc '(') rest
-          Just (')', rest) | d <= 1 -> acc
-                           | otherwise  -> goP (d - 1) (Text.snoc acc ')') rest
-          Just (c, rest)      -> goP d (Text.snoc acc c) rest
-
-    -- Split a comma-separated export list, respecting nested parens.
-    splitTopLevel :: Text -> [Text]
-    splitTopLevel = goT (0 :: Int) Text.empty
-      where
-        goT _ acc t | Text.null t = [acc]
-        goT d acc t = case Text.uncons t of
-          Nothing                       -> [acc]
-          Just (',', rest) | d == 0     -> acc : goT 0 Text.empty rest
-          Just ('(', rest)              -> goT (d + 1) (Text.snoc acc '(') rest
-          Just (')', rest) | d > 0      -> goT (d - 1) (Text.snoc acc ')') rest
-          Just (c,   rest)              -> goT d (Text.snoc acc c) rest
-
-    leading :: Text -> Text
-    leading e0 =
-      let e   = trim e0
-          e'  = stripPrefixWord "pattern" e
-          e'' = stripPrefixWord "type" e'
-      in Text.takeWhile (\c -> c /= '(' && c /= ',' && c /= ' ') e''
-
-    stripPrefixWord :: Text -> Text -> Text
-    stripPrefixWord w t = case Text.stripPrefix (w <> " ") t of
-      Just rest -> rest
-      Nothing   -> t
-
-    trim :: Text -> Text
-    trim = Text.dropWhile (`elem` (" \t\n\r" :: String))
-         . Text.dropWhileEnd (`elem` (" \t\n\r" :: String))
-
 -- | Find the line where a symbol is defined.
 locateSymbolDefinition :: BuildEnv IO -> PackageId -> Text -> Text -> IO (Maybe SourceLocation)
 locateSymbolDefinition env pid modPath sym = do
@@ -265,10 +171,154 @@ locateSymbolDefinitionInDir d modPath sym = do
   case mFile of
     Nothing -> findInTree d modPath sym
     Just f  -> do
-      mLoc <- scanFile sym f
-      case mLoc of
-        Just loc -> pure (Just loc)
-        Nothing  -> findInTree d modPath sym
+      scanned <- scanFileE sym f
+      case scanned of
+        Left e -> do
+          -- Not \"not here\": we could not read the module at all.  Say so,
+          -- then sweep, so a wrong answer is at least an explained one.
+          hPutStrLn stderr $
+            "hypha: " <> f <> " could not be parsed: "
+              <> Text.unpack (Parser.parseErrorMessage e)
+          findInTree d modPath sym
+        Right (Just loc) -> pure (Just loc)
+        Right Nothing    -> findInTree d modPath sym
+
+-- | Where a symbol is declared.
+--
+-- There is no confidence field: 'locateDefinitionInComponent' resolves or
+-- returns nothing, so a @GuessedBySweep@ arm was a state the code could
+-- not construct -- and the "Best guess" warning it drove was UI no
+-- reader could ever see.
+data LocatedDefinition = LocatedDefinition
+  { ldLocation   :: !SourceLocation
+  , ldModule     :: !ModulePath
+  , ldComponent  :: !ComponentKey
+    -- ^ Which component the definition is in.  A re-export can cross a
+    -- package boundary, and a card reporting only the module would send the
+    -- reader to a module the page's package does not have.
+  , ldDecl       :: !Parser.Decl
+    -- ^ The declaration itself, so a caller building a symbol card reads
+    -- the signature and Haddock off the parse that located it rather than
+    -- reading and parsing the file a second time — which is what the card
+    -- used to do, under the wrong language settings and discarding the
+    -- parse error.
+  , ldContent    :: !Text
+    -- ^ The defining module's bytes, for slicing the declaration's text.
+  }
+  deriving stock (Show, Eq)
+
+-- | Locate a symbol given every module of its component, plus the modules
+-- of other components its exports resolve into.
+--
+-- Resolution, not sweeping: with the component in hand there is nothing to
+-- guess.  A symbol the asking module re-exports is followed to its
+-- definition — including into a dependency, when the caller supplied that
+-- module's source — and a symbol whose definition we cannot reach is
+-- reported absent rather than approximated by the first same-named binding
+-- elsewhere in the package.
+--
+-- The component key is a parameter because the result has to name the
+-- component the definition is in, and deriving that from a module path is
+-- exactly the guess this module exists to remove.
+locateDefinitionInComponent
+  :: Extensions.LanguageSettings
+  -> ComponentKey                                  -- ^ the asking component
+  -> [ModuleSource]
+  -> ImportedDefinitions                           -- ^ what the index resolved
+  -> ModulePath
+  -> SymbolName
+  -> IO (Maybe LocatedDefinition)
+locateDefinitionInComponent langs ownComponent sources imported asking sym =
+  -- The index's answer first, because it is the only transitively resolved
+  -- one.  Following the immediate import instead is a single hop, and
+  -- @base:Data.List@ needs two: @GHC.Internal.Data.List@ declares nothing
+  -- and passes @mapAccumL@ along from @GHC.Internal.Data.Traversable@, so
+  -- scanning it reported the symbol absent.
+  case resolvedSite of
+    Just (def, ms) -> scanned (drComponent def) (drModule def) ms Nothing
+    Nothing        -> byResolution
+  where
+    resolvedSite = do
+      def <- Map.lookup sym (idSites imported)
+      (_, ms) <- Map.lookup (drModule def) (idSources imported)
+      pure (def, ms)
+
+    byResolution = do
+      parsed <- Interface.parseSources langs sources
+      mapM_ reportParseFailure [ (ms, e) | (ms, Left e) <- parsed ]
+      let ifaces     = [ i | (_, Right i) <- parsed ]
+          resolution = Reexport.resolveComponent ifaces
+      case Map.lookup (asking, sym) resolution of
+        Nothing -> do
+          hPutStrLn stderr $
+            "hypha: " <> Text.unpack (unModulePath asking) <> " does not export "
+              <> Text.unpack (unSymbolName sym)
+          pure Nothing
+        Just resolved -> case resolved of
+          -- Every candidate import, in rank order: the best-ranked one is
+          -- syntax, not an answer, and @base@'s @Control.Concurrent@
+          -- ranks @Prelude@ ahead of the module that really declares
+          -- @isCurrentThreadBound@.
+          DefinedOutside ms -> do
+            -- Until one of them declares it, not until one of them can be
+            -- opened: a facade supplies its source and no declaration, so
+            -- stopping at the first readable candidate reports the symbol
+            -- absent while the next candidate has it.
+            found <- firstJustM
+              [ scanned comp m src Nothing
+              | m <- NE.toList ms
+              , Just (comp, src) <- [Map.lookup m (idSources imported)]
+              ]
+            case found of
+              Just ld -> pure (Just ld)
+              Nothing -> do
+                hPutStrLn stderr $
+                  "hypha: " <> Text.unpack (unModulePath asking) <> " re-exports "
+                    <> Text.unpack (unSymbolName sym) <> ", and none of "
+                    <> intercalate ", "
+                         (map (Text.unpack . unModulePath) (NE.toList ms))
+                    <> " both supplied a source and declared it"
+                pure Nothing
+          site -> do
+            let target = Reexport.definitionModule asking site
+            case [ (ms, i)
+                 | (ms, Right i) <- parsed, Interface.miName i == target ] of
+              []            -> pure Nothing
+              ((ms, i) : _) -> scanned ownComponent target ms (Just i)
+
+    -- The parse we already have, or one made under this component's own
+    -- language settings -- never 'scanFileE', which re-reads the file and
+    -- parses it under the GHC2021 floor.  That discarded the cabal
+    -- stanza's default-extensions at the last hop, so a component with
+    -- @default-extensions: LambdaCase@ resolved the symbol and then failed
+    -- to read the module it had resolved it to.
+    scanned comp target ms mIface = do
+      r <- case mIface of
+             Just i  -> pure (Right i)
+             Nothing -> Interface.parseInterfaceIO langs (msPath ms) (msContent ms)
+      case r of
+        Left e -> do
+          reportParseFailure (ms, e)
+          pure Nothing
+        Right iface -> pure $ do
+          decl <- Parser.findDecl (unSymbolName sym) (Interface.miDecls iface)
+          ln   <- declAnchor decl
+          pure LocatedDefinition
+            { ldLocation   = SourceLocation (msPath ms) ln
+            , ldModule     = target
+            , ldComponent  = comp
+            , ldDecl       = decl
+            , ldContent    = msContent ms
+            }
+
+    reportParseFailure (ms, e) = hPutStrLn stderr $
+      "hypha: " <> msPath ms <> " could not be parsed: "
+        <> Text.unpack (Parser.parseErrorMessage e)
+
+-- | The first action that answers, running no more than it must.
+firstJustM :: Monad m => [m (Maybe a)] -> m (Maybe a)
+firstJustM []         = pure Nothing
+firstJustM (a : rest) = a >>= maybe (firstJustM rest) (pure . Just)
 
 -- | Walk every @.hs@ file under @root@ (skipping build/test dirs) and
 -- return the first hit whose top-level binding or type signature matches
@@ -278,54 +328,36 @@ locateSymbolDefinitionInDir d modPath sym = do
 findInTree :: FilePath -> Text -> Text -> IO (Maybe SourceLocation)
 findInTree root modPath sym = do
   hsFiles <- enumerateHs root 6
-  let prefix  = Text.unpack (Text.replace "." "/" (modulePrefix modPath))
-      ranked  = sortByPrefix prefix hsFiles
-  go ranked
+  go (rankBySharedSuffix modPath hsFiles)
   where
     go []     = pure Nothing
     go (f:fs) = do
-      m <- scanFile sym f
-      case m of
-        Just loc -> pure (Just loc)
-        Nothing  -> go fs
+      scanned <- scanFileE sym f
+      case scanned of
+        Right (Just loc) -> pure (Just loc)
+        _                -> go fs
 
--- | Drop the last dotted segment of a module path so re-exports prefer
--- siblings before unrelated trees: e.g. @Data.Map.Strict@ → @Data.Map@,
--- which scores @Data/Map/Internal.hs@ above @Data/IntMap/Internal.hs@.
-modulePrefix :: Text -> Text
-modulePrefix m = case Text.breakOnEnd "." m of
-  (p, _) | not (Text.null p) -> Text.dropEnd 1 p
-  _                          -> m
-
--- | Sort file paths by how many leading characters they share with the
--- supplied prefix (descending).  Stable on ties.
-sortByPrefix :: String -> [FilePath] -> [FilePath]
-sortByPrefix prefix = map snd . sortBy (\(a,_) (b,_) -> compare b a) . map score
+-- | Rank candidate files by how much of the module's path they share,
+-- counted in /segments/ from the end.
+--
+-- @Data.Map.Internal@ shares three trailing segments with
+-- @…\/src\/Data\/Map\/Internal.hs@ and one with @…\/src\/Data\/Set\/Internal.hs@.
+-- The predecessor counted shared leading /characters/ between a dotted
+-- module prefix and a slashed path, which stopped discriminating after the
+-- first segment and let the sweep answer @Data.Map.Internal.balanceL@ with
+-- @Data\/Set\/Internal.hs@.
+rankBySharedSuffix :: Text -> [FilePath] -> [FilePath]
+rankBySharedSuffix modPath = sortOn (negate . shared)
   where
-    score fp = (matchLen prefix fp, fp)
-    matchLen :: String -> FilePath -> Int
-    matchLen p fp =
-      let canonical = dropToPrefix p fp
-      in commonLen p canonical
-    -- Trim the path so it begins at the first occurrence of the prefix's
-    -- leading char; otherwise leading "src/" wrecks the comparison.
-    dropToPrefix :: String -> FilePath -> FilePath
-    dropToPrefix []      fp = fp
-    dropToPrefix (c : _) fp = dropWhile (/= c) fp
-    commonLen :: String -> String -> Int
-    commonLen []     _      = 0
-    commonLen _      []     = 0
-    commonLen (a:as) (b:bs)
-      | a == b    = 1 + commonLen as bs
-      | otherwise = 0
+    wanted = reverse (Text.splitOn "." modPath)
 
-sortBy :: (a -> a -> Ordering) -> [a] -> [a]
-sortBy cmp = foldr insert []
-  where
-    insert x []     = [x]
-    insert x (y:ys) = case cmp x y of
-      GT -> y : insert x ys
-      _  -> x : y : ys
+    shared fp =
+      let segs = reverse (Text.splitOn "/" (Text.pack (dropDotHs fp)))
+      in length (takeWhile id (zipWith (==) wanted segs))
+
+    dropDotHs fp = case Text.stripSuffix ".hs" (Text.pack fp) of
+      Just t  -> Text.unpack t
+      Nothing -> fp
 
 -- | Bounded recursive enumeration of every @.hs@ file under @root@.
 -- Skips hidden directories and conventional non-library trees so the
@@ -366,14 +398,29 @@ enumerateHs dir depth = do
 -- line-grep missed all resolve correctly.  Definition line wins over
 -- signature line when both are present (matches the historical
 -- semantics: callers prefer the binding body for source snippets).
-scanFile :: Text -> FilePath -> IO (Maybe SourceLocation)
-scanFile sym f = do
+-- | Parse-tree lookup of one symbol in one file.
+--
+-- The three outcomes are distinct on purpose.  @Left@ means the module
+-- could not be read; @Right Nothing@ means it was read and does not
+-- declare the symbol; @Right (Just loc)@ means it does.  Collapsing the
+-- first two into @Nothing@ — which is what this function used to do —
+-- turns \"unreadable module\" into \"look somewhere else\", and somewhere
+-- else is the wrong answer: it is how @Data.Map.Internal.balanceL@ came to
+-- report @Data\/Set\/Internal.hs@.
+scanFileE :: Text -> FilePath -> IO (Either Parser.ParseError (Maybe SourceLocation))
+scanFileE sym f = do
   src <- TIO.readFile f
   pure $ case Parser.parseDecls f src of
-    Left _      -> Nothing
-    Right decls -> do
-      d <- Parser.findDecl sym decls
-      ln <- case Parser.declDefLine d of
-              Just l  -> Just l
-              Nothing -> Parser.declSigLine d
+    Left e      -> Left e
+    Right decls -> Right $ do
+      d  <- Parser.findDecl sym decls
+      ln <- declAnchor d
       Just (SourceLocation f ln)
+
+-- | The line a declaration is anchored at: its body when it has one, its
+-- signature otherwise.  Callers prefer the binding body for source
+-- snippets, and a re-export module's entry has only a signature.
+declAnchor :: Parser.Decl -> Maybe Int
+declAnchor d = case Parser.declDefLine d of
+  Just l  -> Just l
+  Nothing -> Parser.declSigLine d

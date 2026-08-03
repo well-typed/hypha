@@ -4,11 +4,13 @@ module Hypha.Types.SymbolPath
   ( SymbolPath (..)
   , ModulePath (..)
   , SymbolName (..)
+  , Signature (..)
   , ParseError (..)
   , parseSymbolPath
   , renderSymbolPath
   ) where
 
+import Control.Monad (when)
 import Data.Text (Text)
 import qualified Data.Text as Text
 
@@ -20,6 +22,15 @@ newtype ModulePath = ModulePath { unModulePath :: Text }
 
 newtype SymbolName = SymbolName { unSymbolName :: Text }
   deriving stock (Show, Eq, Ord)
+
+-- | A rendered Haskell type signature (@insertWith :: Ord k => …@).
+--
+-- The search index stores these and the UI renders them; between those
+-- two points nothing should be able to mistake one for a module path or
+-- a symbol name, which is what a bare 'Text' invited.
+newtype Signature = Signature { unSignature :: Text }
+  deriving stock (Show, Eq, Ord)
+
 
 data SymbolPath = SymbolPath
   { spPackage :: !PackageName
@@ -92,9 +103,6 @@ parseSymbolPath t
         case (mm, ms) of
           (Nothing, Just _) -> Left SymbolWithoutModule
           _                 -> Right (SymbolPath pkg mv mm ms)
-  where
-    when True  e = e
-    when False _ = Right ()
 
 renderSymbolPath :: SymbolPath -> Text
 renderSymbolPath (SymbolPath (PackageName p) mv mm ms) =

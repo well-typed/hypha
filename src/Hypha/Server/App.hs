@@ -1,12 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Hypha.Server.App
   ( appWith
-  , cspMiddleware
   , ServerConfig (..)
     -- * Pure helpers (exported for tests)
   , sanitizeSegments
   , mimeFor
-  , scopeSearchRows
   ) where
 
 import Control.Monad.IO.Class (liftIO)
@@ -26,6 +24,9 @@ import qualified Hypha.Server.Ui.Search  as UISearch
 import qualified Hypha.Server.Ui.Doc     as UIDoc
 import qualified Hypha.Server.Ui.Source  as UISrc
 import qualified Hypha.Server.Ui.Tree    as UITree
+import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.Route qualified as Route
+import qualified Hypha.Search.Collapse   as Collapse
 import qualified Hypha.Search.Fuzzy      as Fuzzy
 import           Hypha.Server.Api       (HyphaApi, api)
 import           Hypha.Server.ModuleDoc (ModuleDocView, SymbolCardData (..))
@@ -49,8 +50,15 @@ data ServerConfig = ServerConfig
       -- ^ @(indexed, total)@ snapshot of the background indexer.  Drives
       -- the topbar progress bar.  Both are @0@ when nothing needed
       -- building (warm cache hit on every package).
-  , scHumanSearch  :: !(Text -> IO [(Text, Text, Text, Text)])
-      -- ^ Given a query string, return (package, module, name, signature)
+  , scHumanSearch  :: !(Text -> Maybe Text -> IO [Collapse.SearchResult])
+      -- ^ Query string plus an optional component to restrict to, returning
+      -- the ranked, collapsed results.
+      --
+      -- The scope is the search's business rather than the caller's because
+      -- it has to be applied to rows /before/ they are collapsed: a
+      -- definition several packages present folds into one result carrying
+      -- one component, so a caller filtering the results cannot see the
+      -- other packages it belongs to.
   , scSymbolLookup :: !(Text -> Text -> Text -> IO (Maybe SymbolCardData))
       -- ^ pkg → mod → sym → everything the symbol card renders.
   , scHaddockFile  :: !(Text -> [Text] -> IO (Maybe (FilePath, BL.ByteString)))
@@ -140,15 +148,15 @@ searchPage cfg mq mpkg = do
       if not ready
         then pure UISearch.buildingFragment
         else do
-          rows <- liftIO (scHumanSearch cfg q)
-          pure (UISearch.resultsFragment (Fuzzy.tokenize q) (scopeSearchRows mpkg rows))
+          rows <- liftIO (scHumanSearch cfg q (Text.pack <$> mpkg))
+          pure (UISearch.resultsFragment (Fuzzy.tokenize q) rows)
 
 -- | Package overview page — show pinned version + linked module index.
 pkgPage :: ServerConfig -> String -> Handler (Html ())
 pkgPage cfg pkg = do
   let pkgT = Text.pack pkg
   m <- liftIO (scPackageInfo cfg pkgT)
-  let crumbs = [(pkgT, "/pkg/" <> pkgT)]
+  let crumbs = [(pkgT, Route.hrefFrom ["pkg", pkgT])]
   pure $ UI.shellPage pkgT crumbs (scPackages cfg) $ case m of
     Nothing -> p_ [class_ "warn"] (toHtml ("Package " <> pkgT <> " not found."))
     Just (ver, mods, origin) -> div_ [class_ "pkg"] $ do
@@ -157,13 +165,13 @@ pkgPage cfg pkg = do
         p_  [class_ "meta"] $ do
           toHtml ("version " :: Text)
           code_ (toHtml ver)
-        UITree.hackageLink pkgT ver origin
+        UITree.hackageLink (PackageName pkgT) (Version ver) origin
       UITree.originBadgeFull origin
       h2_ "Modules"
       if null mods
         then p_ [class_ "hint"] (toHtml ("No modules exposed." :: Text))
         else ul_ [class_ "module-list"] $
-          mapM_ (\mp -> li_ $ a_ [href_ ("/pkg/" <> pkgT <> "/" <> mp)] (toHtml mp)) mods
+          mapM_ (\mp -> li_ $ a_ [href_ (Route.hrefFrom ["pkg", pkgT, mp])] (toHtml mp)) mods
 
 -- | Module documentation view: prebuilt Haddock when available,
 -- source-rendered docs otherwise, bare exports as the last resort.
@@ -173,8 +181,8 @@ modPage cfg pkg modPath = do
       modT = Text.pack modPath
   view <- liftIO (scModuleDoc cfg pkgT modT)
   let crumbs =
-        [ (pkgT, "/pkg/" <> pkgT)
-        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
+        [ (pkgT, Route.hrefFrom ["pkg", pkgT])
+        , (modT, Route.hrefFrom ["pkg", pkgT, modT])
         ]
   pure $ UI.shellPage modT crumbs (scPackages cfg)
            (UIMod.modulePage pkgT modT view)
@@ -188,9 +196,9 @@ symPage cfg pkg modPath sym = do
       modT = Text.pack modPath
       symT = Text.pack sym
       crumbs =
-        [ (pkgT, "/pkg/" <> pkgT)
-        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
-        , (symT, "/pkg/" <> pkgT <> "/" <> modT <> "/" <> symT)
+        [ (pkgT, Route.hrefFrom ["pkg", pkgT])
+        , (modT, Route.hrefFrom ["pkg", pkgT, modT])
+        , (symT, Route.hrefFrom ["pkg", pkgT, modT, symT])
         ]
   m <- liftIO (scSymbolLookup cfg pkgT modT symT)
   case m of
@@ -251,16 +259,6 @@ mimeFor fp = case Text.toLower ext of
   where
     ext = snd (Text.breakOnEnd "." (Text.pack fp))
 
--- | Filter search rows down to one package when a scope is requested.
--- Both a missing @pkg@ query parameter and an explicitly empty one
--- (sent once the scope chip has just been cleared, since the hidden
--- input's now-empty value is still included in the htmx request) mean
--- "no scope" — every row passes through unfiltered.
-scopeSearchRows :: Maybe String -> [(Text, Text, Text, Text)] -> [(Text, Text, Text, Text)]
-scopeSearchRows mp rows = case mp of
-  Just p | not (null p) -> filter (\(pkg, _, _, _) -> pkg == Text.pack p) rows
-  _                      -> rows
-
 -- | Source code view with skylighting-rendered Haskell + optional
 -- @?line=N@ scroll target.
 sourcePage :: ServerConfig -> String -> String -> Maybe Int -> Handler (Html ())
@@ -268,9 +266,9 @@ sourcePage cfg pkg modPath mLine = do
   let pkgT = Text.pack pkg
       modT = Text.pack modPath
       crumbs =
-        [ (pkgT, "/pkg/" <> pkgT)
-        , (modT, "/pkg/" <> pkgT <> "/" <> modT)
-        , ("source", "/source/" <> pkgT <> "/" <> modT)
+        [ (pkgT, Route.hrefFrom ["pkg", pkgT])
+        , (modT, Route.hrefFrom ["pkg", pkgT, modT])
+        , ("source", Route.hrefFrom ["source", pkgT, modT])
         ]
   m <- liftIO (scSourceText cfg pkgT modT)
   case m of

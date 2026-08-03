@@ -28,8 +28,10 @@ follow-up question. Both are expensive.
   you're building against — including your **local project**, and (in the
   doc-browser server) every cabal `library NAME` sub-library of every
   package in the plan. Symbols point to the `file:line` where they're
-  actually defined, not the re-export module — even across CPP `#ifdef`
-  branches.
+  actually defined, not the re-export module — following a chain of
+  re-exports across module *and* package boundaries, so `base`'s façades
+  resolve into `ghc-internal`. Modules that need CPP preprocessing are
+  reported as skipped rather than guessed at.
 - **One tool, two surfaces.** The same library powers the CLI and the
   local doc-browser server, so agents and humans see the same data.
 

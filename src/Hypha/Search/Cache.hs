@@ -19,9 +19,9 @@ module Hypha.Search.Cache
   ( IndexCache
   , openIndexCache
   , defaultCachePath
-  , haveIndex
   , readIndex
   , lookupRowsByName
+  , lookupRowsInModule
   , readFingerprint
   , writeFingerprint
   , writeIndex
@@ -34,7 +34,15 @@ import Control.Monad (void)
 import Database.SQLite.Simple
 import Database.SQLite.Simple qualified as Sql
 import Data.Text (Text)
+import Data.Text qualified as Text
+import System.IO (hPutStrLn, stderr)
+
 import Hypha.Cache qualified as Cache
+import Hypha.Search.Index
+  ( DefinitionRef (..), IndexRow (..), Visibility (Internal)
+  , currentIndexFormat, visibilityFromText, visibilityToText )
+import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
@@ -64,8 +72,38 @@ openIndexCache path = do
   execute_ conn "PRAGMA synchronous = NORMAL"
   mapM_ (execute_ conn) schema
   migrateAddColumn conn "pkg_index_meta" "fingerprint" "TEXT"
+  -- Columns first, so opening a generation-1 database does not throw
+  -- before 'ensureIndexFormat' gets the chance to clear it.
+  migrateAddColumn conn "pkg_index" "def_mod"    "TEXT NOT NULL DEFAULT ''"
+  migrateAddColumn conn "pkg_index" "def_pkg"    "TEXT NOT NULL DEFAULT ''"
+  migrateAddColumn conn "pkg_index" "visibility" "TEXT NOT NULL DEFAULT ''"
   lock <- newMVar ()
-  pure (IndexCache conn lock)
+  let c = IndexCache conn lock
+  ensureIndexFormat c
+  pure c
+
+-- | Discard rows written under an older row format.
+--
+-- No migration is attempted.  Generation-1 rows may carry a module name
+-- derived from a file path or a signature resolved by symbol name, and
+-- neither is detectable from the row itself — so the choice is re-index or
+-- lie, and a search index that lies is worse than one that is briefly
+-- empty.  The rebuild is a background pass the server already reports on.
+ensureIndexFormat :: IndexCache -> IO ()
+ensureIndexFormat c = do
+  stored <- readBlob c indexFormatKey
+  let current = Text.pack (show currentIndexFormat)
+  if stored == Just current
+    then pure ()
+    else do
+      withWrite c $ Sql.withTransaction (icConn c) $ do
+        execute_ (icConn c) "DELETE FROM pkg_index"
+        execute_ (icConn c) "DELETE FROM pkg_index_meta"
+      writeBlob c indexFormatKey current
+
+-- | @kv@ key holding the row-format generation of a database.
+indexFormatKey :: Text
+indexFormatKey = "index_format"
 
 schema :: [Query]
 schema =
@@ -80,7 +118,10 @@ schema =
     \  , version TEXT NOT NULL \
     \  , mod     TEXT NOT NULL \
     \  , name    TEXT NOT NULL \
-    \  , sig     TEXT NOT NULL )"
+    \  , sig     TEXT NOT NULL \
+    \  , def_mod TEXT NOT NULL \
+    \  , def_pkg TEXT NOT NULL \
+    \  , visibility TEXT NOT NULL )"
   , "CREATE INDEX IF NOT EXISTS pkg_index_by_pv \
     \  ON pkg_index (pkg, version)"
   , "CREATE TABLE IF NOT EXISTS kv \
@@ -118,17 +159,35 @@ lookupRowsByName
   :: IndexCache
   -> Text                                  -- ^ symbol name
   -> Maybe Text                            -- ^ optional module qualifier
-  -> IO [(Text, Text, Text, Text)]
-lookupRowsByName c name mMod = case mMod of
+  -> IO [IndexRow]
+lookupRowsByName c name mMod = (reportAnomalies . map fromStored =<<) $ case mMod of
   Nothing ->
     queryNamed (icConn c)
-      "SELECT pkg, mod, name, sig FROM pkg_index WHERE name = :n"
+      (Query ("SELECT " <> rowColumns <> " FROM pkg_index WHERE name = :n"))
       [":n" := name]
   Just modT ->
     queryNamed (icConn c)
-      "SELECT pkg, mod, name, sig FROM pkg_index \
-      \WHERE name = :n AND mod = :m"
+      (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
+              \WHERE name = :n AND mod = :m"))
       [":n" := name, ":m" := modT]
+
+-- | Every row a component's module presents, whatever the version.
+--
+-- What a module page needs: for each name the module exposes, the definition
+-- site the indexer already resolved — transitively, which is the part no
+-- single-hop walk of the imports can reproduce.  Version-free because the
+-- caller has a component and a module from a URL and no version to hand.
+lookupRowsInModule
+  :: IndexCache
+  -> Text                                  -- ^ component key
+  -> Text                                  -- ^ module path
+  -> IO [IndexRow]
+lookupRowsInModule c pkg modT =
+  (reportAnomalies . map fromStored =<<) $
+    queryNamed (icConn c)
+      (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
+              \WHERE pkg = :p AND mod = :m"))
+      [":p" := pkg, ":m" := modT]
 
 withWrite :: IndexCache -> IO a -> IO a
 withWrite c io = withMVar (icLock c) (\_ -> io)
@@ -151,22 +210,58 @@ migrateAddColumn conn table column colType = do
               <> " ADD COLUMN " <> column
               <> " " <> colType))
 
--- | Is there already a cached index for this @(pkg, version)@?
-haveIndex :: IndexCache -> Text -> Text -> IO Bool
-haveIndex c pkg ver = do
-  rs <- queryNamed (icConn c)
-          "SELECT 1 FROM pkg_index_meta WHERE pkg = :p AND version = :v LIMIT 1"
-          [":p" := pkg, ":v" := ver] :: IO [Only Int]
-  pure (not (null rs))
-
 -- | Read the cached @(pkg, mod, name, sig)@ rows for a given package
 -- version.  Returns @[]@ when no entry exists.
-readIndex :: IndexCache -> Text -> Text -> IO [(Text, Text, Text, Text)]
+readIndex :: IndexCache -> Text -> Text -> IO [IndexRow]
 readIndex c pkg ver =
-  queryNamed (icConn c)
-    "SELECT pkg, mod, name, sig FROM pkg_index \
-    \WHERE pkg = :p AND version = :v"
+  (reportAnomalies . map fromStored =<<) $ queryNamed (icConn c)
+    (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
+            \WHERE pkg = :p AND version = :v"))
     [":p" := pkg, ":v" := ver]
+
+-- | The column list, written once so the SELECTs and 'fromStored' cannot
+-- drift apart.  Column order is a wire format: it is spelled out rather
+-- than derived.
+rowColumns :: Text
+rowColumns = "pkg, mod, name, sig, def_mod, def_pkg, visibility"
+
+-- | Rebuild a row from its stored columns, along with a description of
+-- anything about it we could not make sense of.
+--
+-- An unrecognised visibility, or a missing definition component, can only
+-- come from a row 'ensureIndexFormat' should already have cleared, so the
+-- anomaly travels out to 'reportAnomalies' — which is in 'IO' and can
+-- actually say something — rather than being silently defaulted here.  The
+-- row is kept as 'Internal' (the ranking-neutral choice) and attributed to
+-- its own component (the pre-cross-package meaning).
+fromStored
+  :: (Text, Text, Text, Text, Text, Text, Text) -> (IndexRow, Maybe Text)
+fromStored (pkg, modPath, name, sig, defMod, defPkg, vis) =
+  ( IndexRow
+      { rowComponent  = ComponentKey pkg
+      , rowModule     = ModulePath modPath
+      , rowName       = SymbolName name
+      , rowSignature  = Signature sig
+      , rowDefinition = DefinitionRef (ComponentKey definingPkg) (ModulePath defMod)
+      , rowVisibility = maybe Internal id (visibilityFromText vis)
+      }
+  , case (visibilityFromText vis, Text.null defPkg) of
+      (Just _,  False) -> Nothing
+      (Nothing, _)     -> Just
+        (pkg <> "/" <> modPath <> ": unrecognised visibility " <> Text.pack (show vis))
+      (Just _,  True)  -> Just
+        (pkg <> "/" <> modPath <> ": no definition component; assuming " <> pkg)
+  )
+  where
+    definingPkg = if Text.null defPkg then pkg else defPkg
+
+-- | Trace every anomaly 'fromStored' found, then hand back the rows.
+reportAnomalies :: [(IndexRow, Maybe Text)] -> IO [IndexRow]
+reportAnomalies rows = do
+  mapM_ report [ a | (_, Just a) <- rows ]
+  pure (map fst rows)
+  where
+    report a = hPutStrLn stderr ("hypha index cache: " <> Text.unpack a)
 
 -- | Replace the cached index for a single @(pkg, version)@.
 -- All inserts run inside a single transaction so partial writes never
@@ -175,7 +270,7 @@ writeIndex
   :: IndexCache
   -> Text                                 -- ^ package name
   -> Text                                 -- ^ package version
-  -> [(Text, Text, Text, Text)]           -- ^ rows: (pkg, mod, name, sig)
+  -> [IndexRow]
   -> IO ()
 writeIndex c pkg ver rows = withWrite c $ Sql.withTransaction (icConn c) $ do
   executeNamed (icConn c)
@@ -187,9 +282,22 @@ writeIndex c pkg ver rows = withWrite c $ Sql.withTransaction (icConn c) $ do
   case rows of
     [] -> pure ()
     _  -> do
-      let expanded = [ (p, ver, m, n, s) | (p, m, n, s) <- rows ]
+      let expanded =
+            [ ( unComponentKey (rowComponent r)
+              , ver
+              , unModulePath (rowModule r)
+              , unSymbolName (rowName r)
+              , unSignature (rowSignature r)
+              , unModulePath (drModule (rowDefinition r))
+              , unComponentKey (drComponent (rowDefinition r))
+              , visibilityToText (rowVisibility r)
+              )
+            | r <- rows
+            ]
       executeMany (icConn c)
-        "INSERT INTO pkg_index (pkg, version, mod, name, sig) VALUES (?,?,?,?,?)"
+        "INSERT INTO pkg_index \
+        \  (pkg, version, mod, name, sig, def_mod, def_pkg, visibility) \
+        \VALUES (?,?,?,?,?,?,?,?)"
         expanded
   -- @strftime('%s','now')@ stores the timestamp as a Unix second so the
   -- meta row stays human-inspectable from a sqlite3 prompt.

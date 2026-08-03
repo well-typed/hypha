@@ -16,9 +16,10 @@ module Hypha.Search.PackageCache
   , CacheOrigin (..)
   , openPackageCache
   , openPackageCacheAt
-  , haveCachedIndex
+  , haveFreshIndex
   , readCachedIndex
   , lookupByName
+  , lookupInModule
   , readCachedFingerprint
   , writeCachedFingerprint
   , writeCachedIndex
@@ -34,9 +35,10 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Search.Cache
-  ( IndexCache, defaultCachePath, haveIndex, lookupRowsByName
+  ( IndexCache, defaultCachePath, lookupRowsByName, lookupRowsInModule
   , openIndexCache, readBlob, readFingerprint, readIndex
   , writeBlob, writeFingerprint, writeIndex )
+import Hypha.Search.Index (IndexRow (..))
 import Hypha.Types.BuildPlan (ProjectRoot (..))
 
 -- | Tells writers which DB to target.  Reads do not take an origin —
@@ -79,14 +81,26 @@ openPackageCacheAt globalPath mProjectPath = do
 projectCachePath :: ProjectRoot -> FilePath
 projectCachePath (ProjectRoot r) = r </> ".hypha" </> "cache.db"
 
--- | Project hit beats global hit.
-haveCachedIndex :: HyphaPackageCache -> Text -> Text -> IO Bool
-haveCachedIndex c pkg ver =
-  case hpcProject c of
+-- | Is there a cached index for @(pkg, version)@ built from the same
+-- inputs we would use now?  Project hit beats global hit.
+--
+-- Presence of a row used to be the whole test, and @(pkg, version)@ was
+-- the whole key.  Neither holds: a local package keeps its version across
+-- every edit, so the project's own symbols froze after the first run; and
+-- the global DB is shared by every project on the host while the rows
+-- depend on the compiler and the resolved language settings, so one
+-- project served another's answers.  The fingerprint closes both — a
+-- pre-fingerprint row stores @NULL@, matches nothing, and is rebuilt once.
+haveFreshIndex :: HyphaPackageCache -> Text -> Text -> Text -> IO Bool
+haveFreshIndex c pkg ver fp = case hpcProject c of
     Just p -> do
-      here <- haveIndex p pkg ver
-      if here then pure True else haveIndex (hpcGlobal c) pkg ver
-    Nothing -> haveIndex (hpcGlobal c) pkg ver
+      here <- matches p
+      if here then pure True else matches (hpcGlobal c)
+    Nothing -> matches (hpcGlobal c)
+  where
+    matches db = do
+      stored <- readFingerprint db pkg ver
+      pure (stored == Just fp)
 
 -- | Read indexed rows for @(pkg, ver)@.  If the project DB has *any*
 -- rows for the pair, they shadow the global DB completely — we never
@@ -96,7 +110,7 @@ readCachedIndex
   :: HyphaPackageCache
   -> Text                              -- ^ package name
   -> Text                              -- ^ package version
-  -> IO [(Text, Text, Text, Text)]
+  -> IO [IndexRow]
 readCachedIndex c pkg ver =
   case hpcProject c of
     Just p -> do
@@ -114,13 +128,31 @@ readCachedIndex c pkg ver =
 lookupByName
   :: HyphaPackageCache
   -> Text
-  -> IO [(Text, Text, Text, Text)]
+  -> IO [IndexRow]
 lookupByName c rawQuery = do
   let (mMod, name) = splitQualified rawQuery
   projectRows <- case hpcProject c of
     Just p  -> lookupRowsByName p name mMod
     Nothing -> pure []
   globalRows  <- lookupRowsByName (hpcGlobal c) name mMod
+  pure (mergeShadow projectRows globalRows)
+
+-- | Every row a component's module presents, project rows shadowing global
+-- ones on the same @(pkg, mod, name)@ triple.
+--
+-- Browsing asks this for the definition sites the indexer already resolved:
+-- following a module's imports by hand is one hop, and @base@'s @Data.List@
+-- is two away from where @mapAccumL@ is declared.
+lookupInModule
+  :: HyphaPackageCache
+  -> Text                              -- ^ component key
+  -> Text                              -- ^ module path
+  -> IO [IndexRow]
+lookupInModule c pkg modT = do
+  projectRows <- case hpcProject c of
+    Just p  -> lookupRowsInModule p pkg modT
+    Nothing -> pure []
+  globalRows  <- lookupRowsInModule (hpcGlobal c) pkg modT
   pure (mergeShadow projectRows globalRows)
 
 -- | Split @Data.Map.lookup@ into @(Just "Data.Map", "lookup")@.
@@ -134,12 +166,9 @@ splitQualified raw =
 
 -- | Project rows take precedence per @(pkg, mod, name)@; global rows
 -- fill in any triples the project does not cover.
-mergeShadow
-  :: [(Text, Text, Text, Text)]
-  -> [(Text, Text, Text, Text)]
-  -> [(Text, Text, Text, Text)]
+mergeShadow :: [IndexRow] -> [IndexRow] -> [IndexRow]
 mergeShadow project global =
-  let key (p, m, n, _) = (p, m, n)
+  let key r = (rowComponent r, rowModule r, rowName r)
       projectKeys = Set.fromList (map key project)
   in project ++ filter (\r -> not (key r `Set.member` projectKeys)) global
 
@@ -151,7 +180,7 @@ writeCachedIndex
   -> CacheOrigin
   -> Text
   -> Text
-  -> [(Text, Text, Text, Text)]
+  -> [IndexRow]
   -> IO ()
 writeCachedIndex c origin pkg ver rows =
   writeIndex (selectWrite c origin) pkg ver rows

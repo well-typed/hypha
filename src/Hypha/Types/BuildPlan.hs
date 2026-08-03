@@ -6,31 +6,34 @@ module Hypha.Types.BuildPlan
     BuildPlan (..)
   , PlannedUnit (..)
   , PackageOrigin (..)
-  , PlanPackage (..)
   , ProjectRoot (..)
   , CompilerId (..)
-  , PlanHash (..)
   , PackageOverride (..)
     -- * Construction
   , emptyBuildPlan
     -- * Queries
   , lookupPackage
   , lookupUnit
-  , planPackages
   , applyOverrides
   , forwardDepsOf
   , reverseDepsOf
+  , topologicalOrder
   ) where
 
+-- Qualified rather than unqualified: base 4.20 added 'foldl'' to the
+-- Prelude, so an unqualified import is redundant on GHC 9.10 and required
+-- on 9.6, and -Werror rejects whichever one we pick.
+import qualified Data.Foldable as Foldable
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Data.Text (Text)
 
 import Hypha.Project.Components (ComponentInfo)
 import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
 
 -- | Absolute path to the project root (directory containing @cabal.project@).
-newtype ProjectRoot = ProjectRoot { unProjectRoot :: FilePath }
+newtype ProjectRoot = ProjectRoot FilePath
   deriving stock   (Show, Eq, Ord)
   deriving newtype (Read)
 
@@ -39,22 +42,10 @@ newtype CompilerId = CompilerId { unCompilerId :: Text }
   deriving stock   (Show, Eq, Ord)
   deriving newtype (Read)
 
--- | Hash of @plan.json@ used to detect staleness.
-newtype PlanHash = PlanHash { unPlanHash :: Text }
-  deriving stock   (Show, Eq, Ord)
-  deriving newtype (Read)
-
 -- | A user-supplied version override, e.g. @async=2.2.6@.
 data PackageOverride = PackageOverride
   { poName    :: !PackageName
   , poVersion :: !Version
-  }
-  deriving stock (Show, Eq, Ord)
-
--- | A single package entry in the build plan (legacy type; prefer 'PlannedUnit').
-data PlanPackage = PlanPackage
-  { ppName    :: !PackageName
-  , ppVersion :: !Version
   }
   deriving stock (Show, Eq, Ord)
 
@@ -131,13 +122,6 @@ lookupPackage name bp = pkgVersion . puId <$> Map.lookup name (bpUnits bp)
 lookupUnit :: PackageName -> BuildPlan -> Maybe PlannedUnit
 lookupUnit name = Map.lookup name . bpUnits
 
--- | All packages in the plan, as a list.
-planPackages :: BuildPlan -> [PlanPackage]
-planPackages bp =
-  [ PlanPackage (pkgName (puId u)) (pkgVersion (puId u))
-  | u <- Map.elems (bpUnits bp)
-  ]
-
 -- | Apply overrides to a build plan.
 --   Each override replaces (or inserts) the pinned version for its package.
 applyOverrides :: [PackageOverride] -> BuildPlan -> BuildPlan
@@ -166,3 +150,35 @@ reverseDepsOf target bp =
   | u <- Map.elems (bpUnits bp)
   , any (\d -> pkgName d == target) (puDeps u)
   ]
+
+-- | The given units, dependencies before dependents.
+--
+-- Only edges /within/ the input matter: a dependency that is already
+-- cached is not in the list and has no order to constrain.  Each distinct
+-- unit is emitted exactly once, and nothing is ever dropped — a unit the
+-- plan does not know has no edges, and a unit inside a cycle is emitted
+-- when its own traversal returns.  So a cycle produces an arbitrary but
+-- total order rather than a hang, which matters because a plan is only a
+-- DAG by construction, not by type.
+--
+-- The indexer needs this because a component's cross-package re-exports
+-- resolve against the rows its dependencies already produced: @base@ has
+-- no signature for @mapAccumL@ until @ghc-internal@ has been indexed.
+topologicalOrder :: BuildPlan -> [PackageId] -> [PackageId]
+topologicalOrder bp pids = reverse (snd (Foldable.foldl' visit (Set.empty, []) pids))
+  where
+    wanted = Set.fromList pids
+
+    visit (seen, acc) pid
+      | pid `Set.member` seen = (seen, acc)
+      | otherwise =
+          -- Marked before recursing, so a back edge terminates.  Consing
+          -- the unit in front of its own dependencies and reversing at the
+          -- end is what puts the dependencies first without an O(n²)
+          -- append.
+          let (seen', acc') = Foldable.foldl' visit (Set.insert pid seen, acc) (depsOf pid)
+          in (seen', pid : acc')
+
+    depsOf pid = case Map.lookup (pkgName pid) (bpUnits bp) of
+      Nothing -> []
+      Just u  -> [ d | d <- puDeps u, d `Set.member` wanted ]

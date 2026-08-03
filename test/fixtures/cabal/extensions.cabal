@@ -1,0 +1,12 @@
+cabal-version: 2.4
+name:          extensions-fixture
+version:       0.1.0
+
+library
+  hs-source-dirs:     src
+  exposed-modules:    Fixture.Wrapper
+  other-modules:      Fixture.Internal
+  default-language:   GHC2021
+  default-extensions: MagicHash
+                    , NoImplicitPrelude
+  build-depends:      base

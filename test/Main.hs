@@ -11,15 +11,18 @@ import qualified Golden.Server
 import qualified Golden.Source
 import qualified Golden.Symbol
 import qualified Golden.Versions
+import qualified Property.BuildPlanOrder
 import qualified Property.ComponentName
 import qualified Property.LookupCascade
 import qualified Property.LookupOutcomeShape
 import qualified Property.HackageCache
 import qualified Property.HaddockRewrite
 import qualified Property.OutputJson
+import qualified Property.SearchRanking
 import qualified Property.SymbolPath
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
+import qualified Unit.BuildPlanOrder
 import qualified Unit.Components
 import qualified Unit.Deps
 import qualified Unit.Doctor
@@ -38,9 +41,20 @@ import qualified Unit.ServerSlots
 import qualified Unit.Haddock
 import qualified Unit.HaddockExtract
 import qualified Unit.InternalError
+import qualified Unit.ImportedSources
 import qualified Unit.LookupPrepLocal
 import qualified Unit.RepoCache
+import qualified Unit.Route
+import qualified Unit.SourceExtensions
+import qualified Unit.SearchCollapse
+import qualified Unit.SearchExports
+import qualified Unit.SearchIndexBuild
+import qualified Unit.SearchIndexCache
+import qualified Unit.SearchReexport
+import qualified Unit.SourceInterface
 import qualified Unit.SourceExtract
+import qualified Unit.SourceLocate
+import qualified Unit.SourceOrigins
 import qualified Unit.SourceParser
 
 import Hypha.Encoding (setUtf8Encoding)
@@ -64,15 +78,18 @@ allTests = testGroup "hypha"
   , Golden.Source.tests
   , Golden.Symbol.tests
   , Golden.Versions.tests
+  , Property.BuildPlanOrder.tests
   , Property.ComponentName.tests
   , Property.LookupCascade.tests
   , Property.LookupOutcomeShape.tests
   , Property.HaddockRewrite.tests
+  , Property.SearchRanking.tests
   , Property.SymbolPath.tests
   , Property.HackageCache.tests
   , Property.OutputJson.tests
   , Unit.BuildEnv.tests
   , Unit.BuildEnvCompose.tests
+  , Unit.BuildPlanOrder.tests
   , Unit.Components.tests
   , Unit.Deps.tests
   , Unit.Doctor.tests
@@ -91,8 +108,19 @@ allTests = testGroup "hypha"
   , Unit.Haddock.tests
   , Unit.HaddockExtract.tests
   , Unit.InternalError.tests
+  , Unit.ImportedSources.tests
   , Unit.LookupPrepLocal.tests
   , Unit.RepoCache.tests
+  , Unit.Route.tests
+  , Unit.SourceExtensions.tests
+  , Unit.SearchCollapse.tests
+  , Unit.SearchExports.tests
+  , Unit.SearchIndexBuild.tests
+  , Unit.SearchIndexCache.tests
+  , Unit.SearchReexport.tests
+  , Unit.SourceInterface.tests
   , Unit.SourceExtract.tests
+  , Unit.SourceLocate.tests
+  , Unit.SourceOrigins.tests
   , Unit.SourceParser.tests
   ]

@@ -55,6 +55,7 @@ library
     Hypha.Prelude
     Hypha.Types
     Hypha.Types.PackageId
+    Hypha.Types.Route
     Hypha.Types.ComponentName
     Hypha.Types.SymbolPath
     Hypha.Types.BuildPlan
@@ -119,10 +120,18 @@ library
     Hypha.Hoogle.Remote
     Hypha.Project.Fingerprint
     Hypha.Search.Cache
+    Hypha.Search.Collapse
+    Hypha.Search.Exports
+    Hypha.Search.Index
+    Hypha.Search.Indexer
     Hypha.Search.PackageCache
     Hypha.Search.Fuzzy
+    Hypha.Search.Reexport
+    Hypha.Source.Extensions
+    Hypha.Source.Interface
     Hypha.Source.Extract
     Hypha.Source.Locate
+    Hypha.Source.Origins
     Hypha.Source.Parser
     Hypha.Hackage.Source
     Hypha.Cabal.RepoCache
@@ -208,14 +217,17 @@ test-suite hypha-tests
     Golden.Human
     Golden.Versions
     Golden.Source
+    Property.BuildPlanOrder
     Property.ComponentName
     Property.LookupCascade
     Property.LookupOutcomeShape
     Property.HackageCache
     Property.OutputJson
+    Property.SearchRanking
     Property.SymbolPath
     Unit.BuildEnv
     Unit.BuildEnvCompose
+    Unit.BuildPlanOrder
     Unit.Components
     Unit.Doctor
     Unit.EmbeddedAssets
@@ -235,9 +247,22 @@ test-suite hypha-tests
     Unit.HoogleRemote
     Unit.PackageCacheLookup
     Unit.InternalError
+    Unit.ImportedSources
     Unit.LookupPrepLocal
     Unit.RepoCache
+    Unit.Route
+    Unit.SourceExtensions
+    Unit.SearchCollapse
+    Unit.SearchExports
+    Unit.SearchIndexBuild
+    Unit.SearchIndexCache
+    Unit.SearchReexport
+    Util.Fixture
+    Util.Row
+    Unit.SourceInterface
     Unit.SourceExtract
+    Unit.SourceLocate
+    Unit.SourceOrigins
     Unit.SourceParser
   build-depends:
     , aeson
@@ -247,6 +272,8 @@ test-suite hypha-tests
     , containers
     , directory
     , filepath
+    , ghc-lib-parser
+    , sqlite-simple
     , hypha
     , iproute
     , lucid2

@@ -13,7 +13,7 @@ import Test.Tasty.Golden (goldenVsString)
 import Hypha.Server.ModuleDoc
 import Hypha.Server.Ui.Layout (shellPage)
 import Hypha.Server.Ui.ModuleDoc (modulePage)
-import Hypha.Source.Extract (DocEntry (..), ModuleDocInfo (..))
+import Hypha.Source.Extract (DocEntry (..), EntryOrigin (..), ModuleDocInfo (..))
 import Hypha.Source.Parser (DeclKind (..))
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 import Hypha.Types.Doc (DocText (..))
@@ -44,25 +44,28 @@ tests = testGroup "Golden.Server"
 
     sourceView = ViewFromSource SourceDoc
       { sdInfo = ModuleDocInfo
-          { mdiHeader  = Just (DocText "-- | Fixture module header prose.")
+          { mdiHeader  = Just (DocText "Fixture module header prose.")
           , mdiEntries =
               [ DocEntry
                   { deName      = "Gadget"
-                  , deKind      = DkData
+                  , deKind      = Just DkData
                   , deSignature = Just "data Gadget = MkGadget !Int"
-                  , deHaddock   = Just (DocText "-- | A gadget.")
+                  , deHaddock   = Just (DocText "A gadget.")
                   , deSigLine   = Nothing
                   , deDefLine   = Just 12
+                  , deOrigin    = EntryLocal
                   }
               , DocEntry
                   { deName      = "frob"
-                  , deKind      = DkFunction
+                  , deKind      = Just DkFunction
                   , deSignature = Just "frob :: Gadget -> Int"
-                  , deHaddock   = Just (DocText "-- | Frobnicate the gadget.")
+                  , deHaddock   = Just (DocText "Frobnicate the gadget.")
                   , deSigLine   = Just 17
                   , deDefLine   = Just 18
+                  , deOrigin    = EntryLocal
                   }
               ]
+          , mdiSkipped = []
           }
       , sdRawHaddock = Just "fixture-pkg-0.1.0.0"
       }

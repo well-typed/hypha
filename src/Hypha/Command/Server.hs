@@ -15,13 +15,13 @@ module Hypha.Command.Server
   , runServer
   , buildServerConfig
     -- * Internals exposed for testing
-  , collectModuleRows
   , briefException
+  , importedSourcesFor
   ) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Stream (mapConcurrentlyBounded)
-import Control.Exception (SomeException (..), displayException, evaluate, fromException, ErrorCall (..))
+import Control.Exception (SomeException (..), displayException, fromException, ErrorCall (..))
 import Control.Exception.Safe (try)
 import Control.Monad
 import Control.Monad.Trans.Class (lift)
@@ -29,11 +29,9 @@ import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Control.Monad.Trans.Maybe (MaybeT (..), hoistMaybe, runMaybeT)
 import Data.ByteString.Lazy qualified as LBS
 import Data.IORef qualified as IORef
-import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
-import Data.Maybe
-import Data.Ord (Down (..))
-import Data.Set qualified as Set
+import Data.Containers.ListUtils (nubOrd)
+import Data.Maybe (catMaybes)
 import Data.String qualified as String
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TIO
@@ -45,8 +43,12 @@ import Hypha.Haddock.Generate (ensureHaddockFor)
 import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
-import Hypha.Search.PackageCache (CacheOrigin (..))
+import Hypha.Search.Collapse qualified as Collapse
+import Hypha.Search.Index qualified as Index
+import Hypha.Source.Extensions qualified as Extensions
+import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Search.PackageCache qualified as Cache
+import Hypha.Source.Origins qualified as Origins
 import Hypha.Server.App qualified as App
 import Hypha.Server.Bind
 import Hypha.Server.Haddock.Extract qualified as HExtract
@@ -59,6 +61,7 @@ import Hypha.Source.Parser qualified as Parser
 import Hypha.Types.BuildPlan
 import Hypha.Types.ComponentName
 import Hypha.Types.Doc (DocText (..))
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 import Hypha.Types.PackageId
 import Network.Wai.Handler.Warp ( defaultSettings, runSettings, setHost, setPort )
 import System.Directory qualified as Dir
@@ -199,13 +202,18 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
   -- accepts requests so the common (warm) path renders results
   -- immediately on the first keystroke.  Anything not yet cached gets
   -- built in the background and persisted for next time.
-  missing  <- hydrateFromCache plan cache pids indexRef
+  hyd <- Indexer.hydrateFromCache plan cache pids indexRef
+  let missing = Indexer.hyMissing hyd
   IORef.writeIORef totalRef (length missing)
   case missing of
     [] -> IORef.writeIORef readyRef True
     _  -> do
+      -- Built here rather than per component: it probes for a matching
+      -- compiler once and remembers each package's interface directory.
+      oracle <- originOracleFor plan
       _ <- forkIO $ do
-        r <- try (buildAndCacheIndex plan cache resolver missing indexRef doneRef)
+        r <- try (Indexer.buildAndCacheIndex plan cache resolver oracle
+                    (Indexer.hyEnv hyd) missing indexRef doneRef)
         case r :: Either SomeException () of
           Left e  -> hPutStrLn stderr ("hypha index build failed: " <> show e)
           Right _ -> pure ()
@@ -219,62 +227,64 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
     , App.scIndexProgress = (,)
         <$> IORef.readIORef doneRef
         <*> IORef.readIORef totalRef
-    , App.scHumanSearch  = \q -> do
+    , App.scHumanSearch  = \q mScope -> do
         let tokens = Fuzzy.tokenize q
         if null tokens
           then pure []
           else do
             idx <- IORef.readIORef indexRef
-            let scored =
-                  [ (s, Fuzzy.displayRow row)
-                  | row <- idx
-                  , Just s <- [Fuzzy.scoreRow tokens row]
-                  ]
-                ranked = map snd (sortOn (Down . fst) scored)
-            pure (take 50 ranked)
+            -- Scope first, collapse second.  A definition several packages
+            -- present folds into one result carrying one component, so
+            -- scoping the results instead would hide it from every package
+            -- but the winner's.
+            --
+            -- Then collapse before truncating: taking the top 50 rows first
+            -- would spend the budget on several presentations of the same
+            -- definition and drop distinct symbols to make room.
+            let scoped = Fuzzy.scopeRows mScope idx
+            pure (take 50 (Collapse.collapseRows (Collapse.rankRows tokens scoped)))
     , App.scSymbolLookup = \pkgT modT symT -> do
         mDirs <- resolveComponentDirs plan resolver pkgT
         case mDirs of
-          Nothing                -> pure Nothing
-          Just (parentDir, dirs) -> do
-            mFile <- Locate.findModuleFileIn dirs modT
-            case mFile of
+          Nothing         -> pure Nothing
+          Just (_, dirs)  -> do
+            -- Ask the resolver where the symbol is defined rather than
+            -- inferring it from an empty signature.  The old heuristic
+            -- conflated three different situations -- the module
+            -- re-exports the symbol, the symbol has no type signature,
+            -- the module failed to parse -- into one branch, and then
+            -- relabelled the card with a module name derived from a file
+            -- path.
+            sources  <- componentSourcesFor plan resolver pkgT dirs
+            imported <- importedSourcesFor cache resolver pkgT (ModulePath modT)
+            let langs   = componentLanguageSettings plan pkgT
+                cn      = parseComponentName pkgT
+                compKey = componentKeyOf (cnPackage cn) (cnKind cn)
+            mLd <- Locate.locateDefinitionInComponent langs compKey sources
+                     imported (ModulePath modT) (SymbolName symT)
+            case mLd of
               Nothing -> pure Nothing
-              Just f  -> do
-                src <- TIO.readFile f
-                let info0 = Extract.extractSymbolInfo src symT
-                -- Re-exports define the symbol elsewhere in the same
-                -- package; locateSymbolDefinitionInDir sweeps the
-                -- tree ranked by module-path prefix.  When the
-                -- module we landed on doesn't actually contain the
-                -- binding (sig/haddock came back empty), re-extract
-                -- from the file that does so the symbol card isn't
-                -- a blank cream box.  We prefer the signature line
-                -- as the source anchor whenever it is available: it
-                -- sits above any CPP @#ifdef@ branches, so it is
-                -- the most faithful target for symbols whose body
-                -- is fanned out across platform-specific branches.
-                mLoc <- Locate.locateSymbolDefinitionInDir parentDir modT symT
-                (info, resolvedMod, lineOverride) <-
-                  case (Extract.siSignature info0, mLoc) of
-                    (Nothing, Just loc) | Locate.slPath loc /= f -> do
-                      src' <- TIO.readFile (Locate.slPath loc)
-                      let info' = Extract.extractSymbolInfo src' symT
-                          modT' = modulePathFromFile parentDir (Locate.slPath loc)
-                      pure (info', modT', Just (Locate.slLine loc))
-                    _ -> pure (info0, modT, Nothing)
-                let sig = fromMaybe "" (Extract.siSignature info)
-                    hd  = maybe "" unDocText (Extract.siHaddock  info)
-                    mLine = case (Extract.siSigLine info, Extract.siLine info, lineOverride) of
-                      (Just n, _, _)        -> Just n
-                      (Nothing, Just n, _)  -> Just n
-                      (Nothing, Nothing, l) -> l
+              Just ld -> do
+                -- The parse that located the symbol, not a fresh one: this
+                -- used to re-read the file and re-parse it under the
+                -- GHC2021 floor, discarding both the component's
+                -- default-extensions and the parse error.
+                let info = Extract.symbolInfoFromDecl
+                             (Extract.numberedLines (Locate.ldContent ld))
+                             (Locate.ldDecl ld)
+                    mLine = case (Extract.siSigLine info, Extract.siLine info) of
+                      (Just n, _)       -> Just n
+                      (Nothing, Just n) -> Just n
+                      (Nothing, Nothing) ->
+                        Just (Locate.slLine (Locate.ldLocation ld))
                 pure (Just SymbolCardData
-                  { scdSignature = sig
-                  , scdHaddock   = hd
-                  , scdModule    = resolvedMod
-                  , scdLine      = mLine
-                  , scdKind      = Extract.siKind info
+                  { scdSignature  = Extract.siSignature info
+                  , scdHaddock    = unDocText <$> Extract.siHaddock info
+                  , scdModule     = unModulePath (Locate.ldModule ld)
+                  , scdComponent  = unComponentKey (Locate.ldComponent ld)
+                  , scdRequested  = modT
+                  , scdLine       = mLine
+                  , scdKind       = Extract.siKind info
                   })
     , App.scHaddockFile  = \pkgVer segments -> runMaybeT $ do
         -- Resolve through the full chain (hypha cache → local dist-dir
@@ -316,9 +326,9 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
             case mDirs of
               Nothing        -> pure (Just (ver, [], origin))
               Just (_, dirs) -> do
-                mods <- enumModulesIn dirs
+                mods <- Indexer.enumModulesIn dirs
                 pure (Just (ver, mods, origin))
-    , App.scModuleDoc = moduleDocFor cacheRoot plan env resolver
+    , App.scModuleDoc = moduleDocFor cacheRoot plan env resolver cache
     }
 
 -- | The documentation-priority chain for a module page (see
@@ -337,10 +347,11 @@ moduleDocFor
   -> BuildPlan
   -> BuildEnv IO
   -> PackageResolver IO
+  -> Cache.HyphaPackageCache
   -> Text            -- ^ component name from the URL
   -> Text            -- ^ dotted module path
   -> IO ModuleDocView
-moduleDocFor cacheRoot plan env resolver pkgT modT = do
+moduleDocFor cacheRoot plan env resolver cache pkgT modT = do
   mHad <- haddockLocation
   mPre <- case mHad of
     Nothing        -> pure Nothing
@@ -382,19 +393,38 @@ moduleDocFor cacheRoot plan env resolver pkgT modT = do
       r <- runExceptT $ do
         (_, dirs) <- liftMaybeReason "package source could not be resolved"
                        (resolveComponentDirs plan resolver pkgT)
-        f   <- liftMaybeReason
-                 ("module " <> modT <> " has no source file in the package")
-                 (Locate.findModuleFileIn dirs modT)
-        src <- lift (TIO.readFile f)
-        case Extract.extractModuleDoc f src of
-          Left perr -> throwE
-            ( "module source could not be parsed: "
-                <> Parser.parseErrorMessage perr
-            , Locate.parseExports src
-            )
-          Right info -> pure (filterByExports src info)
+        -- The whole component, not just this module: a wrapper's entries
+        -- live in the modules it re-exports from, and resolving them is
+        -- what fills the \"On this page\" rail for @Data.Map.Strict@.
+        sources  <- lift (componentSourcesFor plan resolver pkgT dirs)
+        imported <- lift (importedSourcesFor cache resolver pkgT (ModulePath modT))
+        let langs   = componentLanguageSettings plan pkgT
+            compKey = componentKeyOf (cnPackage cn) (cnKind cn)
+        resolved <- lift (Extract.resolveModuleEntries langs compKey sources
+                            imported (ModulePath modT))
+        case resolved of
+          Left perr -> do
+            f <- liftMaybeReason
+                   ("module " <> modT <> " has no source file in the package")
+                   (Locate.findModuleFileIn dirs modT)
+            src   <- lift (TIO.readFile f)
+            -- Through the parse tree, like every other view: the header
+            -- scraper this replaced could not tell @Map(..)@ from @Map@,
+            -- and it was the degraded page -- the one a reader reaches
+            -- only when something already went wrong -- still using it.
+            names <- lift (Locate.exportedNamesOf langs f src)
+            throwE
+              ( "module docs could not be resolved: "
+                  <> Parser.parseErrorMessage perr
+              , names
+              )
+          Right info -> pure info
       case r of
-        Right info -> pure (ViewFromSource (SourceDoc info mPv))
+        Right info -> do
+          -- A page thinner than the module's export list is
+          -- indistinguishable from a correct one unless we say why.
+          mapM_ reportSkipped (Extract.mdiSkipped info)
+          pure (ViewFromSource (SourceDoc info mPv))
         Left (reason, names) -> do
           hPutStrLn stderr $
             "hypha server: module docs degraded for "
@@ -402,26 +432,16 @@ moduleDocFor cacheRoot plan env resolver pkgT modT = do
               <> ": " <> Text.unpack reason
           pure (ViewExportsOnly names reason)
 
+    reportSkipped (m, e) = hPutStrLn stderr $
+      "hypha server: " <> Text.unpack pkgT <> " module "
+        <> Text.unpack (unModulePath m) <> " could not be parsed, so "
+        <> Text.unpack modT <> " may be missing entries it re-exports: "
+        <> Text.unpack (Parser.parseErrorMessage e)
+
     liftMaybeReason
       :: Text -> IO (Maybe a) -> ExceptT (Text, [Text]) IO a
     liftMaybeReason reason act =
       ExceptT (maybe (Left (reason, [])) Right <$> act)
-
-    -- Restrict and order entries by the explicit export list when one
-    -- parses.  A filter that would empty the page (pure re-export
-    -- modules) keeps the full entry list instead — over-inclusion is
-    -- harmless, an empty doc page is not.
-    filterByExports :: Text -> Extract.ModuleDocInfo -> Extract.ModuleDocInfo
-    filterByExports src info =
-      case Locate.parseExports src of
-        []   -> info
-        exps ->
-          let byName = Map.fromList
-                [ (Extract.deName e, e) | e <- Extract.mdiEntries info ]
-              ordered = mapMaybe (`Map.lookup` byName) exps
-          in case ordered of
-               [] -> info
-               _  -> info { Extract.mdiEntries = ordered }
 
 -- | Resolve a composite component name (e.g. @hypha:lib-foo@) into the
 -- parent package's source dir + the component's source-root list.  The
@@ -457,28 +477,9 @@ resolveComponentDirs plan resolver raw = do
             Nothing | cnKind cn == Comp.MainLib -> do
               -- Fallback for main-lib references in packages whose
               -- cabal we couldn't parse.
-              roots <- chooseSourceRoots d
+              roots <- Indexer.chooseSourceRoots d
               pure (Just (d, roots))
             Nothing -> pure Nothing
-
--- | Module-name enumeration over an explicit list of source roots.
-enumModulesIn :: [FilePath] -> IO [Text]
-enumModulesIn roots = do
-  paths <- concat <$> mapM
-    (\r -> map (drop (length r + 1)) <$> findHs r 4)
-    roots
-  pure (map (Text.pack . hsToModule) paths)
-
--- | Compute the cache key for one library or executable component.
---
---   * 'MainLib' → bare package name.
---   * 'SubLib s' → @pkg:s@.
---   * 'Exe s'    → @pkg:exe:s@.
-componentKey :: Text -> Comp.ComponentKind -> Text
-componentKey pkgT Comp.MainLib    = pkgT
-componentKey pkgT (Comp.SubLib s) = pkgT <> ":" <> s
-componentKey pkgT (Comp.Exe    s) = pkgT <> ":exe:" <> s
-
 
 -- | Every renderable component name for a unit.  Falls back to a
 -- single @pkg@ entry when no components were parsed.
@@ -491,274 +492,46 @@ componentNames plan pid =
       tag t  = (t, origin)
   in case lookupUnit (pkgName pid) plan of
        Just pu | not (null (puLibComponents pu)) ->
-         [ tag (componentKey pkgT (Comp.ciKind c)) | c <- puLibComponents pu ]
+         [ tag (unComponentKey (componentKeyOf (pkgName pid) (Comp.ciKind c)))
+         | c <- puLibComponents pu ]
        _ -> [tag pkgT]
 
--- | Enumerate every component of a unit (main + sublibs + exes) as
--- @(kind, sourceDirs)@ pairs.  Falls back to a single fallback entry
--- using the heuristic root walk when the unit has no parsed
--- components.
-componentsForUnit
-  :: BuildPlan -> PackageId -> FilePath
-  -> IO [(Comp.ComponentKind, [FilePath])]
-componentsForUnit plan pid d =
-  case lookupUnit (pkgName pid) plan of
-    Just pu | not (null (puLibComponents pu)) ->
-      pure
-        [ (Comp.ciKind c, Comp.ciHsSourceDirs c)
-        | c <- puLibComponents pu
-        ]
-    _ -> do
-      roots <- chooseSourceRoots d
-      pure [(Comp.MainLib, roots)]
-
--- | Pull every cached component index into the in-memory ref.  A unit
--- counts as "fully hydrated" only when /every/ one of its components
--- has cached rows; otherwise it's reported as missing so the
--- background indexer rebuilds the whole set.
-hydrateFromCache
-  :: BuildPlan
-  -> Cache.HyphaPackageCache
-  -> [PackageId]
-  -> IORef.IORef [Fuzzy.IndexedRow]
-  -> IO [PackageId]
-hydrateFromCache plan cache pids ref = go [] pids
-  where
-    go missing [] = pure (reverse missing)
-    go missing (pid : rest) = do
-      let pkgT  = unPackageName (pkgName pid)
-          verT  = unVersion    (pkgVersion pid)
-      kinds <- componentKinds plan pid
-      case kinds of
-        []  -> go (pid : missing) rest
-        _   -> do
-          let keys = [ componentKey pkgT k | k <- kinds ]
-          hits <- mapM (\k -> Cache.haveCachedIndex cache k verT) keys
-          if and hits
-            then do
-              mapM_ (loadKey verT) keys
-              go missing rest
-            else go (pid : missing) rest
-
-    loadKey verT k = do
-      rows <- Cache.readCachedIndex cache k verT
-      let indexed =
-            [ Fuzzy.mkIndexedRow p m n s | (p, m, n, s) <- rows ]
-      indexed `seq`
-        IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
-
-    -- | Just the component kinds for a unit, mirroring the
-    -- structure 'componentsForUnit' would emit.  We avoid needing a
-    -- source dir here because hydrate works off the cache alone.
-    componentKinds :: BuildPlan -> PackageId -> IO [Comp.ComponentKind]
-    componentKinds p pid =
-      case lookupUnit (pkgName pid) p of
-        Just pu | not (null (puLibComponents pu)) ->
-          pure [ Comp.ciKind c | c <- puLibComponents pu ]
-        _ -> pure [Comp.MainLib]
-
--- | Walk the source trees of the given packages, extract their module
--- exports, persist the result to the cache, and prepend them to the
--- in-memory ref.  Packages whose source cannot be resolved are silently
--- skipped — the index is a best-effort fallback.
---
--- Per-module rows are built fully /outside/ the atomicModifyIORef'
--- critical section; prepending makes each insert O(|rows|) instead of
--- the O(|index|) behaviour of @old ++ rows@.
-buildAndCacheIndex
-  :: BuildPlan
-  -> Cache.HyphaPackageCache
-  -> PackageResolver IO
-  -> [PackageId]
-  -> IORef.IORef [Fuzzy.IndexedRow]
-  -> IORef.IORef Int                    -- ^ packages-done counter
-  -> IO ()
-buildAndCacheIndex plan cache resolver pids ref doneRef =
-  mapM_ indexUnit pids
-  where
-    -- Local + source-repository-package units land in the project DB;
-    -- everything else (store packages) goes to the shared global DB.
-    originFor :: PackageId -> CacheOrigin
-    originFor pid = case lookupUnit (pkgName pid) plan of
-      Just u | puIsLocal u -> OriginProject
-      _                    -> OriginGlobal
-    -- The done counter bumps once per /unit/, not per component, so
-    -- the progress bar continues to read in package units.
-    bump = IORef.atomicModifyIORef' doneRef (\n -> (n + 1, ()))
-
-    indexUnit pid = do
-      eDir <- resolveSrc resolver pid
-      case eDir of
-        Left _  -> bump
-        Right d -> do
-          comps <- componentsForUnit plan pid d
-          mapM_ (indexComponent pid) comps
-          bump
-
-    indexComponent pid (kind, srcDirs) = do
-      let pkgT    = unPackageName (pkgName    pid)
-          verT    = unVersion    (pkgVersion pid)
-          compKey = componentKey pkgT kind
-      mods <- enumModulesIn srcDirs
-      rowChunks <- mapM (collectMod compKey srcDirs) mods
-      let flatRows = concat rowChunks
-          indexed  = [ Fuzzy.mkIndexedRow p m n s
-                     | (p, m, n, s) <- flatRows
-                     ]
-      -- Persist before publishing into memory so a crash mid-stream
-      -- never leaves the in-memory view ahead of the cache.
-      Cache.writeCachedIndex cache (originFor pid) compKey verT flatRows
-      indexed `seq`
-        IORef.atomicModifyIORef' ref (\old -> (indexed ++ old, ()))
-
-    -- | Resolve a module file against an explicit list of source roots,
-    -- in priority order, then delegate to 'collectModuleRows'.
-    collectMod compKey srcDirs modPath = do
-      mFile <- firstExistingModule srcDirs modPath
-      case mFile of
-        Nothing -> pure []
-        Just f  -> do
-          src <- TIO.readFile f
-          collectModuleRows compKey modPath f src
-
-    firstExistingModule [] _ = pure Nothing
-    firstExistingModule (r:rs) modPath = do
-      let candidate = r FP.</> Text.unpack (Text.replace "." "/" modPath) <> ".hs"
-      ok <- Dir.doesFileExist candidate
-      if ok then pure (Just candidate) else firstExistingModule rs modPath
-
--- | Extract one cache row per top-level declaration from a single
--- module's source.  Signatures land in the @sig@ column courtesy of
--- "Hypha.Source.Parser", so a tier-1 lookup is self-sufficient and the
--- agent no longer needs a follow-up @hypha symbol@ just to learn the
--- type.
---
--- The export-list filter is best-effort: when the module has an
--- explicit @module M (a, b, ...) where@ header we restrict to those
--- names; otherwise (no header, or 'Locate.parseExports' could not read
--- one) we emit every top-level decl.  Over-inclusion is harmless for
--- the search index — internal names still resolve, and the agent sees
--- exactly the providers it would see today.
---
--- Some packages guard code with build-time-only CPP macros (e.g.
--- @#error "CURRENT_PACKAGE_KEY undefined"@, only ever defined by a
--- real GHC invocation) that "Hypha.Source.Parser" can never satisfy —
--- it has no compiler session to ask.  That is an inherent limit of
--- parsing without compiling, not something a smarter cpphs config can
--- fix.  So this forces the parse eagerly and catches any exception
--- (the CPP failure surfaces as a plain 'error' call deep inside
--- @cpphs@) at the single-module granularity: one unparseable module
--- loses its own rows, but 'buildAndCacheIndex' keeps indexing every
--- other module and package in the plan instead of aborting outright.
-collectModuleRows :: Text -> Text -> FilePath -> Text -> IO [(Text, Text, Text, Text)]
-collectModuleRows compKey modPath f src = do
-  result <- try (evaluate rows)
-  case result of
-    Left (e :: SomeException) -> do
-      hPutStrLn stderr $
-        "warning: index build skipped module " <> Text.unpack modPath
-          <> " (" <> Text.unpack compKey <> "): " <> Text.unpack (briefException e)
-      pure []
-    Right rs -> pure rs
-  where
-    decls    = either (const []) id (Parser.parseDecls f src)
-    exps     = Set.fromList (Locate.parseExports src)
-    keep nm  = Set.null exps || nm `Set.member` exps
-    sigFor d = case Parser.declSigText src d of
-                 Just t  -> t
-                 Nothing -> Text.empty
-    rows = [ (compKey, modPath, nm, sigFor d)
-           | d <- decls
-           , let nm = Parser.declName d
-           , not (Text.null nm)
-           , keep nm
-           ]
-
--- | Pick the source roots to scan for a package.  If any of the common
--- @hs-source-dirs@ subdirectories exist we walk those exclusively;
--- otherwise we fall back to the package root.  Walking both root /and/
--- the @src/@ subtree double-counts modules and produces duplicate
--- "src.Foo.Bar" / "Foo.Bar" rows in the search index.
-chooseSourceRoots :: FilePath -> IO [FilePath]
-chooseSourceRoots d = do
-  let candidates = [ d FP.</> sub
-                   | sub <- ["src", "library", "lib", "Library", "source", "Source"] ]
-  existingSubs <- filterExisting candidates
-  pure (if null existingSubs then [d] else existingSubs)
-
-filterExisting :: [FilePath] -> IO [FilePath]
-filterExisting [] = pure []
-filterExisting (p : ps) = do
-  ok <- Dir.doesDirectoryExist p
-  rest <- filterExisting ps
-  pure (if ok then p : rest else rest)
-
-findHs :: FilePath -> Int -> IO [FilePath]
-findHs _ depth | depth < 0 = pure []
-findHs dir depth = do
-  entries <- Dir.listDirectory dir
-  let absEntries = map (dir FP.</>) entries
-  concat <$> mapM (visit depth) absEntries
-  where
-    visit d p = do
-      isDir <- Dir.doesDirectoryExist p
-      if isDir
-        then if skipDir (FP.takeFileName p)
-               then pure []
-               else findHs p (d - 1)
-        else if ".hs" `Text.isSuffixOf` Text.pack p
-               then pure [p]
-               else pure []
-
-    skipDir name = case name of
-      '.':_ -> True
-      "dist" -> True
-      "dist-newstyle" -> True
-      "test" -> True
-      "tests" -> True
-      "bench" -> True
-      "benchmarks" -> True
-      "Setup" -> True
-      _ -> False
-
--- | Recover a module path from an absolute file path resolved inside a
--- package source tree.  Strips the package root, common @hs-source-dirs@
--- prefixes ("src", "library", "lib") and the @.hs@ suffix.
-modulePathFromFile :: FilePath -> FilePath -> Text
-modulePathFromFile root path =
-  let rel0  = case Text.stripPrefix (Text.pack root) (Text.pack path) of
-                Just r  -> Text.dropWhile (== '/') r
-                Nothing -> Text.pack path
-      rel   = stripDirPrefix rel0
-      withoutHs = case Text.stripSuffix ".hs" rel of
-                    Just r  -> r
-                    Nothing -> rel
-  in Text.replace "/" "." withoutHs
-  where
-    stripDirPrefix t = case dropPrefix "src/" t of
-      Just r  -> r
-      Nothing -> case dropPrefix "library/" t of
-        Just r  -> r
-        Nothing -> case dropPrefix "lib/" t of
-          Just r  -> r
-          Nothing -> t
-    dropPrefix p = Text.stripPrefix (Text.pack p)
-
-hsToModule :: FilePath -> String
-hsToModule fp =
-  let stripped = case Text.stripSuffix ".hs" (Text.pack fp) of
-                   Just t  -> Text.unpack t
-                   Nothing -> fp
-      dotted   = map (\c -> if c == '/' then '.' else c) stripped
-  in dotted
-
--- | Project name (best-effort).  Uses the first local package, or a
--- placeholder when none are present.
 projectName :: BuildPlan -> Text
 projectName plan =
   case filter puIsLocal (Map.elems (bpUnits plan)) of
     (pu : _) -> unPackageName (pkgName (puId pu))
     []       -> "hypha"
+
+-- | The compiler's answer to "where does this export come from", if we
+-- can reach the compiler the plan was solved with.
+--
+-- Every reason we might not is reported here, once: a mismatched
+-- toolchain and an unreadable store are properties of the machine, and
+-- restating them once per module would bury the per-module diagnostics
+-- that are actually about the code.
+originOracleFor :: BuildPlan -> IO (Maybe (Origins.OriginOracle IO))
+originOracleFor plan = do
+  (dbs, storeErrs) <- Origins.discoverPackageDbs (bpCompiler plan)
+  mapM_ report storeErrs
+  built <- Origins.mkGhcOriginOracle (bpCompiler plan) dbs localImportDirs
+  case built of
+    Right o  -> pure (Just o)
+    Left err -> do
+      report err
+      hPutStrLn stderr
+        "hypha index: re-exports will be resolved from source alone"
+      pure Nothing
+  where
+    report e = hPutStrLn stderr
+      ("hypha index: " <> Text.unpack (Origins.renderOriginError e))
+
+    -- A local package has no store entry for ghc-pkg to find, and the
+    -- plan already knows where its build tree is.  Skipping this leaves
+    -- the project's own facade modules -- the ones a project-scoped tool
+    -- exists for -- as the only ones without a compiler's answer.
+    localImportDirs pid =
+      [ d FP.</> "build"
+      | Just d <- [puDistDir =<< lookupUnit (pkgName pid) plan] ]
 
 -- | Parse @"<pkg>-<ver>"@.  The version is the suffix after the last @-@.
 parsePkgVer :: Text -> Maybe PackageId
@@ -769,3 +542,109 @@ parsePkgVer raw =
       in Just (PackageId (PackageName name) (Version ver))
     _ -> Nothing
 
+-- | Every module of the component a page belongs to, ready for
+-- resolution.
+--
+-- One implementation shared with the indexer: the module page and the
+-- index must agree about which modules a component has, or a symbol
+-- searchable under one module can fail to appear on that module's page.
+componentSourcesFor
+  :: BuildPlan
+  -> PackageResolver IO
+  -> Text                 -- ^ component name from the URL
+  -> [FilePath]           -- ^ its source dirs
+  -> IO [Index.ModuleSource]
+componentSourcesFor plan resolver rawName dirs = do
+  let cn = parseComponentName rawName
+  ePid <- resolvePkg resolver (cnPackage cn)
+  case ePid of
+    Left err -> do
+      hPutStrLn stderr $
+        "hypha server: cannot resolve " <> Text.unpack rawName
+          <> " for module docs: " <> show err
+      pure []
+    Right rp -> Indexer.componentModules plan (rpPkgId rp) (cnKind cn) dirs
+
+-- | What the index already resolved for a module's exports, plus the sources
+-- of the modules it named.
+--
+-- The definition sites come from the index rather than from a walk of the
+-- module's imports, because the index resolved them /transitively/ and a walk
+-- resolves one hop.  One hop is not enough: @base@'s @Data.List@ reaches
+-- @GHC.Internal.Data.List@, which declares nothing and passes @mapAccumL@
+-- along from @GHC.Internal.Data.Traversable@ — so reading the immediate
+-- import found no declaration, and the symbol card answered "symbol not
+-- found" for a link search had just offered.
+--
+-- The row names the defining /component/ as well as the module, so nothing
+-- else has to work out who owns it — which matters, because the plan cannot
+-- say: @puLibComponents@ is populated from a unit's unpacked @.cabal@, and
+-- only local units have @pkg-src@ paths, so every dependency's component list
+-- is empty.  Resolving the component to a package and finding the module's
+-- file under its source root needs no component info at all.
+--
+-- Every way this can come up short is reported: a page with fewer entries
+-- than the module exports is indistinguishable from a correct one otherwise.
+importedSourcesFor
+  :: Cache.HyphaPackageCache
+  -> PackageResolver IO
+  -> Text                    -- ^ component name from the URL
+  -> ModulePath
+  -> IO Index.ImportedDefinitions
+importedSourcesFor cache resolver pkgT asking = do
+  indexed <- Cache.lookupInModule cache pkgT (unModulePath asking)
+  -- Only rows whose definition is in another component: an intra-component
+  -- one needs no extra source, the pure pass already has the module.
+  let elsewhere =
+        [ r | r <- indexed
+            , unComponentKey (Index.drComponent (Index.rowDefinition r)) /= pkgT ]
+      sites  = Map.fromList
+        [ (Index.rowName r, Index.rowDefinition r) | r <- elsewhere ]
+      wanted = nubOrd (map Index.rowDefinition elsewhere)
+  loaded <- Map.fromList . catMaybes <$> mapM loadDefinition wanted
+  pure (Index.ImportedDefinitions sites loaded)
+  where
+    loadDefinition def = do
+      let comp = Index.drComponent def
+          m    = Index.drModule def
+          cn   = parseComponentName (unComponentKey comp)
+      ePid <- resolvePkg resolver (cnPackage cn)
+      case ePid of
+        Left err -> do
+          report comp m ("its package could not be resolved: " <> show err)
+          pure Nothing
+        Right rp -> do
+          eDir <- resolveSrc resolver (rpPkgId rp)
+          case eDir of
+            Left err -> do
+              report comp m ("its source could not be resolved: " <> show err)
+              pure Nothing
+            Right d -> do
+              roots <- Indexer.chooseSourceRoots d
+              mFile <- Locate.findModuleFileIn roots (unModulePath m)
+              case mFile of
+                Nothing -> do
+                  report comp m "no source file under its package root"
+                  pure Nothing
+                Just f -> do
+                  content <- TIO.readFile f
+                  pure (Just (m, (comp, Index.ModuleSource
+                    { Index.msDeclaredName = m
+                    , Index.msPath         = f
+                    , Index.msVisibility   = Index.Exposed
+                    , Index.msContent      = content
+                    })))
+
+    report comp m why = hPutStrLn stderr $
+      "hypha server: " <> Text.unpack (unModulePath asking)
+        <> " gets entries from " <> Text.unpack (unComponentKey comp) <> ":"
+        <> Text.unpack (unModulePath m) <> ", but " <> why
+        <> "; those entries will have no signature"
+
+-- | The language settings the component fixes for its modules, so the
+-- module page parses them the way the indexer did — the indexer's own
+-- derivation, not a copy of it.
+componentLanguageSettings :: BuildPlan -> Text -> Extensions.LanguageSettings
+componentLanguageSettings plan rawName =
+  let cn = parseComponentName rawName
+  in Indexer.languageSettingsFor plan (cnPackage cn) (cnKind cn)

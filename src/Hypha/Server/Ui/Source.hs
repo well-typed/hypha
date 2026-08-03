@@ -9,6 +9,8 @@ import Lucid
 import Lucid.Base (makeAttributes)
 import qualified Skylighting as Sky
 
+import Hypha.Types.Route qualified as Route
+
 -- | Render a Haskell source listing with line numbers, optional highlighted
 -- target line (@mLine@), and skylighting-driven token colouring.  Falls
 -- back to a plain @<pre>@ when the syntax description is missing — the
@@ -31,7 +33,7 @@ sourceView pkg modPath mLine body = div_ [class_ "source-view"] $ do
     maybe mempty (\n -> span_ [class_ "source-line-hint"]
                           (toHtml ("line " <> Text.pack (show n)))) mLine
     a_ [ class_ "source-docs-link"
-       , href_ ("/pkg/" <> pkg <> "/" <> modPath)
+       , href_ (Route.hrefFrom ["pkg", pkg, modPath])
        ]
        "\x2190 Docs"
   table_ [class_ "source"] $

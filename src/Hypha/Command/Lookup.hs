@@ -37,7 +37,10 @@ import Hypha.Hoogle.Remote ( RemoteError (..), RemoteOptions, searchRemote )
 import Hypha.Hoogle.Tier (Tier (..), tierLabel)
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
 import Hypha.Output.Outcome (Outcome (..))
+import Hypha.Search.Index (IndexRow (..))
 import Hypha.Search.PackageCache (HyphaPackageCache, lookupByName)
+import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 
 -- | A single hit, tagged with its origin tier.
 data Provider = Provider
@@ -180,8 +183,16 @@ chooseTiers t1 t2 offline _t3
 
 -- Adapters --------------------------------------------------------------
 
-toProvider :: Tier -> (Text, Text, Text, Text) -> Provider
-toProvider t (pkg, modT, name, sig) = Provider pkg modT name sig t
+-- | A cached index row as a lookup provider.  The row's definition
+-- module and visibility do not appear in @hypha lookup@'s output shape,
+-- which reports where a symbol is /available/, not where it is declared.
+toProvider :: Tier -> IndexRow -> Provider
+toProvider t r = Provider
+  (unComponentKey (rowComponent r))
+  (unModulePath   (rowModule r))
+  (unSymbolName   (rowName r))
+  (unSignature    (rowSignature r))
+  t
 
 hitProvider :: Tier -> HoogleHit -> Provider
 hitProvider t h = Provider (hhPackage h) (hhModule h) (hhName h) (hhSig h) t

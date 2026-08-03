@@ -16,7 +16,8 @@ import Data.Text (Text)
 import Hypha.BuildEnv.Type   (BuildEnv)
 import Hypha.Cli.Types
 import Hypha.Output.Outcome  (Outcome (..))
-import Hypha.Source.Locate   (findModuleFile, listExportedSymbols, parseExports)
+import Hypha.Source.Extensions (defaultLanguageSettings)
+import Hypha.Source.Locate   (exportedNamesOf, findModuleFile, listExportedSymbols)
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version)
 
 compactKeys, fullKeys :: Set Text
@@ -39,7 +40,7 @@ runModuleFromDir srcDir pid modPath = do
   mFile <- findModuleFile srcDir modPath
   exps <- case mFile of
     Nothing -> pure []
-    Just f  -> parseExports <$> TIO.readFile f
+    Just f  -> exportedNamesOf defaultLanguageSettings f =<< TIO.readFile f
   pure (toOutcome pid modPath exps)
 
 toOutcome :: PackageId -> Text -> [Text] -> Outcome Value
