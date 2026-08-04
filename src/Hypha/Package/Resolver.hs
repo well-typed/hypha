@@ -46,7 +46,8 @@ import Hypha.Hackage.Source (fetchAndExtractSource)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), lookupUnit )
 import Hypha.Types.PackageId
-  ( PackageId (..), PackageName (..), PackageRef (..), Version (..) )
+  ( PackageId (..), PackageName (..), PackageRef (..), Version (..)
+  , renderPackageId )
 
 -- | The result of resolving a package name.
 data ResolvedPackage = ResolvedPackage
@@ -72,6 +73,19 @@ data ResolvedPackage = ResolvedPackage
 data PackageResolver m = PackageResolver
   { resolvePkg      :: PackageName -> m (Either HyphaError ResolvedPackage)
   , resolveSrc      :: PackageId -> m (Either HyphaError FilePath)
+  , resolveSrcLocal :: PackageId -> m (Maybe FilePath)
+    -- ^ 'resolveSrc' without the last two steps: the plan's source path,
+    -- the build environment, and hypha's own extracted-source cache, all
+    -- of which are directory probes.  No tarball extraction, no HTTP.
+    --
+    -- Named separately rather than folded into 'resolveSrc' because the
+    -- two answer different questions.  A caller that has been /asked/ for
+    -- a package should pay a download to answer; a caller probing
+    -- speculatively — \"does any of these forty dependencies happen to
+    -- declare the module this re-export named?\" — must not, and the cost
+    -- of getting that wrong is a download per probe.  'Maybe' rather than
+    -- 'Either' for the same reason: not having a package unpacked is the
+    -- expected answer here, not a failure.
   , fetchVrs       :: PackageName -> m (Either HyphaError [Version])
   }
 
@@ -112,8 +126,9 @@ mkPackageResolver env hclient cacheRoot plan = do
   let sourceCache = sourceCacheRoot cacheRoot
   createDirectoryIfMissing True sourceCache
   pure PackageResolver
-    { resolvePkg = resolvePackageWith env hclient plan
-    , resolveSrc = resolvePackageSourceWith env hclient sourceCache plan
+    { resolvePkg      = resolvePackageWith env hclient plan
+    , resolveSrc      = resolvePackageSourceWith env hclient sourceCache plan
+    , resolveSrcLocal = localPackageSource env sourceCache plan
     , fetchVrs   = \pkgName -> do
         result <- fetchVersions hclient pkgName
         pure (either (Left . hackageErrorToHypha pkgName) Right result)
@@ -195,31 +210,12 @@ resolvePackageSourceWith
   -> IO (Either HyphaError FilePath)
 resolvePackageSourceWith env hclient sourceCache plan pid =
   -- Steps 0-2 are no-cost cache probes that return 'Just' on a hit.
-  -- The 'Alternative' instance for 'MaybeT' linearises the chain so
-  -- the first hit wins without nested case-of (CLAUDE.md "mtl over
-  -- zig-zags").  Steps 3-4 can fail with a structured 'HyphaError',
-  -- so they run outside 'MaybeT' over plain 'Either'.
-  runMaybeT cacheHit >>= maybe materialise (pure . Right)
+  -- Steps 3-4 can fail with a structured 'HyphaError', so they run
+  -- outside 'MaybeT' over plain 'Either'.
+  localPackageSource env sourceCache plan pid
+    >>= maybe materialise (pure . Right)
   where
-    nameStr = Text.unpack (unPackageName (pkgName pid))
-    verStr  = Text.unpack (unVersion (pkgVersion pid))
-    destDir = sourceCache </> (nameStr <> "-" <> verStr)
-
-    cacheHit :: MaybeT IO FilePath
-    cacheHit = msum
-      [ MaybeT (existingDir (planSrcDir plan (pkgName pid)))
-      , MaybeT (locatePackageSource env pid)
-      , MaybeT (existingDir (Just destDir))
-      ]
-
-    -- | Pass through a 'Just dir' iff @dir@ exists on disk; otherwise
-    -- 'Nothing'.  Used to lift 'planSrcDir' / cached-extract paths
-    -- into the 'MaybeT' chain without a separate case-of per step.
-    existingDir :: Maybe FilePath -> IO (Maybe FilePath)
-    existingDir Nothing    = pure Nothing
-    existingDir (Just dir) = do
-      ok <- doesDirectoryExist dir
-      pure (if ok then Just dir else Nothing)
+    destDir = extractedSourceDir sourceCache pid
 
     -- | None of the cache layers had it; produce a directory by
     -- extracting from the cabal repo tarball or, failing that, by
@@ -240,6 +236,41 @@ resolvePackageSourceWith env hclient sourceCache plan pid =
           pure $ case r of
             Right path -> Right path
             Left hErr  -> Left (hackageErrorToHypha (pkgName pid) hErr)
+
+-- | Steps 0-2 of 'resolvePackageSourceWith': the plan's own source path
+-- for a local package, the build environment (store, dist-newstyle,
+-- project sources), and hypha's extracted-source cache.  Every step is a
+-- directory probe, so this is the resolution a caller can afford to run
+-- speculatively.
+--
+-- The 'Alternative' instance for 'MaybeT' linearises the chain so the
+-- first hit wins without nested case-of (CLAUDE.md "mtl over zig-zags").
+localPackageSource
+  :: BuildEnv IO
+  -> FilePath     -- ^ source cache directory
+  -> BuildPlan
+  -> PackageId
+  -> IO (Maybe FilePath)
+localPackageSource env sourceCache plan pid = runMaybeT $ msum
+  [ MaybeT (existingDir (planSrcDir plan (pkgName pid)))
+  , MaybeT (locatePackageSource env pid)
+  , MaybeT (existingDir (Just (extractedSourceDir sourceCache pid)))
+  ]
+  where
+    -- Pass through a 'Just dir' iff @dir@ exists on disk; otherwise
+    -- 'Nothing'.  Lifts 'planSrcDir' / cached-extract paths into the
+    -- 'MaybeT' chain without a separate case-of per step.
+    existingDir Nothing    = pure Nothing
+    existingDir (Just dir) = do
+      ok <- doesDirectoryExist dir
+      pure (if ok then Just dir else Nothing)
+
+-- | Where a fetched tarball is extracted to, and therefore where a
+-- previous fetch left it.  One derivation, so the probe and the extract
+-- cannot disagree about the path.
+extractedSourceDir :: FilePath -> PackageId -> FilePath
+extractedSourceDir sourceCache pid =
+  sourceCache </> Text.unpack (renderPackageId pid)
 
 -- | Look up the package source directory from the build plan's 'puSrcDir'.
 -- Returns 'Just dir' only for local (inplace) packages that have a

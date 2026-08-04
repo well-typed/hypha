@@ -28,6 +28,7 @@ module Hypha.Search.Indexer
   , languageSettingsFor
   , indexInputsFingerprint
   , packageSources
+  , stanzaModules
   , enumModulesIn
   , enumModuleFilesIn
   , chooseSourceRoots
@@ -77,7 +78,7 @@ import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 
 -- | Module-name enumeration over an explicit list of source roots.
 enumModulesIn :: [FilePath] -> IO [Text]
-enumModulesIn = fmap (map fst) . enumModuleFilesIn
+enumModulesIn = fmap (map (unModulePath . fst)) . enumModuleFilesIn
 
 -- | 'enumModulesIn', keeping the file each name was derived from.
 --
@@ -85,12 +86,15 @@ enumModulesIn = fmap (map fst) . enumModuleFilesIn
 -- only the first; deriving the path a second time from the module name
 -- would reintroduce exactly the @hs-source-dirs@ guesswork the walk did
 -- for us.
-enumModuleFilesIn :: [FilePath] -> IO [(Text, FilePath)]
+enumModuleFilesIn :: [FilePath] -> IO [(ModulePath, FilePath)]
 enumModuleFilesIn roots = concat <$> mapM walk roots
   where
     walk r = do
       files <- findHs r 4
-      pure [ (Text.pack (hsToModule (drop (length r + 1) f)), f) | f <- files ]
+      pure [ (modulePathOf r f, f) | f <- files ]
+
+    modulePathOf r f =
+      ModulePath (Text.pack (hsToModule (drop (length r + 1) f)))
 
 -- | Enumerate every component of a unit (main + sublibs + exes) as
 -- @(kind, sourceDirs)@ pairs.  Falls back to a single fallback entry

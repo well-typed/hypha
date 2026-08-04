@@ -121,6 +121,51 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`hypha source` and `hypha symbol` follow a re-export out of the
+  package.** `hypha source base/Data.List/sortOn` reported `NOT_FOUND`:
+  `Data.List` re-exports `sortOn` from `GHC.Internal.Data.List`, which
+  re-exports it from `GHC.Internal.Data.OldList`, and both hops cross into
+  `ghc-internal`. Since GHC 9.10 made `base` a facade that is the shape of
+  nearly every `base` symbol, not an edge case. The CLI now builds the
+  dependency graph a chain is followed through from the build plan it had
+  already loaded, and the descent walks as many hops as the chain crosses
+  rather than probing a single ring of candidates. `hypha symbol` resolves
+  through the same path, so a card for a re-exported symbol carries its
+  signature, Haddock and source instead of nothing.
+- **A dependency's modules come from its cabal file, not a directory
+  walk.** The enumeration guessed six conventional `hs-source-dirs` names
+  and stopped four directories deep, which lost fourteen of
+  `ghc-internal`'s modules — `base/Control.Monad.ST.Lazy/strictToLazyST`
+  among them — and every module of a dependency with an unconventional
+  source layout, local packages in a multi-package repo included. None of
+  those losses were distinguishable from "the symbol is not there". Reading
+  the stanza also settles which component owns a module, whether it is
+  exposed, and which extensions it parses under: the last of these
+  reintroduced across a package boundary a bug fixed one hop earlier.
+- **Following a chain no longer reaches for the network.** A single missed
+  module name walked the whole dependency closure through the full
+  resolution chain — tarball extraction, then Hackage over HTTP — so
+  `hypha source base/Prelude/lines` answered correctly and printed
+  `Hackage HTTP 404 for 'rts'` on the way, for a package the query never
+  needed. Speculative probes now consult only what is already unpacked, and
+  what was skipped is reported where it could actually explain a failure.
+- **A search that stopped early no longer reports the symbol as absent.**
+  Hitting the hop limit or the parse budget produced the same `NOT_FOUND`
+  as a name that does not exist, plus a stderr line contradicting it.
+  The envelope now carries which of the two happened (`search:
+  stopped_at_bound` vs `exhausted`), the bound that was hit, the candidate
+  modules considered, and any dependency whose source could not be read.
+- **A module reached through an open import cannot win on a private
+  homonym.** The descent took "declares the name" as "defines it", so a
+  local helper called `lines` or `null` in a module that does not export it
+  could be reported as the definition site.
+- **`hypha source` says where the definition actually landed.** The output
+  echoed the module the caller named beside a path in another package, so a
+  follow-up query on that module went nowhere. A `defined_in` field names
+  the declaring module and component when they differ from the request.
+- **`hypha symbol`'s `kind` is no longer the constant `"function"`.** The
+  card asserted the one thing it had not learned; it now reports what the
+  parser classified, and omits the field when there is nothing to say.
 - **`--select sig,haddock` no longer returns an empty result.** The
   documented short spellings are aliases for the wire field names
   (`sig` → `signature`, `haddock` → `haddock_raw`), so the invocation

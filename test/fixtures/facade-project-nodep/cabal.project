@@ -1,0 +1,5 @@
+-- The same package as ../facade-project, in a plan that does not record
+-- the dependency edge.  The re-export therefore cannot be followed, and
+-- the point of the fixture is that saying so is not the same as saying the
+-- symbol does not exist.
+packages: ../reexport

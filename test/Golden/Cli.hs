@@ -41,7 +41,73 @@ tests = testGroup "Golden.Cli"
       -- envelope this suite was created to prevent.  We assert only
       -- the regression invariant, not the exact text.
       assertNoInternalErrorPollution ["--version"]
+
+    -- Issue #20, through the wiring rather than around it.
+    --
+    -- Every in-process test of this behaviour hands the locator a reach
+    -- built in the test.  The bug was that the CLI built it from nothing:
+    -- `runSourceArm` passed `noImportedDefinitions`, so `hypha source
+    -- base/Data.List/sortOn` reported NOT_FOUND while the resolution
+    -- machinery was working perfectly.  Reverting one token in
+    -- `Hypha.Cli.Run` reproduces it with the rest of the suite green, so
+    -- this spawns the binary and follows the chain for real.
+  , testCase "hypha source follows a cross-package re-export end to end" $ do
+      (ec, out, err) <- readProcessWithExitCode "hypha"
+        [ "--json", "--project-dir", facadeProject
+        , "source", "reexport/Fixture.TwoHop/depThing" ] ""
+      assertEqual ("exit code (stderr: " <> err <> ")") ExitSuccess ec
+      -- The path is the assertion: it has to name the file in the
+      -- dependency that declares the symbol, not the facade the question
+      -- was asked through.
+      assertBool
+        ("expected a path inside reexport-dep; got:\n" <> out <> err)
+        ("reexport-dep" `isInfixOfStr` out)
+      assertBool
+        ("expected the declaring module in defined_in; got:\n" <> out)
+        ("Dep.Internal" `isInfixOfStr` out)
+
+  , testCase "hypha symbol fills the card from the definition site" $ do
+      -- The other half of the issue's title.  Before the reach reached
+      -- this command, the same argument produced a card with no signature
+      -- and no source while `hypha source` landed on the declaration.
+      (ec, out, err) <- readProcessWithExitCode "hypha"
+        [ "--json", "--project-dir", facadeProject
+        , "symbol", "reexport/Fixture.TwoHop/depThing" ] ""
+      assertEqual ("exit code (stderr: " <> err <> ")") ExitSuccess ec
+      assertBool
+        ("expected a signature on the card; got:\n" <> out)
+        ("signature" `isInfixOfStr` out)
+      assertBool
+        ("expected the declaring module in defined_in; got:\n" <> out)
+        ("Dep.Internal" `isInfixOfStr` out)
+
+  , testCase "hypha source says how the search ended, not just that it did" $ do
+      -- The honest-failure arm, through the binary.  Same package, in a
+      -- plan that records no dependency edge, so the chain genuinely
+      -- cannot be followed.  What the envelope must not do is report that
+      -- as a bare "not found": the search stopped for a reason, and the
+      -- reason is what tells an agent whether to retry, widen, or believe
+      -- it.  The structured fields are the fix for that; the message alone
+      -- was only ever a sentence on stderr.
+      (ec, out, _err) <- readProcessWithExitCode "hypha"
+        [ "--json", "--project-dir", nodepProject
+        , "source", "reexport/Fixture.TwoHop/depThing" ] ""
+      assertBool "a failing exit code" (ec /= ExitSuccess)
+      assertBool
+        ("expected the candidates it tried; got:\n" <> out)
+        ("candidates_considered" `isInfixOfStr` out)
+      assertBool
+        ("expected the search outcome; got:\n" <> out)
+        ("exhausted" `isInfixOfStr` out)
+      assertBool
+        ("expected the facade's own import to be named; got:\n" <> out)
+        ("Dep.Facade" `isInfixOfStr` out)
   ]
+  where
+    facadeProject = "test/fixtures/facade-project"
+    -- The same package in a plan with the dependency edge removed, so the
+    -- re-export is unfollowable for a reason the plan explains.
+    nodepProject  = "test/fixtures/facade-project-nodep"
 
 -- | Strict invariant: stdout is exactly one well-formed JSON object,
 -- stderr is empty, exit code is 'ExitSuccess', and at no point does

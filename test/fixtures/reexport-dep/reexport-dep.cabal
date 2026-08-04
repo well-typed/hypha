@@ -7,5 +7,20 @@ library
   hs-source-dirs:     src
   exposed-modules:    Dep.Internal
                     , Dep.Facade
+                    , Dep.WideFacade
+                    , Dep.Homonym
+                    , Dep.Filler1
+                    , Dep.Filler2
+                    , Dep.Filler3
+                    , Dep.Filler4
+                    , Dep.Deep.Down.Below.Buried
+  -- Not exposed: a reach that guessed @Exposed@ for every file it walked
+  -- into is caught by asking for this one.
+  other-modules:      Dep.Hidden
   default-language:   GHC2021
+  -- Stanza-wide, with no per-module pragma anywhere in the package: a
+  -- reach that hands a module over without its own settings makes the
+  -- caller parse it under theirs, which is how a dependency with
+  -- default-extensions dead-ends a chain that had already resolved.
+  default-extensions: LambdaCase
   build-depends:      base

@@ -16,6 +16,7 @@
 module Hypha.Source.Parser
   ( Decl (..)
   , DeclKind (..)
+  , renderDeclKind
   , ParseError (..)
   , parseErrorMessage
   , parseDecls
@@ -109,6 +110,24 @@ data DeclKind
     -- constructor, so a field shared by several constructors is one
     -- declaration and @T(..)@ reaches it.
   deriving stock (Show, Eq)
+
+-- | The wire spelling of a declaration kind.
+--
+-- Here rather than at each consumer, so the @symbol@ card and the server's
+-- kind badges cannot drift apart.
+renderDeclKind :: DeclKind -> Text
+renderDeclKind = \case
+  DkFunction     -> "function"
+  DkData         -> "data"
+  DkNewtype      -> "newtype"
+  DkClass        -> "class"
+  DkTypeSyn      -> "type"
+  DkTypeFamily   -> "type-family"
+  DkPatternSyn   -> "pattern"
+  DkForeign      -> "foreign"
+  DkClassMethod  -> "class-method"
+  DkConstructor  -> "constructor"
+  DkRecordField  -> "record-field"
 
 -- | Carrier for any parser failure surfaced from @ghc-lib-parser@.
 --

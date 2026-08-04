@@ -19,7 +19,7 @@ import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Reexport
   ( DefinitionSite (..), resolveComponent
-  , sharedSegments )
+  , sharedSegments, supplierCandidates, supplierCandidatesByKind )
 import Hypha.Source.Extensions (defaultLanguageSettings)
 import Hypha.Source.Interface
   ( ExportItem (..), ImportItem (..), ModuleInterface (..), parseInterface )
@@ -204,6 +204,28 @@ tests = testGroup "Unit.SearchReexport"
       site <- siteOf (resolveComponent [iface])
                 (ModulePath "Klass", SymbolName "klassMethod")
       site @?= DefinedHere
+
+  , testCase "candidate ranking keeps explicit imports apart from open ones" $ do
+      -- The two groups have to stay separable, because a chain that fans
+      -- out merges several modules' candidates into one frontier: with the
+      -- groups flattened, every open import of the first module lands ahead
+      -- of every explicit import of the second, which inverts the
+      -- preference the ranking exists to express.  'supplierCandidates'
+      -- flattening them is right for a single module and wrong for a ring,
+      -- so the descent consumes the split form.
+      iface <- inline "Facade" $ Text.unlines
+        [ "module Facade (thing) where"
+        , "import Open.One"
+        , "import Open.Two"
+        , "import Explicit.Here (thing)"
+        ]
+      let (explicit, open) =
+            supplierCandidatesByKind iface (SymbolName "thing")
+      explicit @?= [ModulePath "Explicit.Here"]
+      open     @?= [ModulePath "Open.One", ModulePath "Open.Two"]
+      -- And the flattened form is exactly the two, in that order, so the
+      -- descent and the fixpoint cannot disagree about the ranking.
+      supplierCandidates iface (SymbolName "thing") @?= explicit <> open
 
   , testCase "shared segments count segments, not characters" $ do
       -- The predecessor compared a dotted module prefix against slashed

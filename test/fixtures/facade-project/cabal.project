@@ -1,0 +1,9 @@
+-- A project whose two packages form the facade shape of issue #20:
+-- `reexport` re-exports a symbol that is declared in `reexport-dep`.
+--
+-- It exists so the CLI's own wiring is covered.  Reverting the reach in
+-- `Hypha.Cli.Run.runSourceArm` to an empty plan reproduces issue #20
+-- verbatim, and before this fixture the whole suite stayed green while it
+-- did.
+packages: ../reexport
+          ../reexport-dep

@@ -13,9 +13,6 @@ module Hypha.Search.Index
   , DefinitionRef (..)
   , ImportedDefinitions (..)
   , noImportedDefinitions
-  , OutsideReach (..)
-  , noOutsideReach
-  , reachFrom
   , IndexRow (..)
   , currentIndexFormat
   ) where
@@ -108,39 +105,6 @@ data ImportedDefinitions = ImportedDefinitions
 -- | Nothing resolved from outside, and nothing reachable either.
 noImportedDefinitions :: ImportedDefinitions
 noImportedDefinitions = ImportedDefinitions Map.empty Map.empty
-
--- | How far outside its own component a resolution pass can see.
---
--- A function rather than the table 'ImportedDefinitions' carries, because
--- the two callers reach outside by different means and only one of them
--- can enumerate what it will need.  The server preloads exactly the
--- modules its index named; the CLI has no index, so it unpacks a
--- dependency only once a candidate names a module in it — a table would
--- mean unpacking every dependency of the package being asked about before
--- answering anything.
---
--- 'orSites' can be missing a name the module exports — the index may still
--- be building, and it is empty outright for the CLI — so consumers fall
--- back to resolving through imports and must never read a miss as \"no
--- such symbol\".
-data OutsideReach m = OutsideReach
-  { orSites  :: !(Map SymbolName DefinitionRef)
-    -- ^ Definition sites something else already resolved transitively.
-  , orModule :: !(ModulePath -> m (Maybe (ComponentKey, ModuleSource)))
-    -- ^ The source of a module outside the asking component, if we can
-    -- get at it.
-  }
-
--- | No dependency graph to resolve through: every lookup misses.
-noOutsideReach :: Applicative m => OutsideReach m
-noOutsideReach = OutsideReach Map.empty (const (pure Nothing))
-
--- | Everything the caller already holds, and nothing beyond it.
-reachFrom :: Applicative m => ImportedDefinitions -> OutsideReach m
-reachFrom imported = OutsideReach
-  { orSites  = idSites imported
-  , orModule = \m -> pure (Map.lookup m (idSources imported))
-  }
 
 -- | One search-index entry.
 --

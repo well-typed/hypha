@@ -134,6 +134,7 @@ library
     Hypha.Source.Locate
     Hypha.Source.Origins
     Hypha.Source.Parser
+    Hypha.Source.Reach
     Hypha.Hackage.Source
     Hypha.Cabal.RepoCache
   build-depends:

@@ -28,6 +28,7 @@ module Hypha.Search.Reexport
   , definitionModule
   , sharedSegments
   , supplierCandidates
+  , supplierCandidatesByKind
   ) where
 
 import Data.Containers.ListUtils (nubOrd)
@@ -188,10 +189,25 @@ resolveComponent ifaces = fixpoint seeded
 -- the call site would let the two disagree about which candidate is best.
 supplierCandidates :: ModuleInterface -> SymbolName -> [ModulePath]
 supplierCandidates i n =
+  let (explicit, open) = supplierCandidatesByKind i n in explicit <> open
+
+-- | 'supplierCandidates' with the two groups still apart, ranked within
+-- each.
+--
+-- A chain that fans out needs them apart.  Flattening one module's
+-- candidates loses which of them were explicit, and a descent that then
+-- concatenates one module's list after another's puts every /open/ import
+-- of the first module ahead of every /explicit/ import of the second —
+-- which inverts the preference this ranking exists to express as soon as
+-- the frontier has more than one parent in it.
+supplierCandidatesByKind
+  :: ModuleInterface -> SymbolName -> ([ModulePath], [ModulePath])
+supplierCandidatesByKind i n =
   let (preferred, open) = importCandidates i n
       explicit          = nubOrd preferred
-  in rankAround (miName i) explicit
-       ++ rankAround (miName i) [ m | m <- nubOrd open, m `notElem` explicit ]
+  in ( rankAround (miName i) explicit
+     , rankAround (miName i) [ m | m <- nubOrd open, m `notElem` explicit ]
+     )
 
 -- | An explicit import list is a statement about where a name comes from;
 -- an unrestricted import is not.  So the two groups are kept apart:

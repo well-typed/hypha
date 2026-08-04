@@ -339,9 +339,7 @@ runClientCommand = \case
     oc <- liftIO (Module.runModuleFromDir d pid modPath)
     pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
-  SymbolCommand arg -> do
-    (resolver, env) <- loadResolver
-    liftEitherIO (Symbol.runSymbolWith env resolver arg)
+  SymbolCommand arg -> runSymbolArm arg
 
   SourceCommand arg -> do
     (pkgT, modPath, mSym) <- parsePkgModOptSym arg
@@ -416,6 +414,19 @@ runSourceArm ref modPath mSym = do
   reach <- liftIO (dependencyReach plan resolver pid)
   oc  <- liftEitherIO (Source.runSourceFromDir reach pid dir modPath mSym)
   pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
+
+-- | Symbol command arm.  Shares the reach with 'runSourceArm', because it
+-- shares the question: the module a user names is often a facade, and a
+-- card that stops at the facade has nothing to say.
+runSymbolArm :: Text -> Hypha (Outcome Value)
+runSymbolArm arg = do
+  (resolver, env, plan) <- loadResolverAndPlan
+  -- The producer rather than a reach: a reach is anchored on the package
+  -- being asked about, and the argument naming it is parsed inside
+  -- 'Symbol.runSymbolWith'.  Handing over 'dependencyReach' partially
+  -- applied keeps that parse in one place.
+  liftEitherIO
+    (Symbol.runSymbolWith env resolver (dependencyReach plan resolver) arg)
 
 -- | Drive the tiered @lookup@ command.  Builds the package cache
 -- and project Hoogle handle, then runs the cascade.  Project root
