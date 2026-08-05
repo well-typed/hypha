@@ -4,7 +4,8 @@ Four findings were fixed on this branch: the two criticals (cold-machine
 ownership, and refusing a module the package does not have), the
 `exhausted`-vs-`blocked` verdict, and `--offline` silently downloading.
 Everything below is what the same review turned up and we chose not to act
-on today. Each block is ready to paste into `glab issue create`.
+on today. All ten are now filed as #22–#31; the text is kept here because
+the measurements behind each one live with the branch that made them.
 
 Note on the review itself: the first pass ran with a sandbox that denied
 reads under `/home/alfredo`, so every probe of `~/.cabal` returned ENOENT
@@ -15,7 +16,7 @@ before believing a review's causal claim.
 
 ---
 
-## 1. Reuse the tarballs cabal has already downloaded, instead of fetching
+## 1. Reuse the tarballs cabal has already downloaded, instead of fetching — filed as #22
 
 **Labels:** enhancement, performance
 
@@ -46,7 +47,7 @@ at all.
 
 ---
 
-## 2. An unparseable module in the chain reports as absence
+## 2. An unparseable module in the chain reports as absence — filed as #23
 
 **Labels:** bug
 
@@ -73,7 +74,7 @@ unparsed-modules field), classified under the `blocked` verdict rather than
 
 ---
 
-## 3. The remaining failure arms have no envelope coverage
+## 3. The remaining failure arms have no envelope coverage — filed as #24
 
 **Labels:** test
 
@@ -90,7 +91,7 @@ Partly closed: `SearchHopLimit`, `SearchParseBudget`, `SearchNoSupplier`
 
 ---
 
-## 4. `SearchModuleUnparsed` conflates two facts and renders one of them wrong
+## 4. `SearchModuleUnparsed` conflates two facts and renders one of them wrong — filed as #25
 
 **Labels:** bug
 
@@ -107,7 +108,7 @@ sentence.
 
 ---
 
-## 5. The homonym fixture passes with the fix reverted
+## 5. The homonym fixture passes with the fix reverted — filed as #26
 
 **Labels:** test
 
@@ -125,7 +126,7 @@ frontier needs two parents that supply candidates by different kinds.
 
 ---
 
-## 6. The gap list drains the whole closure into one message
+## 6. The gap list drains the whole closure into one message — filed as #27
 
 **Labels:** bug, ux
 
@@ -146,7 +147,7 @@ actually sent us to, and cap or summarise the rendered list.
 
 ---
 
-## 7. Own-component modules are re-parsed and charged the parse budget
+## 7. Own-component modules are re-parsed and charged the parse budget — filed as #28
 
 **Labels:** performance
 
@@ -163,7 +164,7 @@ spurious `SearchParseBudget`.
 
 ---
 
-## 8. The swept path never reports `defined_in`
+## 8. The swept path never reports `defined_in` — filed as #29
 
 **Labels:** bug
 
@@ -179,7 +180,7 @@ returning more than a `SourceLocation`.
 
 ---
 
-## 9. `DefinedIn` and its encoder are declared twice
+## 9. `DefinedIn` and its encoder are declared twice — filed as #30
 
 **Labels:** refactor
 
@@ -191,7 +192,7 @@ commands an agent reads interchangeably.
 
 ---
 
-## 10. Smaller items
+## 10. Smaller items — filed as #31 (retitled there)
 
 - `unreadable_dependencies` is the wrong wire key for `GapUnitNotInPlan`,
   which is a missing plan entry, not an unreadable dependency.
