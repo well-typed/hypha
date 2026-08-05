@@ -268,7 +268,7 @@ errorActions = \case
     [ ("package", renderPackageId pid)
     , ("module",  unModulePath asking)
     , ("symbol",  unSymbolName sym)
-    , ("search",  searchOutcome failure)
+    , ("search",  searchOutcome gaps failure)
     ]
       <> searchDetail failure
       <> [ ("unreadable_dependencies",
@@ -298,23 +298,42 @@ errorActions = \case
 
 -- | Whether the search settled the question or stopped short of it.
 --
--- Two words rather than six, so a consumer can branch on the only
+-- A few words rather than a sentence, so a consumer can branch on the only
 -- distinction that changes what it should do next; 'searchDetail' carries
 -- the specifics.
-searchOutcome :: SymbolSearchFailure -> Text
-searchOutcome = \case
+--
+-- The gaps are an input because a drained frontier means two different
+-- things depending on them.  Every candidate read and none declaring the
+-- name is a settled question: @exhausted@, believe it.  A frontier that
+-- drained while something in it could not be read at all settles nothing —
+-- and reporting that as @exhausted@ told the reader the search had
+-- established an absence it never looked at.  That is the same lie
+-- 'SymbolSearchFailure' was introduced to stop telling about bounds, in
+-- the one field an agent actually branches on.
+searchOutcome :: [ReachGap] -> SymbolSearchFailure -> Text
+searchOutcome gaps = \case
   SearchHopLimit{}     -> "stopped_at_bound"
   SearchParseBudget{}  -> "stopped_at_bound"
+  -- Established from the asking module's own parse, so nothing outside it
+  -- could have changed the answer: a gap is not a reason to doubt these.
   SearchNotExported{}  -> "exhausted"
-  SearchNoSupplier{}   -> "exhausted"
   SearchNotDeclared{}  -> "exhausted"
-  SearchModuleUnparsed{} -> "exhausted"
-  SearchSweptPackage{} -> "exhausted"
+  -- The chain left the component, so what could not be read bears
+  -- directly on whether the answer means anything.
+  SearchNoSupplier{}   -> blockedIfAnyGaps
+  SearchModuleUnparsed{} -> blockedIfAnyGaps
+  SearchSweptPackage{} -> blockedIfAnyGaps
   -- Neither "we stopped looking" nor "we looked and it is not there": the
   -- module the question named is not in this package, so no search over
   -- its symbols was ever meaningful.  A consumer should fix the module
   -- name, not widen a bound or believe an absence.
   SearchModuleAbsent   -> "module_absent"
+  where
+    -- @unreadable_dependencies@ already carries which ones, so the verdict
+    -- only has to say that the outcome rests on them.
+    blockedIfAnyGaps
+      | null gaps = "exhausted"
+      | otherwise = "blocked"
 
 -- | The values the search stopped on, for the cases that have any.
 searchDetail :: SymbolSearchFailure -> [(Text, Text)]

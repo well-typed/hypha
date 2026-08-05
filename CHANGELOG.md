@@ -180,6 +180,13 @@ loosely follows [Semantic Versioning](https://semver.org/).
   The envelope now carries which of the two happened (`search:
   stopped_at_bound` vs `exhausted`), the bound that was hit, the candidate
   modules considered, and any dependency whose source could not be read.
+  A third verdict, `blocked`, covers the case the other two hid: a chain
+  that drained while something in it could not be read has established no
+  absence, and calling that `exhausted` told an agent the search had ruled
+  out a symbol it never managed to look at. Verdicts established from the
+  asking module's own parse (`does not export it`) stay `exhausted` however
+  many gaps there are, because nothing outside the component could have
+  changed them.
 - **A module reached through an open import cannot win on a private
   homonym.** The descent took "declares the name" as "defines it", so a
   local helper called `lines` or `null` in a module that does not export it

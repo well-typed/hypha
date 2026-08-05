@@ -44,32 +44,35 @@ at all.
 
 ---
 
-## 2. `search: exhausted` is claimed for searches that were blocked
+## 2. `--offline` does not stop the source path from fetching
 
 **Labels:** bug
 
-`searchOutcome` (`src/Hypha/Error.hs`) maps every non-bound failure to
-`"exhausted"` and never looks at the gaps. So a chain that stopped because
-a dependency was unreadable, or because a module would not parse, reports
-the same verdict as one that looked everywhere and established the symbol
-is absent. `test/Golden/golden/source-facade-no-plan.compact.json` pins the
-contradiction: `"search": "exhausted"` beside
-`"unreadable_dependencies": "the build plan has no unit for 'reexport' …"`.
+Measured 2026-08-05: with an empty `--cache-dir` **and** `--offline`,
+`hypha source base/Data.List/sortOn` answered, and both `base-4.20.2.0` and
+`ghc-internal-9.1003.0` appeared in the cache directory afterwards. Neither
+has a tarball anywhere under `~/.cabal`, so both came over HTTP from
+Hackage — with the flag that exists to forbid exactly that.
 
-This is the same defect the typed failure was introduced to remove — "we
-stopped looking" must not read as "it is not there".
+`resolvePackageSourceWith`'s `materialise` falls through
+`locateRepoTarball` to `fetchAndExtractSource` with no offline predicate in
+the way. Pre-existing for the root package (that fetch has always been on
+this path); the owner-fetch step added for #20 extends it to dependencies,
+which is how it was noticed.
 
-**Fix sketch:** make the verdict gap-aware (a third value, `blocked` or
-`incomplete`, when the failure is a non-bound case and the gap list is
-non-empty). `searchOutcome` is already called from a branch that holds the
-gaps.
+**Fix sketch:** the offline flag has to reach `materialise`. Either the
+`HackageClient` refuses in offline mode (returning `OfflineCacheMiss`, which
+`hackageErrorToHypha` already maps to a `NotFound`) or the resolver checks
+before calling it. The gap machinery already has somewhere honest to put
+the result: `GapOwnerUnfetchable`.
 
 **Acceptance criteria**
 
-- A query blocked by an unreadable dependency reports a verdict distinct
-  from `exhausted`.
-- The `source-facade-no-plan` golden is regenerated and no longer pairs
-  `exhausted` with a non-empty gap list.
+- `--offline` with an empty cache and no local tarball fails rather than
+  downloading, and says the offline flag is why.
+- A test asserts no HTTP client call is made under `--offline` (the
+  recording-resolver pattern in `test/Unit/SourceDependencies.hs` is the
+  model).
 
 ---
 
@@ -100,22 +103,20 @@ unparsed-modules field), classified with issue 2's new verdict rather than
 
 ---
 
-## 4. `stopped_at_bound` reaches the envelope untested
+## 4. The remaining failure arms have no envelope coverage
 
 **Labels:** test
 
-`SearchHopLimit` / `SearchParseBudget` are asserted only as locator return
-values (`test/Unit/SourceLocate.hs`). Nothing asserts they reach the
-envelope. Mutation that should fail and does not: make `searchOutcome`
-return `"exhausted"` unconditionally and delete `searchDetail`'s
-`hop_limit` / `stopped_at` / `parse_budget` rows — the suite stays green.
-`SearchNotExported`, `SearchNotDeclared` and `SearchSweptPackage` have no
-envelope coverage in any form either.
+Partly closed: `SearchHopLimit`, `SearchParseBudget`, `SearchNoSupplier`
+(both verdicts) and `SearchNotExported` are now asserted through
+`errorActions` in `test/Unit/SourceLocate.hs`. `SearchNotDeclared`,
+`SearchModuleUnparsed` and `SearchSweptPackage` still are not — their
+`resolved_to` / `scanned` rows can be deleted with the suite green.
 
 **Acceptance criteria**
 
-- A test drives `errorActions` over a `SearchHopLimit` failure and asserts
-  `search: stopped_at_bound` plus the bound.
+- Each remaining constructor has one assertion over `errorActions`
+  covering its verdict and its detail rows.
 
 ---
 

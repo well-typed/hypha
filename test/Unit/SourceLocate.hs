@@ -9,22 +9,28 @@ module Unit.SourceLocate (tests) where
 
 import           Data.List (isInfixOf)
 import qualified Data.Map.Strict as Map
+import           Data.Text (Text)
+import qualified Data.Text as Text
 
 import Test.Tasty       (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import qualified GHC.LanguageExtensions as LangExt
 
+import           Hypha.Error
+                   ( HyphaError (..), NotFoundReason (..), errorActions )
 import qualified Hypha.Source.Locate as Locate
 import           Hypha.Search.Index
                    ( DefinitionRef (..), ImportedDefinitions (..)
                    , ModuleSource (..), Visibility (..) )
 import           Hypha.Source.Reach
-                   ( OutsideReach, SymbolSearchFailure (..), noOutsideReach
-                   , reachFrom )
+                   ( OutsideReach, ReachGap (..), SymbolSearchFailure (..)
+                   , noOutsideReach, reachFrom )
 import           Hypha.Source.Extensions
                    (LanguageSettings (..), defaultLanguageSettings)
 import           Hypha.Types.ComponentName (ComponentKey (..))
+import           Hypha.Types.PackageId
+                   (PackageId (..), PackageName (..), Version (..))
 import           Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 import           Util.Fixture (depSources, fixtureSources, sourcesFor)
 
@@ -234,9 +240,70 @@ tests = testGroup "Unit.SourceLocate"
           assertBool "not the private homonym"
             (not ("Homonym" `isInfixOf` Locate.slPath (Locate.ldLocation ld)))
         Left err -> failWith err "expected the exporting module to win"
+
+    -- The verdict, on the wire.  Everything above asserts what the locator
+    -- returns; these assert what an agent reads, which is the only place
+    -- the distinction does any work.  Nothing pinned this before: making
+    -- `searchOutcome` return "exhausted" unconditionally and deleting
+    -- `searchDetail`'s rows left the whole suite green, so the field the
+    -- typed failure exists to populate was free to say anything.
+  , testCase "a bound reaches the envelope as a bound, with its value" $ do
+      let actions = envelopeFor (SearchHopLimit 3 [ModulePath "Dep.Facade"]) []
+      Map.lookup "search"    actions @?= Just "stopped_at_bound"
+      Map.lookup "hop_limit" actions @?= Just "3"
+      Map.lookup "stopped_at" actions @?= Just "Dep.Facade"
+
+  , testCase "a spent budget is a bound too, and says which" $ do
+      let actions = envelopeFor (SearchParseBudget 64) []
+      Map.lookup "search"       actions @?= Just "stopped_at_bound"
+      Map.lookup "parse_budget" actions @?= Just "64"
+
+  , testCase "a frontier that drained with everything readable is exhausted" $ do
+      -- The one case where believing the absence is correct.
+      let actions = envelopeFor (SearchNoSupplier [ModulePath "Dep.Facade"]) []
+      Map.lookup "search" actions @?= Just "exhausted"
+
+  , testCase "a frontier that drained around an unreadable dependency is not" $ do
+      -- Critical from review: this reported "exhausted" -- that the search
+      -- had established the symbol is absent -- when a dependency in the
+      -- chain could not be read at all.  On a cold machine that was the
+      -- normal outcome of every cross-package query, so an agent reading
+      -- `search` concluded the symbol did not exist.
+      let actions = envelopeFor (SearchNoSupplier [ModulePath "Dep.Facade"])
+                      [GapNoLocalSource depId]
+      Map.lookup "search" actions @?= Just "blocked"
+      assertBool "and which dependency it rests on"
+        (maybe False ("reexport-dep" `Text.isInfixOf`)
+           (Map.lookup "unreadable_dependencies" actions))
+
+  , testCase "a gap does not soften a verdict the asking module settled" $ do
+      -- "Does not export it" comes from the asking module's own parse, so
+      -- nothing outside the component could have changed it.  Reporting
+      -- that as blocked would be the opposite error: an absence the reader
+      -- should believe, dressed up as a search that failed.
+      let actions = envelopeFor SearchNotExported [GapNoLocalSource depId]
+      Map.lookup "search" actions @?= Just "exhausted"
   ]
 
 -- | Fail with the reason the search gave, so a broken expectation says
 -- which arm it landed in rather than only that it did not succeed.
 failWith :: SymbolSearchFailure -> String -> IO a
 failWith err what = fail (what <> "; got: " <> show err)
+
+-- | The @actions@ map the CLI would print for a failed search.
+--
+-- Through 'errorActions' on a real 'HyphaError', not through
+-- 'searchOutcome' directly: the wiring between the two is what was
+-- untested, and a test that called the renderer itself would keep passing
+-- if the envelope stopped consulting it.
+envelopeFor :: SymbolSearchFailure -> [ReachGap] -> Map.Map Text Text
+envelopeFor failure gaps = errorActions $ NotFound $ NotFoundSymbol
+  (PackageId (PackageName "reexport") (Version "0.1.0"))
+  (ModulePath "Fixture.TwoHop")
+  (SymbolName "depThing")
+  failure
+  gaps
+
+-- | The dependency the fixture plan names, as a gap would carry it.
+depId :: PackageId
+depId = PackageId (PackageName "reexport-dep") (Version "0.1.0")
