@@ -231,16 +231,33 @@ locateSymbolSite reach pid srcDir asking sym = do
       fmap ResolvedSite
         <$> locateDefinitionInComponent langs (compKey kind) sources
               reach asking sym
+    -- The scan is for a module we cannot resolve, never for one the
+    -- package does not have.  Ranking every same-named binding in the
+    -- tree by shared path suffix will always find *something*:
+    -- @containers\/Data.Map.Strct\/insertWith@ (one letter missing) came
+    -- back as the @IntMap@ function, exit 0, under the misspelled module's
+    -- own name — a confident wrong answer where the predecessor of this
+    -- code path had correctly said the module was not there.
+    --
+    -- A module the components do not list but whose file exists is a real
+    -- case — generated modules, CPP-selected platform variants — and stays
+    -- scannable.  Both readable-cabal cases are distinguished from "this
+    -- package has no library stanza at all", which is the one the scan was
+    -- introduced for.
     [] -> do
-      hPutStrLn stderr $
-        "hypha: no cabal component of " <> srcDir <> " lists "
-          <> Text.unpack (unModulePath asking)
-          <> "; falling back to a package scan"
-      swept <- locateSymbolDefinitionInDir srcDir
-                 (unModulePath asking) (unSymbolName sym)
-      pure $ case swept of
-        Just loc -> Right (SweptSite loc)
-        Nothing  -> Left (SearchSweptPackage srcDir)
+      mFile <- findModuleFile srcDir (unModulePath asking)
+      case (comps, mFile) of
+        (_ : _, Nothing) -> pure (Left SearchModuleAbsent)
+        _                -> do
+          hPutStrLn stderr $
+            "hypha: no cabal component of " <> srcDir <> " lists "
+              <> Text.unpack (unModulePath asking)
+              <> "; falling back to a package scan"
+          swept <- locateSymbolDefinitionInDir srcDir
+                     (unModulePath asking) (unSymbolName sym)
+          pure $ case swept of
+            Just loc -> Right (SweptSite loc)
+            Nothing  -> Left (SearchSweptPackage srcDir)
 
 -- | The error a failed location becomes, with the reach's own gaps folded
 -- in.

@@ -25,6 +25,9 @@ module Util.Fixture
   , resolverFor
   , planBackedReach
   , planlessReach
+    -- * Who owns a module, without a compiler
+  , ownerOracleOver
+  , noOwnerOracle
   ) where
 
 import           Data.Map.Strict qualified as Map
@@ -37,6 +40,7 @@ import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
 import Hypha.Search.Index (ModuleSource (..), Visibility (..))
 import Hypha.Search.Indexer (packageSources)
 import Hypha.Source.Dependencies (dependencyReach)
+import Hypha.Source.Origins (ModuleOwnerOracle (..), OriginError)
 import Hypha.Source.Reach (OutsideReach)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
@@ -148,9 +152,29 @@ resolverFor table = PackageResolver
         (hit : _) -> Just hit
         []        -> Nothing
 
+-- | An owner oracle over an explicit module table, standing in for
+-- @ghc-pkg@.
+--
+-- The production oracle selects the plan's compiler by running it and then
+-- shells out per module, so a suite that used it would be testing the
+-- machine.  What the walk needs from it is one fact per module, and this
+-- supplies exactly that.
+ownerOracleOver
+  :: [(ModulePath, PackageId)]
+  -> IO (Either OriginError (ModuleOwnerOracle IO))
+ownerOracleOver table = pure $ Right $ ModuleOwnerOracle $ \m ->
+  pure (Right [ pid | (owned, pid) <- table, owned == m ])
+
+-- | An oracle that knows nothing, which is what every test about the
+-- unpacked-dependency walk wants: it must reach its answers without
+-- ownership having to rescue it.
+noOwnerOracle :: IO (Either OriginError (ModuleOwnerOracle IO))
+noOwnerOracle = ownerOracleOver []
+
 -- | The real producer over the fixture plan — the same call the CLI makes.
 planBackedReach :: IO (OutsideReach IO)
-planBackedReach = dependencyReach fixturePlan fixtureResolver reexportId
+planBackedReach =
+  dependencyReach fixturePlan fixtureResolver noOwnerOracle reexportId
 
 -- | The same producer with no plan, which is what the CLI builds outside a
 -- project.
@@ -159,4 +183,5 @@ planBackedReach = dependencyReach fixturePlan fixtureResolver reexportId
 -- for this: the two coincide today, and a test pinned to the stand-in would
 -- keep passing if the production path stopped agreeing with it.
 planlessReach :: IO (OutsideReach IO)
-planlessReach = dependencyReach emptyBuildPlan fixtureResolver reexportId
+planlessReach =
+  dependencyReach emptyBuildPlan fixtureResolver noOwnerOracle reexportId

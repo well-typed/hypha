@@ -20,7 +20,7 @@ import Hypha.Output.Outcome (Outcome)
 import Hypha.Source.Dependencies (dependencyReach)
 import Hypha.Types.BuildPlan (emptyBuildPlan)
 import Hypha.Types.PackageId (Version (..))
-import Util.Fixture (asyncDir, asyncId, resolverFor)
+import Util.Fixture (asyncDir, asyncId, noOwnerOracle, resolverFor)
 
 -- | Mock BuildEnv that points to the fixture source directory.
 mockBuildEnv :: FilePath -> BuildEnv IO
@@ -61,5 +61,5 @@ runSymbolCommand =
       let env      = mockBuildEnv asyncDir
           resolver = resolverFor [(asyncId, asyncDir)]
       ExceptT (liftIO (runSymbolWith env resolver
-                        (dependencyReach emptyBuildPlan resolver)
+                        (dependencyReach emptyBuildPlan resolver noOwnerOracle)
                         "async/Control.Concurrent.Async/concurrently"))

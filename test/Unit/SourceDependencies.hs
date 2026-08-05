@@ -19,20 +19,23 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import Hypha.Package.Resolver (PackageResolver (..))
 import Hypha.Source.Dependencies (dependencyReach)
 import Hypha.Source.Extensions (LanguageSettings (..))
+import Hypha.Error (HyphaError (..), NotFoundReason (..))
+import Hypha.Source.Origins (OriginError (..))
 import Hypha.Source.Reach
   ( OutsideModule (..), OutsideReach (..), ReachGap (..) )
 import Hypha.Search.Index (ModuleSource (..), Visibility (..))
-import Hypha.Types.BuildPlan (emptyBuildPlan)
+import Hypha.Types.BuildPlan (CompilerId (..), emptyBuildPlan)
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), pkgName)
 import Hypha.Types.SymbolPath (ModulePath (..))
 import Util.Fixture
-  (fixturePlan, fixtureResolver, reexportDepId, reexportId, resolverFor)
+  ( fixturePlan, fixtureResolver, noOwnerOracle, ownerOracleOver
+  , reexportDepId, reexportId, resolverFor )
 
 tests :: TestTree
 tests = testGroup "Unit.SourceDependencies"
   [ testCase "a dependency's module is reached through the plan" $ do
-      reach <- dependencyReach fixturePlan fixtureResolver reexportId
+      reach <- dependencyReach fixturePlan fixtureResolver noOwnerOracle reexportId
       orModule reach (ModulePath "Dep.Internal") >>= \case
         Nothing -> fail "the plan named reexport-dep but its module was not reached"
         Just om -> do
@@ -48,7 +51,7 @@ tests = testGroup "Unit.SourceDependencies"
   , testCase "the intermediate facade is reached too, not just the declaration" $ do
       -- Both hops of the chain have to be readable, or the descent stops
       -- at the facade with nothing to ask about the next hop.
-      reach <- dependencyReach fixturePlan fixtureResolver reexportId
+      reach <- dependencyReach fixturePlan fixtureResolver noOwnerOracle reexportId
       orModule reach (ModulePath "Dep.Facade") >>= \case
         Nothing -> fail "Dep.Facade was not reached"
         Just om -> assertBool "the facade's own file"
@@ -60,7 +63,7 @@ tests = testGroup "Unit.SourceDependencies"
       -- ghc-internal's modules -- GHC/Internal/Control/Monad/ST/Lazy.hs is
       -- five deep -- and every module of a dependency whose hs-source-dirs
       -- is not one of six guessed names.  The cabal stanza has no depth.
-      reach <- dependencyReach fixturePlan fixtureResolver reexportId
+      reach <- dependencyReach fixturePlan fixtureResolver noOwnerOracle reexportId
       orModule reach (ModulePath "Dep.Deep.Down.Below.Buried") >>= \case
         Nothing -> fail "a module five directories deep was not reached"
         Just om -> assertBool "the buried file"
@@ -72,7 +75,7 @@ tests = testGroup "Unit.SourceDependencies"
       -- package boundary the very bug the locator documents fixing one hop
       -- earlier: a dependency with stanza-wide extensions and no per-module
       -- pragma failed to parse.
-      reach <- dependencyReach fixturePlan fixtureResolver reexportId
+      reach <- dependencyReach fixturePlan fixtureResolver noOwnerOracle reexportId
       orModule reach (ModulePath "Dep.Hidden") >>= \case
         Nothing -> fail "Dep.Hidden was not reached"
         Just om -> do
@@ -81,7 +84,7 @@ tests = testGroup "Unit.SourceDependencies"
             (not (null (lsDefaultOn (omLanguage om))))
 
   , testCase "a module no dependency has is a miss, not a wrong answer" $ do
-      reach <- dependencyReach fixturePlan fixtureResolver reexportId
+      reach <- dependencyReach fixturePlan fixtureResolver noOwnerOracle reexportId
       found <- orModule reach (ModulePath "Dep.NoSuchModule")
       fmap omComponent found @?= Nothing
 
@@ -90,7 +93,7 @@ tests = testGroup "Unit.SourceDependencies"
       -- already holds the package's own sources.  Serving them here would
       -- attribute them to whichever dependency the walk happened to reach
       -- first.
-      reach <- dependencyReach fixturePlan fixtureResolver reexportId
+      reach <- dependencyReach fixturePlan fixtureResolver noOwnerOracle reexportId
       found <- orModule reach (ModulePath "Fixture.Internal")
       fmap omComponent found @?= Nothing
 
@@ -99,7 +102,7 @@ tests = testGroup "Unit.SourceDependencies"
       -- be followed.  The gap is the whole point -- without it the caller
       -- reports "nothing was reachable" and never why, which is
       -- indistinguishable from the symbol not existing.
-      reach <- dependencyReach emptyBuildPlan fixtureResolver reexportId
+      reach <- dependencyReach emptyBuildPlan fixtureResolver noOwnerOracle reexportId
       found <- orModule reach (ModulePath "Dep.Internal")
       fmap omComponent found @?= Nothing
       gaps <- orGaps reach
@@ -111,7 +114,7 @@ tests = testGroup "Unit.SourceDependencies"
       -- search that came up short for want of a tarball must not read as
       -- one that came up short because the symbol is absent.  Asserting the
       -- gap is what keeps the report from being deleted unnoticed.
-      reach <- dependencyReach fixturePlan (resolverFor []) reexportId
+      reach <- dependencyReach fixturePlan (resolverFor []) noOwnerOracle reexportId
       found <- orModule reach (ModulePath "Dep.Internal")
       fmap omComponent found @?= Nothing
       gaps <- orGaps reach
@@ -130,8 +133,99 @@ tests = testGroup "Unit.SourceDependencies"
                 modifyIORef' asked (pkgName p :)
                 resolveSrc base p
             }
-      reach <- dependencyReach fixturePlan recording reexportId
+      reach <- dependencyReach fixturePlan recording noOwnerOracle reexportId
       _     <- orModule reach (ModulePath "Dep.NoSuchModule")
       fetched <- readIORef asked
       fetched @?= []
+
+    -- The cold machine.  Everything below is about the case where no
+    -- dependency is unpacked, which is every machine that has not already
+    -- run hypha: the cabal store keeps no sources, so `cabal build` alone
+    -- leaves `resolveSrcLocal` nothing to find.  Measured against a real
+    -- GHC 9.10.3 plan with an empty cache dir, `hypha source
+    -- base/Data.List/sortOn` reported NOT_FOUND with `search: exhausted`
+    -- for a chain that is perfectly followable -- issue #20's own
+    -- acceptance criterion, failing for everyone but us.
+  , testCase "the unit that owns a module is fetched when nothing is unpacked" $ do
+      asked <- newIORef []
+      let cold = fixtureResolver
+            { resolveSrcLocal = \_ -> pure Nothing
+            , resolveSrc = \p -> do
+                modifyIORef' asked (pkgName p :)
+                resolveSrc fixtureResolver p
+            }
+          owner = ownerOracleOver
+            [ (ModulePath "Dep.Internal", reexportDepId) ]
+      reach <- dependencyReach fixturePlan cold owner reexportId
+      orModule reach (ModulePath "Dep.Internal") >>= \case
+        Nothing -> fail "the owner was known and its source was reachable"
+        Just om -> assertBool "the file the owner actually declares it in"
+          ("depThing ::" `Text.isInfixOf` msContent (omSource om))
+      -- Exactly the owner, and only the owner: the point of asking who
+      -- owns the module is that the other dependencies are never paid for.
+      fetched <- readIORef asked
+      fetched @?= [pkgName reexportDepId]
+
+  , testCase "ownership is asked once, not once per miss" $ do
+      -- Two lookups the walk cannot answer locally.  A second subprocess
+      -- for the same question is the cost this memoisation exists to
+      -- avoid; a chain asks about the same modules repeatedly as it
+      -- descends.
+      asks <- newIORef (0 :: Int)
+      let counting = do
+            modifyIORef' asks (+ 1)
+            ownerOracleOver []
+          cold = fixtureResolver { resolveSrcLocal = \_ -> pure Nothing }
+      reach <- dependencyReach fixturePlan cold counting reexportId
+      _ <- orModule reach (ModulePath "Dep.Internal")
+      _ <- orModule reach (ModulePath "Dep.Facade")
+      built <- readIORef asks
+      built @?= 1
+
+  , testCase "a module no installed unit owns is not fetched at all" $ do
+      -- The oracle answering "nobody" is an answer, not a failure, and it
+      -- must not become a fetch: that is the speculative download the walk
+      -- refuses to make.
+      asked <- newIORef []
+      let cold = fixtureResolver
+            { resolveSrcLocal = \_ -> pure Nothing
+            , resolveSrc = \p -> do
+                modifyIORef' asked (pkgName p :)
+                resolveSrc fixtureResolver p
+            }
+      reach <- dependencyReach fixturePlan cold noOwnerOracle reexportId
+      found <- orModule reach (ModulePath "Dep.Internal")
+      fmap omComponent found @?= Nothing
+      readIORef asked >>= \fetched -> fetched @?= []
+
+  , testCase "an owner whose source will not come says so, and names it" $ do
+      -- The fetch is the last thing standing between the reader and the
+      -- answer, so its failure is the one gap that explains the outcome.
+      -- Reported rather than collapsed into "nothing was reachable".
+      let cold = fixtureResolver
+            { resolveSrcLocal = \_ -> pure Nothing
+            , resolveSrc = \p ->
+                pure (Left (NotFound (NotFoundPackageInPlan (pkgName p))))
+            }
+          owner = ownerOracleOver
+            [ (ModulePath "Dep.Internal", reexportDepId) ]
+      reach <- dependencyReach fixturePlan cold owner reexportId
+      found <- orModule reach (ModulePath "Dep.Internal")
+      fmap omComponent found @?= Nothing
+      gaps <- orGaps reach
+      assertBool ("the unfetchable owner is named; got " <> show gaps)
+        (GapOwnerUnfetchable reexportDepId (ModulePath "Dep.Internal")
+           `elem` gaps)
+
+  , testCase "an unaskable oracle is reported, not silently skipped" $ do
+      -- Without this the user is told the symbol was not found, when what
+      -- happened is that we could not work out where to look.
+      let cold  = fixtureResolver { resolveSrcLocal = \_ -> pure Nothing }
+          broke = OriginCompilerMissing (CompilerId "ghc-9.10.3") ["nothing"]
+      reach <- dependencyReach fixturePlan cold (pure (Left broke)) reexportId
+      found <- orModule reach (ModulePath "Dep.Internal")
+      fmap omComponent found @?= Nothing
+      gaps <- orGaps reach
+      assertBool ("the compiler's own reason travels; got " <> show gaps)
+        (GapOwnerUnaskable broke `elem` gaps)
   ]

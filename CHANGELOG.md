@@ -142,13 +142,38 @@ loosely follows [Semantic Versioning](https://semver.org/).
   the stanza also settles which component owns a module, whether it is
   exposed, and which extensions it parses under: the last of these
   reintroduced across a package boundary a bug fixed one hop earlier.
-- **Following a chain no longer reaches for the network.** A single missed
-  module name walked the whole dependency closure through the full
-  resolution chain — tarball extraction, then Hackage over HTTP — so
+- **Following a chain no longer reaches for the network speculatively.** A
+  single missed module name walked the whole dependency closure through the
+  full resolution chain — tarball extraction, then Hackage over HTTP — so
   `hypha source base/Prelude/lines` answered correctly and printed
   `Hackage HTTP 404 for 'rts'` on the way, for a package the query never
   needed. Speculative probes now consult only what is already unpacked, and
   what was skipped is reported where it could actually explain a failure.
+- **A cross-package chain resolves on a machine that has never run
+  hypha.** Making the probe local-only left nothing on this path able to
+  put a dependency's source on disk: no cabal store entry ships a `src`
+  directory and `cabal build` unpacks nothing a query can read, so with an
+  empty source cache `hypha source base/Data.List/sortOn` — the case the
+  feature exists for — answered `NOT_FOUND` with `search: exhausted` and
+  advised `cabal build`, which does not help. Ownership is now decided
+  before anything is fetched: `ghc-pkg` names the one unit that exposes the
+  module, from the package databases, without reading a source file, and
+  that unit alone is materialised. A cold `base/Data.List/sortOn` fetches
+  `ghc-internal` and nothing else — not `ghc-prim`, `ghc-bignum` or `rts`,
+  which the previous gap report listed for a chain that never needed them.
+  A fetch that fails, and a machine whose compiler cannot be asked, are
+  each reported as themselves.
+- **`hypha symbol` and `hypha source` no longer answer for a module the
+  package does not have.** Routing both through the shared locator made a
+  misspelled module fall through to the package-wide scan, which ranks
+  every same-named binding by shared path suffix and so always finds
+  something: `hypha symbol containers/Data.Map.Strct/insertWith` (one
+  letter missing) exited 0 with the `IntMap` function's signature and
+  Haddock, under `module: Data.Map.Strct`. The scan is now reached only
+  when the package has no readable library stanza — the case it was added
+  for — or when the module's file exists but no stanza lists it (generated
+  modules, CPP-selected variants). Otherwise the envelope says
+  `search: module_absent`.
 - **A search that stopped early no longer reports the symbol as absent.**
   Hitting the hop limit or the parse budget produced the same `NOT_FOUND`
   as a name that does not exist, plus a stderr line contradicting it.

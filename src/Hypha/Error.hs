@@ -310,6 +310,11 @@ searchOutcome = \case
   SearchNotDeclared{}  -> "exhausted"
   SearchModuleUnparsed{} -> "exhausted"
   SearchSweptPackage{} -> "exhausted"
+  -- Neither "we stopped looking" nor "we looked and it is not there": the
+  -- module the question named is not in this package, so no search over
+  -- its symbols was ever meaningful.  A consumer should fix the module
+  -- name, not widen a bound or believe an absence.
+  SearchModuleAbsent   -> "module_absent"
 
 -- | The values the search stopped on, for the cases that have any.
 searchDetail :: SymbolSearchFailure -> [(Text, Text)]
@@ -326,6 +331,7 @@ searchDetail = \case
   SearchModuleUnparsed m -> [ ("resolved_to", unModulePath m) ]
   SearchSweptPackage dir -> [ ("scanned",     Text.pack dir) ]
   SearchNotExported      -> []
+  SearchModuleAbsent     -> []
   where
     renderModuleList = Text.intercalate ", " . map unModulePath
 

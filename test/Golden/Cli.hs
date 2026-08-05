@@ -102,6 +102,37 @@ tests = testGroup "Golden.Cli"
       assertBool
         ("expected the facade's own import to be named; got:\n" <> out)
         ("Dep.Facade" `isInfixOfStr` out)
+
+    -- Critical from review, measured against a real plan: routing `symbol`
+    -- through the shared locator turned "no such module" into a confident
+    -- wrong answer.  `hypha symbol containers/Data.Map.Strct/insertWith`
+    -- (one letter missing) exited 0 with the *IntMap* signature and
+    -- haddock, under `module: Data.Map.Strct` -- the misspelling echoed
+    -- back as if it were real.  The package-wide scan ranks by shared path
+    -- suffix, so it always finds something.
+  , testCase "a module the package does not have is refused, not scanned for" $ do
+      (ec, out, _err) <- readProcessWithExitCode "hypha"
+        [ "--json", "--project-dir", facadeProject
+        , "symbol", "reexport/Fixture.TwoHopp/depThing" ] ""
+      assertBool ("a failing exit code; got:\n" <> out) (ec /= ExitSuccess)
+      assertBool
+        ("expected the module_absent verdict; got:\n" <> out)
+        ("module_absent" `isInfixOfStr` out)
+      -- The wrong answer this replaces was a *filled-in card*, so the
+      -- absence of one is the assertion that matters.
+      assertBool
+        ("no signature may be offered for a module that is not there; got:\n" <> out)
+        (not ("signature" `isInfixOfStr` out))
+
+  , testCase "hypha source refuses the same absent module" $ do
+      -- Both commands share the locator, so both had the defect.
+      (ec, out, _err) <- readProcessWithExitCode "hypha"
+        [ "--json", "--project-dir", facadeProject
+        , "source", "reexport/Fixture.TwoHopp/depThing" ] ""
+      assertBool ("a failing exit code; got:\n" <> out) (ec /= ExitSuccess)
+      assertBool
+        ("expected the module_absent verdict; got:\n" <> out)
+        ("module_absent" `isInfixOfStr` out)
   ]
   where
     facadeProject = "test/fixtures/facade-project"

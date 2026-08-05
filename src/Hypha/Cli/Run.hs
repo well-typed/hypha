@@ -62,6 +62,7 @@ import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (loadBuildPlan, planHash)
 import Hypha.Search.PackageCache qualified as PC
 import Hypha.Source.Dependencies (dependencyReach)
+import Hypha.Source.Origins qualified as Origins
 import Hypha.Types
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId
@@ -411,7 +412,7 @@ runSourceArm ref modPath mSym = do
   -- followed through.  Outside a project it is empty, which makes the
   -- reach empty too: the plan-less path keeps reporting the re-export it
   -- cannot follow rather than guessing at one.
-  reach <- liftIO (dependencyReach plan resolver pid)
+  reach <- liftIO (dependencyReach plan resolver (ownerOracleFor plan) pid)
   oc  <- liftEitherIO (Source.runSourceFromDir reach pid dir modPath mSym)
   pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
@@ -426,7 +427,27 @@ runSymbolArm arg = do
   -- 'Symbol.runSymbolWith'.  Handing over 'dependencyReach' partially
   -- applied keeps that parse in one place.
   liftEitherIO
-    (Symbol.runSymbolWith env resolver (dependencyReach plan resolver) arg)
+    (Symbol.runSymbolWith env resolver
+       (dependencyReach plan resolver (ownerOracleFor plan)) arg)
+
+-- | How the reach asks which unit owns a module: @ghc-pkg@ over the global
+-- database and every store database we can find.
+--
+-- Returned as the action itself, unrun.  It selects the plan's compiler by
+-- executing it, and a query the unpacked dependencies already answer must
+-- not pay for that — nor should a machine whose @ghc@ does not match the
+-- plan hear about it on a query that succeeded.  A database root we cannot
+-- list is reported rather than dropped: every unit under it would
+-- otherwise look like one nothing owns.
+ownerOracleFor
+  :: BuildPlan -> IO (Either Origins.OriginError (Origins.ModuleOwnerOracle IO))
+ownerOracleFor plan = do
+  (dbs, unreadable) <- Origins.discoverPackageDbs compiler
+  mapM_ (warnText . Origins.renderOriginError) unreadable
+  Origins.mkGhcModuleOwnerOracle compiler dbs
+  where
+    compiler = bpCompiler plan
+    warnText t = hPutStrLn stderr ("hypha: " <> Text.unpack t)
 
 -- | Drive the tiered @lookup@ command.  Builds the package cache
 -- and project Hoogle handle, then runs the cascade.  Project root

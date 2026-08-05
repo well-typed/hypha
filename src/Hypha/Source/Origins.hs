@@ -30,6 +30,9 @@ module Hypha.Source.Origins
     -- * Asking for it
   , OriginOracle (..)
   , mkGhcOriginOracle
+    -- * Which package owns a module
+  , ModuleOwnerOracle (..)
+  , mkGhcModuleOwnerOracle
     -- * Errors
   , OriginError (..)
   , renderOriginError
@@ -61,7 +64,8 @@ import System.Process qualified as Process
 
 import Hypha.Types.BuildPlan (CompilerId (..))
 import Hypha.Types.PackageId
-  ( PackageId (..), PackageName (..), Version (..) )
+  ( PackageId (..), PackageName (..), PackageRef (..), Version (..)
+  , parsePackageRef )
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 
 -- | The defining modules of each name a compiled module exports.
@@ -141,6 +145,29 @@ renderPkg pid = unPackageName (pkgName pid) <> "-" <> unVersion (pkgVersion pid)
 -- subprocess in production.
 newtype OriginOracle m = OriginOracle
   { moduleOrigins :: PackageId -> ModulePath -> m (Either OriginError ModuleOrigins)
+  }
+
+-- | Ask which installed packages expose a module.
+--
+-- The question "Hypha.Source.Dependencies" cannot answer from disk.  A
+-- dependency's module list is only knowable once its source is unpacked,
+-- so a walk that will not fetch can only find the owner of a module among
+-- the dependencies that happen to be unpacked already — and on a machine
+-- where none are, every cross-package chain dies at the first hop.
+-- Unpacking the closure to find out which unit owns one module is the
+-- speculation that walk exists to avoid.
+--
+-- @ghc-pkg@ has the answer without a single source file: the databases it
+-- reads list @exposed-modules@ per unit.  Ownership therefore costs no
+-- download, and exactly one unit — the owner — has to be materialised.
+newtype ModuleOwnerOracle m = ModuleOwnerOracle
+  { moduleOwners :: ModulePath -> m (Either OriginError [PackageId])
+    -- ^ The units exposing a module, in @ghc-pkg@'s own order.
+    --
+    -- A list because a module name is not unique across a database: two
+    -- versions of one package, or a package and its own internal library,
+    -- can both expose it.  Empty means no installed unit exposes it, which
+    -- is an answer ("nothing owns this") and not a failure.
   }
 
 -- Parsing ------------------------------------------------------------
@@ -328,6 +355,53 @@ mkGhcOriginOracle cid dbs known = do
           -- Several when the store holds one version under more than one
           -- hash; each is tried in turn, so no choice is made here.
           dirs -> Right (map (Text.unpack . Text.strip) dirs)
+
+-- | A module-owner oracle backed by the compiler the plan was solved
+-- with, reading the global database and every store database given.
+--
+-- @ghc-pkg find-module@ is the whole implementation: it answers from the
+-- databases and never looks at a source tree, which is the property the
+-- caller needs — ownership has to be decidable /before/ anything is
+-- fetched, or the fetch is a guess.
+--
+-- Answers are remembered per module.  A chain asks about the same handful
+-- of modules repeatedly as it descends, and each miss would otherwise be
+-- another subprocess.
+mkGhcModuleOwnerOracle
+  :: CompilerId
+  -> [FilePath]                  -- ^ package databases to stack on the global one
+  -> IO (Either OriginError (ModuleOwnerOracle IO))
+mkGhcModuleOwnerOracle cid dbs = do
+  found <- locateToolchain cid
+  case found of
+    Left err -> pure (Left err)
+    Right tc -> do
+      seen <- IORef.newIORef Map.empty
+      pure (Right (ModuleOwnerOracle (cachedOwners tc seen)))
+  where
+    cachedOwners tc seen m = do
+      remembered <- IORef.readIORef seen
+      case Map.lookup m remembered of
+        Just cached -> pure cached
+        Nothing     -> do
+          fresh <- ownersVia tc m
+          IORef.atomicModifyIORef' seen (\c -> (Map.insert m fresh c, ()))
+          pure fresh
+
+    -- @--simple-output@ prints bare unit ids and nothing else, so no
+    -- output means no unit exposes the module.  A package id without a
+    -- version is dropped rather than defaulted: it would name a package
+    -- whose source we could not then ask for.
+    ownersVia tc m = do
+      out <- runTool (gtGhcPkg tc)
+               ( ["--global"] ++ map ("--package-db=" <>) dbs
+                 ++ ["find-module", Text.unpack (unModulePath m)
+                    , "--simple-output"] )
+      pure (mapMaybe unitId . concatMap Text.words . Text.lines <$> out)
+
+    unitId raw = case parsePackageRef raw of
+      PackageRef name (Just ver) -> Just (PackageId name ver)
+      PackageRef _    Nothing    -> Nothing
 
 -- | The first reachable installation whose @ghc@ reports the plan's
 -- version.

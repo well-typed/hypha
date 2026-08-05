@@ -36,6 +36,7 @@ import Data.Text qualified as Text
 import Hypha.Search.Index
   ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource )
 import Hypha.Source.Extensions (LanguageSettings)
+import Hypha.Source.Origins (OriginError, renderOriginError)
 import Hypha.Types.ComponentName (ComponentKey)
 import Hypha.Types.PackageId
   (PackageId, PackageName (..), renderPackageId)
@@ -128,11 +129,22 @@ data ReachGap
     -- | A dependency with no unpacked source on disk.  Deliberately not
     -- fetched: probing a candidate module name against every dependency
     -- of the package is speculative, and a tarball download per probe is
-    -- not a proportionate price for a guess.
+    -- not a proportionate price for a guess.  The one unit that
+    -- /does/ own the module being looked for is fetched instead; see
+    -- 'GapOwnerUnfetchable' and 'GapOwnerUnaskable' for that path failing.
   | GapNoLocalSource !PackageId
     -- | A dependency whose cabal file named no library, so its modules
     -- had to be guessed at by walking directories.
   | GapNoModuleList  !PackageId !FilePath
+    -- | The unit that owns a needed module was identified, and its source
+    -- could not be materialised.  The resolver's own error is reported
+    -- where it happens — this records that the owner was known and the
+    -- fetch is why the chain still stopped.
+  | GapOwnerUnfetchable !PackageId !ModulePath
+    -- | Which unit owns a module could not be established at all, so the
+    -- walk had only the unpacked dependencies to go on.  Carries the
+    -- compiler's own reason.
+  | GapOwnerUnaskable !OriginError
   deriving stock (Show, Eq)
 
 -- | Why looking for a symbol's definition did not reach one.
@@ -169,6 +181,13 @@ data SymbolSearchFailure
     -- resolved and the only option left was scanning its files — which
     -- found no such binding.  Carries the directory scanned.
   | SearchSweptPackage !FilePath
+    -- | The package's own components are readable and none of them has
+    -- the module, nor is there a file for it under the source directory.
+    -- The module does not exist in this package, so there is no chain to
+    -- follow and nothing to scan for: a misspelling answered by a
+    -- package-wide scan comes back as a confident wrong answer under the
+    -- name that was asked for.
+  | SearchModuleAbsent
   deriving stock (Show, Eq)
 
 -- | Say what happened, given the module and symbol the caller asked
@@ -198,6 +217,9 @@ renderSymbolSearchFailure asking sym failure = case failure of
     "no library stanza under " <> Text.pack dir <> " lists "
       <> unModulePath asking <> ", and scanning the package found no '"
       <> unSymbolName sym <> "'"
+  SearchModuleAbsent ->
+    "no component of the package has " <> unModulePath asking
+      <> ", and no file for it exists under its source directory"
   where
     reexports =
       unModulePath asking <> " re-exports '" <> unSymbolName sym <> "'"
@@ -214,9 +236,18 @@ renderReachGap gap = case gap of
       <> "', so its dependencies are unknown and a re-export leaving it"
       <> " cannot be followed"
   GapNoLocalSource pid ->
-    renderPackageId pid <> " has no unpacked source on disk, so a"
-      <> " re-export into it cannot be followed; `cabal build` puts it there"
+    renderPackageId pid <> " has no unpacked source on disk, so it could"
+      <> " not be searched for a module without fetching it; only the unit"
+      <> " that owns a needed module is fetched"
   GapNoModuleList pid dir ->
     renderPackageId pid <> " has no readable library stanza under "
       <> Text.pack dir <> ", so its module list was guessed by walking"
       <> " directories and may be incomplete"
+  GapOwnerUnfetchable pid m ->
+    renderPackageId pid <> " owns " <> unModulePath m
+      <> " and its source could not be fetched; `cabal get "
+      <> renderPackageId pid <> "` puts it where hypha looks"
+  GapOwnerUnaskable err ->
+    "which package owns a module could not be established, so only"
+      <> " dependencies already unpacked were searched: "
+      <> renderOriginError err
