@@ -1,8 +1,10 @@
 # Issue drafts from the #20 re-review (2026-08-05)
 
-Two criticals were fixed in the commit that carries this file. Everything
-below is what the same review turned up and we chose not to act on today.
-Each block is ready to paste into `glab issue create`.
+Four findings were fixed on this branch: the two criticals (cold-machine
+ownership, and refusing a module the package does not have), the
+`exhausted`-vs-`blocked` verdict, and `--offline` silently downloading.
+Everything below is what the same review turned up and we chose not to act
+on today. Each block is ready to paste into `glab issue create`.
 
 Note on the review itself: the first pass ran with a sandbox that denied
 reads under `/home/alfredo`, so every probe of `~/.cabal` returned ENOENT
@@ -44,39 +46,7 @@ at all.
 
 ---
 
-## 2. `--offline` does not stop the source path from fetching
-
-**Labels:** bug
-
-Measured 2026-08-05: with an empty `--cache-dir` **and** `--offline`,
-`hypha source base/Data.List/sortOn` answered, and both `base-4.20.2.0` and
-`ghc-internal-9.1003.0` appeared in the cache directory afterwards. Neither
-has a tarball anywhere under `~/.cabal`, so both came over HTTP from
-Hackage — with the flag that exists to forbid exactly that.
-
-`resolvePackageSourceWith`'s `materialise` falls through
-`locateRepoTarball` to `fetchAndExtractSource` with no offline predicate in
-the way. Pre-existing for the root package (that fetch has always been on
-this path); the owner-fetch step added for #20 extends it to dependencies,
-which is how it was noticed.
-
-**Fix sketch:** the offline flag has to reach `materialise`. Either the
-`HackageClient` refuses in offline mode (returning `OfflineCacheMiss`, which
-`hackageErrorToHypha` already maps to a `NotFound`) or the resolver checks
-before calling it. The gap machinery already has somewhere honest to put
-the result: `GapOwnerUnfetchable`.
-
-**Acceptance criteria**
-
-- `--offline` with an empty cache and no local tarball fails rather than
-  downloading, and says the offline flag is why.
-- A test asserts no HTTP client call is made under `--offline` (the
-  recording-resolver pattern in `test/Unit/SourceDependencies.hs` is the
-  model).
-
----
-
-## 3. An unparseable module in the chain reports as absence
+## 2. An unparseable module in the chain reports as absence
 
 **Labels:** bug
 
@@ -93,7 +63,7 @@ blocked by one has established nothing.
 
 **Fix sketch:** give `Probe` a distinct `ProbeUnparsed !ModulePath` arm and
 carry those modules into the failure (`SearchNoSupplier` gaining an
-unparsed-modules field), classified with issue 2's new verdict rather than
+unparsed-modules field), classified under the `blocked` verdict rather than
 `exhausted`.
 
 **Acceptance criteria**
@@ -103,7 +73,7 @@ unparsed-modules field), classified with issue 2's new verdict rather than
 
 ---
 
-## 4. The remaining failure arms have no envelope coverage
+## 3. The remaining failure arms have no envelope coverage
 
 **Labels:** test
 
@@ -120,7 +90,7 @@ Partly closed: `SearchHopLimit`, `SearchParseBudget`, `SearchNoSupplier`
 
 ---
 
-## 5. `SearchModuleUnparsed` conflates two facts and renders one of them wrong
+## 4. `SearchModuleUnparsed` conflates two facts and renders one of them wrong
 
 **Labels:** bug
 
@@ -137,7 +107,7 @@ sentence.
 
 ---
 
-## 6. The homonym fixture passes with the fix reverted
+## 5. The homonym fixture passes with the fix reverted
 
 **Labels:** test
 
@@ -155,7 +125,7 @@ frontier needs two parents that supply candidates by different kinds.
 
 ---
 
-## 7. The gap list drains the whole closure into one message
+## 6. The gap list drains the whole closure into one message
 
 **Labels:** bug, ux
 
@@ -176,7 +146,7 @@ actually sent us to, and cap or summarise the rendered list.
 
 ---
 
-## 8. Own-component modules are re-parsed and charged the parse budget
+## 7. Own-component modules are re-parsed and charged the parse budget
 
 **Labels:** performance
 
@@ -193,7 +163,7 @@ spurious `SearchParseBudget`.
 
 ---
 
-## 9. The swept path never reports `defined_in`
+## 8. The swept path never reports `defined_in`
 
 **Labels:** bug
 
@@ -209,7 +179,7 @@ returning more than a `SourceLocation`.
 
 ---
 
-## 10. `DefinedIn` and its encoder are declared twice
+## 9. `DefinedIn` and its encoder are declared twice
 
 **Labels:** refactor
 
@@ -221,7 +191,7 @@ commands an agent reads interchangeably.
 
 ---
 
-## 11. Smaller items
+## 10. Smaller items
 
 - `unreadable_dependencies` is the wrong wire key for `GapUnitNotInPlan`,
   which is a missing plan entry, not an unreadable dependency.
@@ -251,5 +221,8 @@ commands an agent reads interchangeably.
 - `test/fixtures/reexport/src/Fixture/ViaWide.hs` is not listed in
   `reexport.cabal`, so no cabal-driven query reaches the wide-ring shape.
 - New wire fields (`defined_in`, `search`, `hop_limit`, `parse_budget`,
-  `candidates_considered`, `unreadable_dependencies`, `module_absent`) are
-  undocumented in `docs/` and `README.md`.
+  `candidates_considered`, `unreadable_dependencies`, `module_absent`,
+  `blocked`) are undocumented in `docs/` and `README.md`.
+- `Hypha.Hackage.Api.OfflineMode` is exported and never used anywhere. Now
+  that the client carries the capability itself, the type describes a
+  distinction nothing reads; delete it or use it.

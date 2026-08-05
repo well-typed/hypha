@@ -149,6 +149,16 @@ loosely follows [Semantic Versioning](https://semver.org/).
   `Hackage HTTP 404 for 'rts'` on the way, for a package the query never
   needed. Speculative probes now consult only what is already unpacked, and
   what was skipped is reported where it could actually explain a failure.
+- **`--offline` no longer downloads.** `fetchAndExtractSource` took a
+  `HackageClient`, bound it to `_hclient`, and built its own connection
+  manager, so the source path fetched whatever it wanted: `hypha --offline
+  --cache-dir <empty> source base/Data.List/sortOn` answered having pulled
+  both `base` and `ghc-internal` from Hackage, neither of which has a
+  tarball under `~/.cabal`. Offline mode is expressed by *which client was
+  built* and nothing else, so the tarball fetch is now a field of the
+  client: the offline one has no way to reach the network rather than a
+  branch that can be forgotten. Offline with a warm cache still answers
+  from it.
 - **A cross-package chain resolves on a machine that has never run
   hypha.** Making the probe local-only left nothing on this path able to
   put a dependency's source on disk: no cabal store entry ships a `src`

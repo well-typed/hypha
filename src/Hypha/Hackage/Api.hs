@@ -64,6 +64,16 @@ data OfflineMode = Online | Offline
 data HackageClient m = HackageClient
   { fetchPackageJson :: PackageName -> m (Either HackageError Value)
   , fetchVersions    :: PackageName -> m (Either HackageError [Version])
+  , fetchSourceTarball :: PackageId -> m (Either HackageError LBS.ByteString)
+    -- ^ The bytes of a package's source tarball, from Hackage.
+    --
+    -- A field of the client rather than a free function, because
+    -- @--offline@ is expressed by /which client was built/ and nothing
+    -- else.  'Hypha.Hackage.Source.fetchAndExtractSource' used to take a
+    -- client, ignore it, and build its own 'Manager' — so an offline
+    -- invocation downloaded anyway, and no amount of care at the call site
+    -- could have stopped it.  Here the offline client simply has no way to
+    -- reach the network, which is the only version of this that stays true.
   }
 
 -- | Errors that can occur when fetching from Hackage.
@@ -157,6 +167,11 @@ mkHackageClient manager cacheDir = do
     , fetchVersions = \pkgName -> do
         throttle limiter
         fetchVersionsOnline manager cacheDir pkgName
+      -- Rate-limited like the metadata calls: a cold cross-package chain
+      -- can ask for a tarball, and Hackage is a shared service.
+    , fetchSourceTarball = \pid -> do
+        throttle limiter
+        fetchSourceTarballOnline manager pid
     }
 
 -- | Create an offline HackageClient that serves only from the on-disk cache.
@@ -170,6 +185,12 @@ mkOfflineHackageClient cacheDir = pure HackageClient
   { fetchPackageJson = fetchPackageJsonOffline cacheDir
   , fetchVersions = \pkgName ->
       fmap extractVersionList <$> fetchPackageJsonOffline cacheDir pkgName
+    -- There is no cache of tarball /bytes/ to serve from: an extracted
+    -- tree is what gets kept, and the resolver has already looked there
+    -- before it reaches the client.  So this is a refusal, not a miss to
+    -- fall back from -- and saying which package could not be had is what
+    -- lets the caller name it.
+  , fetchSourceTarball = \pid -> pure (Left (OfflineCacheMiss (pkgName pid)))
   }
 
 fetchPackageJsonOffline :: FilePath -> PackageName -> IO (Either HackageError Value)
@@ -234,6 +255,27 @@ fetchVersionsOnline :: Manager -> FilePath -> PackageName -> IO (Either HackageE
 fetchVersionsOnline manager cacheDir pkgName = do
   result <- fetchPackageJsonOnline manager cacheDir pkgName
   pure (fmap extractVersionList result)
+
+-- | Download a source tarball's bytes.
+--
+-- Not cached here: the caller extracts these into a source tree it keeps,
+-- and holding the tarball as well would be the same package twice on disk.
+fetchSourceTarballOnline
+  :: Manager -> PackageId -> IO (Either HackageError LBS.ByteString)
+fetchSourceTarballOnline manager pid = do
+  req <- parseRequest (sourceTarballUrl pid)
+  let req' = req { requestHeaders = [(hUserAgent, userAgent)] }
+  -- Only 'HttpException', which is what 'httpLbs' throws; anything else
+  -- (permissions, async cancellation) belongs to the top-level handler.
+  result <- try (httpLbs req' manager)
+              :: IO (Either HttpException (Response LBS.ByteString))
+  pure $ case result of
+    Left ex    -> Left (NetworkError (displayException ex))
+    Right resp ->
+      let status = statusCode (responseStatus resp)
+      in if status >= 200 && status < 300
+           then Right (responseBody resp)
+           else Left (HttpError status)
 
 -- | Pull every version key out of a package.json response.  Hackage's
 -- @\<pkg\>.json@ is a flat @{ "0.6.7": "normal", "0.7": "deprecated" }@

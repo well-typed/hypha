@@ -6,13 +6,15 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Time (getCurrentTime, secondsToNominalDiffTime)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, assertEqual, assertBool)
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 
 import Hypha.Hackage.Api
   (HackageClient(..), HackageError(..), mkOfflineHackageClient, packageJsonUrl)
+import Hypha.Hackage.Source (fetchAndExtractSource)
 import Hypha.Hackage.Cache (mkCacheKey, insertCache)
 import Hypha.Hackage.Types (CacheKind(..), CachedResponse(..))
-import Hypha.Types.PackageId (PackageName(..), Version(..))
+import Hypha.Types.PackageId (PackageId(..), PackageName(..), Version(..))
 
 tests :: TestTree
 tests = testGroup "Unit.Hackage"
@@ -64,4 +66,39 @@ tests = testGroup "Unit.Hackage"
         result <- fetchVersions client pkgName
         assertEqual "versions read back from the package.json cache entry"
           (Right [Version "0.3.0.2", Version "0.0.1.0"]) result
+
+  , testCase "Offline mode refuses to fetch a source tarball" $
+      withSystemTempDirectory "hypha-hackage" $ \cacheDir -> do
+        -- Measured before this existed: `hypha --offline --cache-dir <empty>
+        -- source base/Data.List/sortOn` answered, having downloaded both
+        -- base and ghc-internal from Hackage.  `fetchAndExtractSource` took
+        -- a client, ignored it, and built its own Manager, so the flag could
+        -- not be honoured however carefully the caller was written.
+        client <- mkOfflineHackageClient cacheDir
+        let pid = PackageId (PackageName "async") (Version "2.2.5")
+        result <- fetchSourceTarball client pid
+        case result of
+          Left (OfflineCacheMiss name) ->
+            assertEqual "names the package it would not fetch"
+              (PackageName "async") name
+          Left other -> fail ("Expected OfflineCacheMiss, got: " ++ show other)
+          Right _ -> fail "an offline client must not return tarball bytes"
+
+  , testCase "Extraction asks the client for the bytes, and nothing else" $
+      withSystemTempDirectory "hypha-hackage" $ \destParent -> do
+        -- The wiring, not the refusal: a stub client whose tarball arm is
+        -- an error proves `fetchAndExtractSource` goes through the record.
+        -- If it ever builds its own Manager again, this passes only while
+        -- offline -- so the assertion is that the stub's own error comes
+        -- back, verbatim.
+        let stub = HackageClient
+              { fetchPackageJson   = \n -> pure (Left (OfflineCacheMiss n))
+              , fetchVersions      = \n -> pure (Left (OfflineCacheMiss n))
+              , fetchSourceTarball = \_ -> pure (Left (HttpError 451))
+              }
+            pid = PackageId (PackageName "async") (Version "2.2.5")
+        result <- fetchAndExtractSource stub pid (destParent </> "async-2.2.5")
+        case result of
+          Left (HttpError 451) -> pure ()
+          other -> fail ("expected the client's own error, got: " ++ show other)
   ]

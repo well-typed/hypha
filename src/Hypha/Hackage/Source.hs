@@ -1,63 +1,50 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
--- | HTTP download for package source tarballs.
+-- | Unpacking package source tarballs.
 --
 -- The cache-first fallback chain (cabal-install repo cache → hypha
--- source cache → HTTP) lives in 'Hypha.Package.Resolver'.  This
--- module only handles the network step itself: an actual GET against
--- @hackage.haskell.org@, written to a temp file and extracted via the
--- pure-Haskell pipeline in 'Hypha.Cabal.RepoCache'.
+-- source cache → Hackage) lives in 'Hypha.Package.Resolver'.  This
+-- module only handles the last step: bytes from the 'HackageClient',
+-- written to a temp file and extracted via the pure-Haskell pipeline in
+-- 'Hypha.Cabal.RepoCache'.  Whether those bytes may be fetched at all is
+-- the client's business, not this module's.
 module Hypha.Hackage.Source
   ( fetchAndExtractSource
   , enumerateSourceCache
   ) where
 
-import Control.Exception (displayException)
-import Control.Exception.Safe (try)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Network.HTTP.Client
-  ( HttpException, Response, httpLbs, newManager, parseRequest, requestHeaders
-  , responseStatus, responseBody
-  )
-import Network.HTTP.Client.TLS (tlsManagerSettings)
-import Network.HTTP.Types.Header (hUserAgent)
-import Network.HTTP.Types.Status (statusCode)
 import System.Directory
   ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
   , listDirectory, removeFile )
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Cabal.RepoCache (extractTarballGz)
-import Hypha.Hackage.Api (HackageClient (..), HackageError (..), sourceTarballUrl, userAgent)
+import Hypha.Hackage.Api (HackageClient (..), HackageError (..))
 import Hypha.Types.PackageId (PackageId (..))
 
--- | Download a source tarball from Hackage and extract it into
--- @destDir@.  This is the network-only path; callers that want the
--- cabal-install repo cache consulted first should go through
--- 'Hypha.Package.Resolver.resolveSrc' rather than calling here
--- directly.
+-- | Extract a package's source tarball into @destDir@, asking the client
+-- for the bytes.  Callers that want the cabal-install repo cache consulted
+-- first should go through 'Hypha.Package.Resolver.resolveSrc' rather than
+-- calling here directly.
+--
+-- The bytes come from 'fetchSourceTarball' rather than from a 'Manager'
+-- built here, which is what makes @--offline@ mean anything on this path:
+-- this function used to take a client, bind it to @_hclient@, and download
+-- regardless, so an offline invocation with an empty cache fetched
+-- @base@ and @ghc-internal@ from Hackage and reported success. An offline
+-- client now refuses in the one place the decision belongs.
 fetchAndExtractSource
   :: HackageClient IO
   -> PackageId
   -> FilePath          -- ^ Destination directory
   -> IO (Either HackageError FilePath)
-fetchAndExtractSource _hclient pid destDir = do
-  let url = sourceTarballUrl pid
-  mgr <- newManager tlsManagerSettings
-  req <- parseRequest url
-  let req' = req { requestHeaders = [(hUserAgent, userAgent)] }
-  -- Only catch 'HttpException' here: it's what 'httpLbs' throws.
-  -- Anything else (filesystem permission errors, async cancellation,
-  -- ...) bubbles up to the top-level catchAny in @app/hypha/Main.hs@.
-  result <- try (httpLbs req' mgr) :: IO (Either HttpException (Response LBS.ByteString))
-  case result of
-    Left ex -> pure (Left (NetworkError (displayException ex)))
-    Right resp -> do
-      let status = statusCode (responseStatus resp)
-      if status >= 200 && status < 300
-        then writeAndExtract (responseBody resp)
-        else pure (Left (HttpError status))
+fetchAndExtractSource hclient pid destDir =
+  fetchSourceTarball hclient pid >>= \case
+    Left err   -> pure (Left err)
+    Right body -> writeAndExtract body
   where
     writeAndExtract body = do
       createDirectoryIfMissing True (takeDirectory destDir)
