@@ -34,9 +34,13 @@ import Hypha.Project.Discovery (DiscoveryError (..))
 import Hypha.Project.Overrides (OverrideError, renderOverrideError)
 import Hypha.Project.Plan (PlanError (..))
 import Hypha.Server.Bind (BindError, renderBindError)
+import Hypha.Source.Reach
+  ( ReachGap, SymbolSearchFailure (..), renderReachGap
+  , renderSymbolSearchFailure )
 import Hypha.Types.BuildPlan (ProjectRoot (..))
 import Hypha.Types.PackageId
-  ( PackageId (..), PackageName (..), Version (..) )
+  ( PackageId (..), PackageName (..), renderPackageId )
+import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 
 -- | Typed reasons a CLI invocation can be rejected as user error.  Each
 -- variant captures the structured input that failed validation
@@ -89,7 +93,19 @@ data NotFoundReason
     -- | Module file not found anywhere under a search directory.
   | NotFoundModuleFileUnder  !FilePath !Text
     -- | Symbol not found inside an otherwise-located module.
-  | NotFoundSymbol           !PackageId !Text !Text
+    --
+    -- Carries /why/, because \"not found\" is four different facts and
+    -- only one of them means the symbol is absent: the search may have
+    -- stopped at a hop limit or a parse budget, and it may have been
+    -- looking through a dependency graph with holes in it.  A consumer
+    -- that cannot tell those apart cannot tell a retry-worthy answer from
+    -- a settled one.
+  | NotFoundSymbol
+      !PackageId
+      !ModulePath
+      !SymbolName
+      !SymbolSearchFailure
+      ![ReachGap]
   deriving stock (Show, Eq)
 
 renderNotFoundReason :: NotFoundReason -> Text
@@ -110,12 +126,25 @@ renderNotFoundReason = \case
   NotFoundModuleFileUnder  srcDir modPath ->
     "module file not found under " <> Text.pack srcDir
       <> " for " <> modPath
-  NotFoundSymbol           pid modPath sym ->
-    "symbol '" <> sym <> "' not found in " <> renderPid pid
-      <> "/" <> modPath
+  NotFoundSymbol           pid asking sym failure gaps ->
+    renderPid pid <> ": "
+      <> renderSymbolSearchFailure asking sym failure
+      <> renderGaps gaps
+
+-- | The dependencies a search could not read, appended to the reason it
+-- came up short.
+--
+-- Part of the message rather than a footnote: a symbol that is genuinely
+-- absent and a symbol whose defining package was never unpacked produce
+-- the same \"not found\" otherwise, and the second is fixed by
+-- @cabal build@ while the first is not.
+renderGaps :: [ReachGap] -> Text
+renderGaps []   = ""
+renderGaps gaps =
+  " (also: " <> Text.intercalate "; " (map renderReachGap gaps) <> ")"
 
 renderPid :: PackageId -> Text
-renderPid (PackageId (PackageName n) (Version v)) = n <> "-" <> v
+renderPid = renderPackageId
 
 -- | Umbrella error type produced by hypha.  Every fallible boundary of
 -- the CLI funnels through this ADT.  Constructors embed precise
@@ -230,6 +259,22 @@ errorExitCode = \case
 -- the constructor are rendered here — never at the call site.
 errorActions :: HyphaError -> Map Text Text
 errorActions = \case
+  -- The one 'NotFound' that carries structure worth exposing: an agent
+  -- deciding whether to retry, widen, or believe the answer needs to know
+  -- whether the search finished, and if it stopped, on which bound and at
+  -- which modules.  Rendered here, at the wire boundary, from the values
+  -- the search already had.
+  NotFound (NotFoundSymbol pid asking sym failure gaps) -> Map.fromList $
+    [ ("package", renderPackageId pid)
+    , ("module",  unModulePath asking)
+    , ("symbol",  unSymbolName sym)
+    , ("search",  searchOutcome gaps failure)
+    ]
+      <> searchDetail failure
+      <> [ ("unreadable_dependencies",
+              Text.intercalate "; " (map renderReachGap gaps))
+         | not (null gaps)
+         ]
   HoogleOffline (HoogleQuery q) tiers -> Map.fromList
     [ ("retry_online",    "hypha lookup " <> q)
     , ("query",           q)
@@ -250,6 +295,64 @@ errorActions = \case
     ]
   HackageFailure _ (Hackage.TarballFailure tErr) -> tarballRecoveryActions tErr
   _ -> Map.empty
+
+-- | Whether the search settled the question or stopped short of it.
+--
+-- A few words rather than a sentence, so a consumer can branch on the only
+-- distinction that changes what it should do next; 'searchDetail' carries
+-- the specifics.
+--
+-- The gaps are an input because a drained frontier means two different
+-- things depending on them.  Every candidate read and none declaring the
+-- name is a settled question: @exhausted@, believe it.  A frontier that
+-- drained while something in it could not be read at all settles nothing —
+-- and reporting that as @exhausted@ told the reader the search had
+-- established an absence it never looked at.  That is the same lie
+-- 'SymbolSearchFailure' was introduced to stop telling about bounds, in
+-- the one field an agent actually branches on.
+searchOutcome :: [ReachGap] -> SymbolSearchFailure -> Text
+searchOutcome gaps = \case
+  SearchHopLimit{}     -> "stopped_at_bound"
+  SearchParseBudget{}  -> "stopped_at_bound"
+  -- Established from the asking module's own parse, so nothing outside it
+  -- could have changed the answer: a gap is not a reason to doubt these.
+  SearchNotExported{}  -> "exhausted"
+  SearchNotDeclared{}  -> "exhausted"
+  -- The chain left the component, so what could not be read bears
+  -- directly on whether the answer means anything.
+  SearchNoSupplier{}   -> blockedIfAnyGaps
+  SearchModuleUnparsed{} -> blockedIfAnyGaps
+  SearchSweptPackage{} -> blockedIfAnyGaps
+  -- Neither "we stopped looking" nor "we looked and it is not there": the
+  -- module the question named is not in this package, so no search over
+  -- its symbols was ever meaningful.  A consumer should fix the module
+  -- name, not widen a bound or believe an absence.
+  SearchModuleAbsent   -> "module_absent"
+  where
+    -- @unreadable_dependencies@ already carries which ones, so the verdict
+    -- only has to say that the outcome rests on them.
+    blockedIfAnyGaps
+      | null gaps = "exhausted"
+      | otherwise = "blocked"
+
+-- | The values the search stopped on, for the cases that have any.
+searchDetail :: SymbolSearchFailure -> [(Text, Text)]
+searchDetail = \case
+  SearchNoSupplier cands ->
+    [ ("candidates_considered", renderModuleList cands) ]
+  SearchHopLimit limit frontier ->
+    [ ("hop_limit",             Text.pack (show limit))
+    , ("stopped_at",            renderModuleList frontier)
+    ]
+  SearchParseBudget budget ->
+    [ ("parse_budget",          Text.pack (show budget)) ]
+  SearchNotDeclared m    -> [ ("resolved_to", unModulePath m) ]
+  SearchModuleUnparsed m -> [ ("resolved_to", unModulePath m) ]
+  SearchSweptPackage dir -> [ ("scanned",     Text.pack dir) ]
+  SearchNotExported      -> []
+  SearchModuleAbsent     -> []
+  where
+    renderModuleList = Text.intercalate ", " . map unModulePath
 
 -- | Recovery hints for 'Hackage.TarballFailure'.  The on-disk path is
 -- already in the structured 'TarballError'; surface it to the agent

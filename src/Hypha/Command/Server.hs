@@ -45,6 +45,7 @@ import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
 import Hypha.Search.Collapse qualified as Collapse
 import Hypha.Search.Index qualified as Index
+import Hypha.Source.Reach qualified as Reach
 import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Search.PackageCache qualified as Cache
@@ -260,11 +261,23 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
             let langs   = componentLanguageSettings plan pkgT
                 cn      = parseComponentName pkgT
                 compKey = componentKeyOf (cnPackage cn) (cnKind cn)
-            mLd <- Locate.locateDefinitionInComponent langs compKey sources
-                     imported (ModulePath modT) (SymbolName symT)
-            case mLd of
-              Nothing -> pure Nothing
-              Just ld -> do
+            eLd <- Locate.locateDefinitionInComponent langs compKey sources
+                     (Reach.reachFrom (componentLanguageSettings plan . unComponentKey)
+                        imported)
+                     (ModulePath modT) (SymbolName symT)
+            case eLd of
+              -- No card, and a reason: the page shows the symbol as
+              -- unresolved either way, so the log line is the only place
+              -- a hop limit or an unparseable module can be told from a
+              -- name that genuinely is not there.
+              Left failure -> do
+                hPutStrLn stderr $
+                  "hypha: no card for " <> Text.unpack pkgT <> "/"
+                    <> Text.unpack modT <> "/" <> Text.unpack symT <> ": "
+                    <> Text.unpack (Reach.renderSymbolSearchFailure
+                                      (ModulePath modT) (SymbolName symT) failure)
+                pure Nothing
+              Right ld -> do
                 -- The parse that located the symbol, not a fresh one: this
                 -- used to re-read the file and re-parse it under the
                 -- GHC2021 floor, discarding both the component's

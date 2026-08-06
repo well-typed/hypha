@@ -102,8 +102,7 @@ data ImportedDefinitions = ImportedDefinitions
   }
   deriving stock (Show, Eq)
 
--- | Nothing resolved from outside: the CLI's position, with no build plan
--- and so no dependency graph to resolve through.
+-- | Nothing resolved from outside, and nothing reachable either.
 noImportedDefinitions :: ImportedDefinitions
 noImportedDefinitions = ImportedDefinitions Map.empty Map.empty
 

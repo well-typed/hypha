@@ -61,6 +61,8 @@ import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (loadBuildPlan, planHash)
 import Hypha.Search.PackageCache qualified as PC
+import Hypha.Source.Dependencies (dependencyReach)
+import Hypha.Source.Origins qualified as Origins
 import Hypha.Types
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId
@@ -201,6 +203,17 @@ enrichPlanFromStore env plan
 -- @--package-override@ values, surfaced as 'UserError'.
 loadResolver :: Hypha (PackageResolver IO, BuildEnv IO)
 loadResolver = do
+  (resolver, env, _plan) <- loadResolverAndPlan
+  pure (resolver, env)
+
+-- | 'loadResolver', keeping the plan it was built from.
+--
+-- The plan is what tells @source@ which packages a re-export may leave
+-- into, so a caller that has to follow one needs the same plan the
+-- resolver was configured with — a second 'loadProjectAndPlan' would
+-- re-read @plan.json@ and could disagree about the overrides.
+loadResolverAndPlan :: Hypha (PackageResolver IO, BuildEnv IO, BuildPlan)
+loadResolverAndPlan = do
   opts      <- askOpts
   cacheRoot <- asks heCacheDir
   hclient   <- mkHackageClientForOpts
@@ -210,7 +223,7 @@ loadResolver = do
   liftIO $ do
     env      <- mkBuildEnvFor mRoot plan
     resolver <- mkPackageResolver env hclient cacheRoot plan
-    pure (resolver, env)
+    pure (resolver, env, plan)
 
 -- | Create a basic BuildEnv (store only, no project source dirs).
 -- The active GHC's version is sniffed from @PATH@ via
@@ -327,9 +340,7 @@ runClientCommand = \case
     oc <- liftIO (Module.runModuleFromDir d pid modPath)
     pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
-  SymbolCommand arg -> do
-    (resolver, env) <- loadResolver
-    liftEitherIO (Symbol.runSymbolWith env resolver arg)
+  SymbolCommand arg -> runSymbolArm arg
 
   SourceCommand arg -> do
     (pkgT, modPath, mSym) <- parsePkgModOptSym arg
@@ -393,12 +404,50 @@ bindAddrFromFlags port mBind =
 runSourceArm
   :: PackageRef -> Text -> Maybe Text -> Hypha (Outcome Value)
 runSourceArm ref modPath mSym = do
-  (resolver, env) <- loadResolver
+  (resolver, _env, plan) <- loadResolverAndPlan
   rp  <- liftEitherIO (resolveRef resolver ref)
   let pid = rpPkgId rp
   dir <- liftEitherIO (resolveSrc resolver pid)
-  oc  <- liftEitherIO (Source.runSourceFromDir env pid dir modPath mSym)
+  -- The plan is the dependency graph a cross-package re-export is
+  -- followed through.  Outside a project it is empty, which makes the
+  -- reach empty too: the plan-less path keeps reporting the re-export it
+  -- cannot follow rather than guessing at one.
+  reach <- liftIO (dependencyReach plan resolver (ownerOracleFor plan) pid)
+  oc  <- liftEitherIO (Source.runSourceFromDir reach pid dir modPath mSym)
   pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
+
+-- | Symbol command arm.  Shares the reach with 'runSourceArm', because it
+-- shares the question: the module a user names is often a facade, and a
+-- card that stops at the facade has nothing to say.
+runSymbolArm :: Text -> Hypha (Outcome Value)
+runSymbolArm arg = do
+  (resolver, env, plan) <- loadResolverAndPlan
+  -- The producer rather than a reach: a reach is anchored on the package
+  -- being asked about, and the argument naming it is parsed inside
+  -- 'Symbol.runSymbolWith'.  Handing over 'dependencyReach' partially
+  -- applied keeps that parse in one place.
+  liftEitherIO
+    (Symbol.runSymbolWith env resolver
+       (dependencyReach plan resolver (ownerOracleFor plan)) arg)
+
+-- | How the reach asks which unit owns a module: @ghc-pkg@ over the global
+-- database and every store database we can find.
+--
+-- Returned as the action itself, unrun.  It selects the plan's compiler by
+-- executing it, and a query the unpacked dependencies already answer must
+-- not pay for that — nor should a machine whose @ghc@ does not match the
+-- plan hear about it on a query that succeeded.  A database root we cannot
+-- list is reported rather than dropped: every unit under it would
+-- otherwise look like one nothing owns.
+ownerOracleFor
+  :: BuildPlan -> IO (Either Origins.OriginError (Origins.ModuleOwnerOracle IO))
+ownerOracleFor plan = do
+  (dbs, unreadable) <- Origins.discoverPackageDbs compiler
+  mapM_ (warnText . Origins.renderOriginError) unreadable
+  Origins.mkGhcModuleOwnerOracle compiler dbs
+  where
+    compiler = bpCompiler plan
+    warnText t = hPutStrLn stderr ("hypha: " <> Text.unpack t)
 
 -- | Drive the tiered @lookup@ command.  Builds the package cache
 -- and project Hoogle handle, then runs the cascade.  Project root

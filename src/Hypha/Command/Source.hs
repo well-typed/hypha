@@ -1,14 +1,21 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module Hypha.Command.Source
   ( -- * Types
     SourceResult (..)
+  , DefinedIn (..)
     -- * Field sets
   , compactKeys
   , fullKeys
     -- * Execution
   , runSource
   , runSourceFromDir
+    -- * Shared symbol location
+  , SymbolSite (..)
+  , siteLocation
+  , locateSymbolSite
+  , symbolNotFound
   ) where
 
 import Control.Monad.IO.Class (liftIO)
@@ -25,15 +32,17 @@ import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
 import Hypha.Project.Components qualified as Comp
-import Hypha.Search.Index (ModuleSource (..), noImportedDefinitions)
+import Hypha.Search.Index (ModuleSource (..))
 import Hypha.Search.Indexer qualified as Indexer
-import Hypha.Types.ComponentName (componentKeyOf)
+import Hypha.Types.ComponentName
+  (ComponentKey (..), componentKeyOf)
 import Hypha.Source.Locate
   ( LocatedDefinition (..), SourceLocation (..), findModuleFile
   , locateDefinitionInComponent, locateSymbolDefinitionInDir )
+import Hypha.Source.Reach
+  ( OutsideReach (..), SymbolSearchFailure (..) )
 import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
 import System.IO (hPutStrLn, stderr)
-import Hypha.Types.BuildPlan (BuildPlan (..))
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | Result of a source command.
@@ -52,77 +61,134 @@ data SourceResult = SourceResult
     -- ^ Line number of the definition.
   , srcSnippet   :: !Text
     -- ^ 30-line source snippet around the definition.
+  , srcDefinedIn :: !(Maybe DefinedIn)
+    -- ^ Where the definition actually turned out to be, when that is not
+    -- the module the caller named.
+    --
+    -- @hypha source base\/Data.List\/sortOn@ answers with a path inside
+    -- @ghc-internal@, and reporting only @module: Data.List@ beside it
+    -- told the reader something false about a path they could see: a
+    -- follow-up @hypha source base\/Data.List\/…@ on the module we named
+    -- goes nowhere.  Absent when the definition is in the module asked
+    -- for, which is the common case and needs no annotation.
   }
   deriving stock (Show)
+
+-- | The module and component a definition turned out to live in.
+data DefinedIn = DefinedIn
+  { diModule    :: !ModulePath
+  , diComponent :: !ComponentKey
+  }
+  deriving stock (Show, Eq)
 
 -- | Compact field set.
 compactKeys :: Set Text
 compactKeys = Set.fromList
-  [ "package", "module", "symbol", "path", "line", "snippet" ]
+  [ "package", "module", "symbol", "path", "line", "snippet"
+  -- In the compact set because the compact set is what an agent reads by
+  -- default, and a path in another package beside an unannotated module
+  -- name is precisely where it would be misled.
+  , "defined_in" ]
 
 -- | Full field set.
 fullKeys :: Set Text
 fullKeys = Set.fromList
-  [ "package", "version", "module", "symbol", "path", "line", "snippet" ]
+  [ "package", "version", "module", "symbol", "path", "line", "snippet"
+  , "defined_in" ]
 
 -- | Execute the source command.
 --
 --   Parses the argument as @PKG/MOD[/SYM]@ and returns a 30-line snippet
 --   around the symbol definition (or the module header if no symbol).
 runSource
-  :: BuildEnv IO -> BuildPlan -> PackageId -> Text -> Maybe Text
+  :: BuildEnv IO -> OutsideReach IO -> PackageId -> Text -> Maybe Text
   -> IO (Either HyphaError (Outcome Value))
-runSource env _plan pid modPath mSym = runExceptT $ do
+runSource env reach pid modPath mSym = runExceptT $ do
   srcDir <- liftMaybe (NotFound (NotFoundSource pid))
     =<< liftIO (locatePackageSource env pid)
-  sourceFromDirE pid srcDir modPath mSym
+  sourceFromDirE reach pid srcDir modPath mSym
 
 -- | Variant that takes an already-resolved source directory.  Used by the
 -- 'PackageResolver'-driven dispatch path so the full fallback chain (plan
 -- → store → Hackage tarball) can locate sources before this command runs.
 runSourceFromDir
-  :: BuildEnv IO
+  :: OutsideReach IO
+    -- ^ The dependency closure, for a re-export that leaves the package.
   -> PackageId
   -> FilePath   -- ^ Source directory (resolved upstream).
   -> Text       -- ^ Module path (dotted).
   -> Maybe Text -- ^ Optional symbol name.
   -> IO (Either HyphaError (Outcome Value))
-runSourceFromDir _env pid srcDir modPath mSym =
-  runExceptT (sourceFromDirE pid srcDir modPath mSym)
+runSourceFromDir reach pid srcDir modPath mSym =
+  runExceptT (sourceFromDirE reach pid srcDir modPath mSym)
 
 -- | Shared ExceptT body: find the module file, locate the (optional)
 -- symbol, then build the snippet.
 sourceFromDirE
-  :: PackageId -> FilePath -> Text -> Maybe Text
+  :: OutsideReach IO -> PackageId -> FilePath -> Text -> Maybe Text
   -> ExceptT HyphaError IO (Outcome Value)
-sourceFromDirE pid srcDir modPath mSym = do
+sourceFromDirE reach pid srcDir modPath mSym = do
   -- Split, because the two cases fail differently and the merged version
   -- could build a 'NotFoundSymbol' carrying an empty symbol name -- a
   -- value no caller could ever produce.  It also stopped locating a
   -- module the component list would have found: 'findModuleFile' skips
   -- @test\/@ and @bench\/@, so a symbol in a test-suite module failed
   -- before the cabal-driven lookup ran at all.
-  loc <- case mSym of
+  site <- case mSym of
     Nothing -> do
       filePath <- liftMaybe
         (NotFound (NotFoundModuleFileUnder srcDir modPath))
         =<< liftIO (findModuleFile srcDir modPath)
-      pure (SourceLocation filePath 1)
-    Just sym -> liftMaybe
-      (NotFound (NotFoundSymbol pid modPath sym))
-      =<< liftIO (locateSymbolLoc pid srcDir modPath sym)
+      pure (SweptSite (SourceLocation filePath 1))
+    Just sym -> do
+      located <- liftIO
+        (locateSymbolSite reach pid srcDir (ModulePath modPath) (SymbolName sym))
+      case located of
+        Right s  -> pure s
+        Left err -> throwE
+          =<< liftIO (symbolNotFound reach pid (ModulePath modPath)
+                        (SymbolName sym) err)
+  let loc = siteLocation site
   content <- liftIO (TIO.readFile (slPath loc))
   let snippet = extractSnippet (slLine loc) (Text.lines content)
       result = SourceResult
-        { srcPackage = unPackageName (pkgName pid)
-        , srcVersion = unVersion (pkgVersion pid)
-        , srcModule  = modPath
-        , srcSymbol  = mSym
-        , srcPath    = slPath loc
-        , srcLine    = slLine loc
-        , srcSnippet = snippet
+        { srcPackage   = unPackageName (pkgName pid)
+        , srcVersion   = unVersion (pkgVersion pid)
+        , srcModule    = modPath
+        , srcSymbol    = mSym
+        , srcPath      = slPath loc
+        , srcLine      = slLine loc
+        , srcSnippet   = snippet
+        , srcDefinedIn = definedElsewhere (ModulePath modPath) site
         }
   pure (successOutcome SourceCmd (sourceResultToJSON result))
+
+-- | Where the definition landed, when that is somewhere other than the
+-- module the caller named.
+definedElsewhere :: ModulePath -> SymbolSite -> Maybe DefinedIn
+definedElsewhere asking site = case site of
+  SweptSite _ -> Nothing
+  ResolvedSite ld
+    | ldModule ld == asking -> Nothing
+    | otherwise -> Just (DefinedIn (ldModule ld) (ldComponent ld))
+
+-- | Where a symbol turned out to be, and how we know.
+--
+-- Two ways, kept apart because they answer different amounts.  Resolution
+-- through a component's exports yields the declaration itself, so a caller
+-- building a symbol card reads the signature and Haddock off the parse
+-- that located it; a package scan yields a line number and nothing more.
+-- Collapsing them to a 'SourceLocation' is what made @hypha symbol@ read
+-- the file a second time under the wrong language settings.
+data SymbolSite
+  = ResolvedSite !LocatedDefinition
+  | SweptSite    !SourceLocation
+  deriving stock (Show, Eq)
+
+siteLocation :: SymbolSite -> SourceLocation
+siteLocation = \case
+  ResolvedSite ld -> ldLocation ld
+  SweptSite loc   -> loc
 
 -- | Locate a symbol's definition inside its module.
 --
@@ -134,14 +200,20 @@ sourceFromDirE pid srcDir modPath mSym = do
 -- came back as @Data\/IntMap\/Internal.hs@.  The sweep survives only for
 -- packages whose cabal we cannot read, and says so.
 --
--- No imported modules are supplied: a bare package directory comes with no
--- build plan, so there is no dependency graph to find the owner of a
--- cross-package re-export in.  'locateDefinitionInComponent' reports those
--- rather than guessing — @hypha server@, which does have a plan, resolves
--- them.
-locateSymbolLoc
-  :: PackageId -> FilePath -> Text -> Text -> IO (Maybe SourceLocation)
-locateSymbolLoc pid srcDir modPath sym = do
+-- The reach is how a re-export that leaves the package gets followed.  It
+-- is built from the build plan (see "Hypha.Source.Dependencies"), which is
+-- what @Data.List@ needs: since GHC 9.10 @base@ is a facade over
+-- @ghc-internal@, so nearly every @base@ symbol is defined in another
+-- package.  A caller with no plan gets an empty reach — the plan-less path
+-- reports the re-export it cannot follow rather than guessing at one.
+locateSymbolSite
+  :: OutsideReach IO
+  -> PackageId
+  -> FilePath
+  -> ModulePath
+  -> SymbolName
+  -> IO (Either SymbolSearchFailure SymbolSite)
+locateSymbolSite reach pid srcDir asking sym = do
   comps <- Indexer.packageSources srcDir
   -- The component key comes from the 'PackageId' the caller already
   -- holds.  Deriving it from the cabal file's basename was a second,
@@ -152,20 +224,58 @@ locateSymbolLoc pid srcDir modPath sym = do
       matching =
         [ (Comp.ciLanguageSettings ci, Comp.ciKind ci, sources)
         | (ci, sources) <- comps
-        , any ((== ModulePath modPath) . msDeclaredName) sources
+        , any ((== asking) . msDeclaredName) sources
         ]
   case matching of
-    ((langs, kind, sources) : _) -> do
-      mLd <- locateDefinitionInComponent langs (compKey kind) sources
-               noImportedDefinitions (ModulePath modPath) (SymbolName sym)
-      case mLd of
-        Just ld -> pure (Just (ldLocation ld))
-        Nothing -> pure Nothing
+    ((langs, kind, sources) : _) ->
+      fmap ResolvedSite
+        <$> locateDefinitionInComponent langs (compKey kind) sources
+              reach asking sym
+    -- The scan is for a module we cannot resolve, never for one the
+    -- package does not have.  Ranking every same-named binding in the
+    -- tree by shared path suffix will always find *something*:
+    -- @containers\/Data.Map.Strct\/insertWith@ (one letter missing) came
+    -- back as the @IntMap@ function, exit 0, under the misspelled module's
+    -- own name — a confident wrong answer where the predecessor of this
+    -- code path had correctly said the module was not there.
+    --
+    -- A module the components do not list but whose file exists is a real
+    -- case — generated modules, CPP-selected platform variants — and stays
+    -- scannable.  Both readable-cabal cases are distinguished from "this
+    -- package has no library stanza at all", which is the one the scan was
+    -- introduced for.
     [] -> do
-      hPutStrLn stderr $
-        "hypha: no cabal component of " <> srcDir <> " lists "
-          <> Text.unpack modPath <> "; falling back to a package scan"
-      locateSymbolDefinitionInDir srcDir modPath sym
+      mFile <- findModuleFile srcDir (unModulePath asking)
+      case (comps, mFile) of
+        (_ : _, Nothing) -> pure (Left SearchModuleAbsent)
+        _                -> do
+          hPutStrLn stderr $
+            "hypha: no cabal component of " <> srcDir <> " lists "
+              <> Text.unpack (unModulePath asking)
+              <> "; falling back to a package scan"
+          swept <- locateSymbolDefinitionInDir srcDir
+                     (unModulePath asking) (unSymbolName sym)
+          pure $ case swept of
+            Just loc -> Right (SweptSite loc)
+            Nothing  -> Left (SearchSweptPackage srcDir)
+
+-- | The error a failed location becomes, with the reach's own gaps folded
+-- in.
+--
+-- The gaps are read here and only here: at the moment a failure is
+-- reported, which is the only moment they explain anything.  Warning about
+-- them as they happen is what attached @Hackage HTTP 404 for \'rts\'@ to a
+-- query that had already answered correctly.
+symbolNotFound
+  :: OutsideReach IO
+  -> PackageId
+  -> ModulePath
+  -> SymbolName
+  -> SymbolSearchFailure
+  -> IO HyphaError
+symbolNotFound reach pid asking sym failure = do
+  gaps <- orGaps reach
+  pure (NotFound (NotFoundSymbol pid asking sym failure gaps))
 
 -- | Lift a 'Maybe' into 'ExceptT' with a typed error on 'Nothing'.
 liftMaybe :: Monad m => HyphaError -> Maybe a -> ExceptT HyphaError m a
@@ -191,6 +301,12 @@ sourceResultToJSON sr = Aeson.object $ concat
   , [ "path"    .= srcPath sr
     , "line"    .= srcLine sr
     , "snippet" .= srcSnippet sr
+    ]
+  , [ "defined_in" .= Aeson.object
+        [ "module"    .= unModulePath (diModule d)
+        , "component" .= unComponentKey (diComponent d)
+        ]
+    | Just d <- [srcDefinedIn sr]
     ]
   ]
 

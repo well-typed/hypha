@@ -27,6 +27,8 @@ module Hypha.Search.Reexport
   , externalModuleForms
   , definitionModule
   , sharedSegments
+  , supplierCandidates
+  , supplierCandidatesByKind
   ) where
 
 import Data.Containers.ListUtils (nubOrd)
@@ -134,10 +136,10 @@ resolveComponent ifaces = fixpoint seeded
     -- A candidate qualifies once we know it can supply the name: it
     -- declares it, or an earlier round resolved it there.
     rankedCandidates acc i n =
-      let (preferred, open) = candidates i n
+      let (preferred, open) = importCandidates i n
       in case viable acc n preferred of
-           [] -> rank i (viable acc n open)
-           ps -> rank i ps
+           [] -> rankAround (miName i) (viable acc n open)
+           ps -> rankAround (miName i) ps
 
     viable acc n ms =
       [ m
@@ -174,42 +176,64 @@ resolveComponent ifaces = fixpoint seeded
           | Map.member (miName i, n) m = m
           | otherwise = Map.insert (miName i, n) (outsideFor i n) m
 
-    outsideFor i n = case rankedImports i n of
+    outsideFor i n = case supplierCandidates i n of
       (m : ms) -> DefinedOutside (m :| ms)
       []       -> NoSupplier
 
-    -- Ranked by the rule the in-component candidates already use, so the
-    -- order is a function of the module rather than of the order its
-    -- imports happen to be written in.
-    rankedImports i n =
-      let (preferred, open) = candidates i n
-          explicit          = nubOrd preferred
-      in rank i explicit
-           ++ rank i [ m | m <- nubOrd open, m `notElem` explicit ]
+-- | Every import of a module that could supply a name, best first.
+--
+-- Exported because following a re-export /out/ of a component is the same
+-- question one hop further on: the module a candidate leads to may be
+-- another facade, and asking it which of its own imports could supply the
+-- name is how the chain gets walked.  Deriving that order a second time at
+-- the call site would let the two disagree about which candidate is best.
+supplierCandidates :: ModuleInterface -> SymbolName -> [ModulePath]
+supplierCandidates i n =
+  let (explicit, open) = supplierCandidatesByKind i n in explicit <> open
 
-    -- An explicit import list is a statement about where a name comes
-    -- from; an unrestricted import is not.  So explicit candidates are
-    -- considered first, and only if none of them pans out do we look at
-    -- the open ones.
-    candidates i n =
-      ( [ iiModule ii | ii <- miImports i, explicitlyLists ii n ]
-      , [ iiModule ii | ii <- miImports i, openImport ii n ]
-          ++ [ m | Just items <- [miExports i], ExportModule m <- items ]
-      )
+-- | 'supplierCandidates' with the two groups still apart, ranked within
+-- each.
+--
+-- A chain that fans out needs them apart.  Flattening one module's
+-- candidates loses which of them were explicit, and a descent that then
+-- concatenates one module's list after another's puts every /open/ import
+-- of the first module ahead of every /explicit/ import of the second —
+-- which inverts the preference this ranking exists to express as soon as
+-- the frontier has more than one parent in it.
+supplierCandidatesByKind
+  :: ModuleInterface -> SymbolName -> ([ModulePath], [ModulePath])
+supplierCandidatesByKind i n =
+  let (preferred, open) = importCandidates i n
+      explicit          = nubOrd preferred
+  in ( rankAround (miName i) explicit
+     , rankAround (miName i) [ m | m <- nubOrd open, m `notElem` explicit ]
+     )
 
-    explicitlyLists ii n = case iiNames ii of
+-- | An explicit import list is a statement about where a name comes from;
+-- an unrestricted import is not.  So the two groups are kept apart:
+-- explicit candidates are considered first, and only if none of them pans
+-- out do we look at the open ones.
+importCandidates :: ModuleInterface -> SymbolName -> ([ModulePath], [ModulePath])
+importCandidates i n =
+  ( [ iiModule ii | ii <- miImports i, explicitlyLists ii ]
+  , [ iiModule ii | ii <- miImports i, openImport ii ]
+      ++ [ m | Just items <- [miExports i], ExportModule m <- items ]
+  )
+  where
+    explicitlyLists ii = case iiNames ii of
       Just (False, ns) -> n `elem` ns
       _                -> False
 
-    openImport ii n = case iiNames ii of
+    openImport ii = case iiNames ii of
       Nothing         -> True
       Just (True, ns) -> n `notElem` ns   -- a hiding list that does not hide it
       Just (False, _) -> False
 
-    -- Siblings before strangers, then lexicographic, so the winner never
-    -- depends on the order modules were handed to us.
-    rank i =
-      sortOn (\m -> (negate (sharedSegments (miName i) m), unModulePath m))
+-- | Siblings before strangers, then lexicographic, so the winner never
+-- depends on the order modules were handed to us.
+rankAround :: ModulePath -> [ModulePath] -> [ModulePath]
+rankAround asking =
+  sortOn (\m -> (negate (sharedSegments asking m), unModulePath m))
 
 -- | Every name a module exports, with the @module M@ re-export form
 -- expanded against the rest of the component.

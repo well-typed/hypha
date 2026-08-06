@@ -1,0 +1,43 @@
+{
+ "cabal-version": "3.10.2.1",
+ "cabal-lib-version": "3.10.2.1",
+ "compiler-id": "ghc-9.6.7",
+ "os": "linux",
+ "arch": "x86_64",
+ "install-plan": [
+  {
+   "type": "configured",
+   "id": "reexport-0.1.0-inplace",
+   "pkg-name": "reexport",
+   "pkg-version": "0.1.0",
+   "style": "local",
+   "pkg-src": {
+    "type": "local",
+    "path": "test/fixtures/reexport"
+   },
+   "components": {
+    "lib": {
+     "depends": [
+      "reexport-dep-0.1.0-inplace"
+     ]
+    }
+   }
+  },
+  {
+   "type": "configured",
+   "id": "reexport-dep-0.1.0-inplace",
+   "pkg-name": "reexport-dep",
+   "pkg-version": "0.1.0",
+   "style": "local",
+   "pkg-src": {
+    "type": "local",
+    "path": "test/fixtures/reexport-dep"
+   },
+   "components": {
+    "lib": {
+     "depends": []
+    }
+   }
+  }
+ ]
+}

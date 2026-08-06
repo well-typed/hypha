@@ -26,6 +26,7 @@ import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
 import Hypha.Search.Index
   ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource (..)
   , Visibility (..) )
+import Hypha.Source.Reach (reachFrom)
 import Hypha.Search.PackageCache
   ( CacheOrigin (..), openPackageCacheAt, writeCachedIndex )
 import Hypha.Source.Extensions (defaultLanguageSettings)
@@ -54,6 +55,10 @@ stubResolver = PackageResolver
                , rpOrigin        = OriginLocal "test/fixtures/reexport-dep"
                }
         else Left (NotFound (NotFoundPackageInPlan name))
+  , resolveSrcLocal = \pid ->
+      pure $ if pkgName pid == PackageName "reexport-dep"
+        then Just ("test" </> "fixtures" </> "reexport-dep")
+        else Nothing
   , resolveSrc = \pid ->
       pure $ if pkgName pid == PackageName "reexport-dep"
         then Right ("test" </> "fixtures" </> "reexport-dep")
@@ -101,11 +106,12 @@ tests = testGroup "Unit.ImportedSources"
           [ ( "test/fixtures/reexport/src/Fixture/Imported.hs"
             , "Fixture.Imported", Exposed ) ]
         mLd <- locateDefinitionInComponent defaultLanguageSettings
-                 (ComponentKey "reexport") sources imported
+                 (ComponentKey "reexport") sources
+                 (reachFrom (const defaultLanguageSettings) imported)
                  (ModulePath "Fixture.Imported") (SymbolName "depThing")
         case mLd of
-          Nothing -> fail "the definition was not located"
-          Just ld -> do
+          Left err -> fail ("the definition was not located: " <> show err)
+          Right ld -> do
             ldComponent ld @?= ComponentKey "reexport-dep"
             ldModule ld    @?= ModulePath "Dep.Internal"
 

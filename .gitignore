@@ -1,4 +1,13 @@
 dist-newstyle/
+# ...except a test fixture's plan.json, which is a test /input/ that happens
+# to live where cabal would have written it.  test/fixtures/tiny-project's
+# plan has been tracked past this rule since it was added; naming the
+# exception keeps the next fixture from being silently left behind — a
+# fixture project whose plan does not get committed is a test that passes
+# locally and fails everywhere else.
+!test/fixtures/*/dist-newstyle/
+!test/fixtures/*/dist-newstyle/cache/
+!test/fixtures/*/dist-newstyle/cache/plan.json
 dist/
 .hypha/
 .stack-work/

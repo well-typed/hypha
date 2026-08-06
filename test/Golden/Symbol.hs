@@ -13,15 +13,14 @@ import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty (TestTree, testGroup)
 
 import Hypha.BuildEnv.Type (BuildEnv (..))
-import Hypha.Command.Symbol (runSymbol)
-import Hypha.Error
-  ( HyphaError (DiscoveryFailure, PlanFailure), errorMessage )
+import Hypha.Command.Symbol (runSymbolWith)
+import Hypha.Error (HyphaError, errorMessage)
 import Hypha.Output.Json (encodeSuccessEnvelope)
 import Hypha.Output.Outcome (Outcome)
-import Hypha.Project.Discovery (discoverProjectRoot)
-import Hypha.Project.Plan (loadBuildPlan)
-import Hypha.Types (mapEitherIO)
+import Hypha.Source.Dependencies (dependencyReach)
+import Hypha.Types.BuildPlan (emptyBuildPlan)
 import Hypha.Types.PackageId (Version (..))
+import Util.Fixture (asyncDir, asyncId, noOwnerOracle, resolverFor)
 
 -- | Mock BuildEnv that points to the fixture source directory.
 mockBuildEnv :: FilePath -> BuildEnv IO
@@ -43,22 +42,24 @@ tests = testGroup "Golden.Symbol"
   where
     goldenFile = "test" </> "Golden" </> "golden" </> "symbol-concurrently.compact.json"
 
+-- | Drives 'runSymbolWith' — the arm the CLI actually dispatches to.
+--
+-- Its predecessor drove a second entry point that took a plan and read the
+-- module's file directly.  Two ways of answering one question is how the
+-- CLI's half of issue #20 stayed green while broken, so the second one is
+-- gone and this pins the surviving one.
 runSymbolCommand :: IO LBS.ByteString
 runSymbolCommand =
-  withSystemTempDirectory "hypha-golden-sym" $ \cacheDir -> do
-    result <- runExceptT (pipeline cacheDir)
+  withSystemTempDirectory "hypha-golden-sym" $ \_cacheDir -> do
+    result <- runExceptT pipeline
     case result of
       Left err      -> fail ("Symbol golden failed: " <> show (errorMessage err))
       Right outcome -> pure (Aeson.encode (encodeSuccessEnvelope outcome))
   where
-    fixtureDir = "test" </> "fixtures" </> "tiny-project"
-    asyncDir   = "test" </> "fixtures"
-              </> "fake-cabal-store" </> "ghc-9.6.7"
-              </> "async-2.2.5-abc123456789" </> "share" </> "async"
-
-    pipeline :: FilePath -> ExceptT HyphaError IO (Outcome Value)
-    pipeline cacheDir = do
-      root <- mapEitherIO DiscoveryFailure (discoverProjectRoot (Just fixtureDir))
-      plan <- mapEitherIO (PlanFailure root) (loadBuildPlan cacheDir root)
-      let env = mockBuildEnv asyncDir
-      ExceptT (liftIO (runSymbol env plan "async/Control.Concurrent.Async/concurrently"))
+    pipeline :: ExceptT HyphaError IO (Outcome Value)
+    pipeline = do
+      let env      = mockBuildEnv asyncDir
+          resolver = resolverFor [(asyncId, asyncDir)]
+      ExceptT (liftIO (runSymbolWith env resolver
+                        (dependencyReach emptyBuildPlan resolver noOwnerOracle)
+                        "async/Control.Concurrent.Async/concurrently"))
