@@ -121,6 +121,11 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`hypha doctor` no longer reports itself outside a plan.** `Outcome`
+  is built positionally in one place and takes a `Bool` third, so
+  `all_pass` was filed as `outside_plan` — a healthy doctor printed
+  `outside_plan: true` directly above its own passing `plan_json` check.
+
 - **`hypha source` and `hypha symbol` follow a re-export out of the
   package.** `hypha source base/Data.List/sortOn` reported `NOT_FOUND`:
   `Data.List` re-exports `sortOn` from `GHC.Internal.Data.List`, which

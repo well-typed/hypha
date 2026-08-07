@@ -26,7 +26,7 @@ import Data.Set (Set)
 import Data.Text qualified as Text
 import Data.Text (Text)
 import Hypha.Cli.Types
-import Hypha.Output.Outcome (Outcome (..))
+import Hypha.Output.Outcome (Outcome, successOutcome)
 import System.Directory (doesFileExist, findExecutable)
 
 compactKeys, fullKeys :: Set Text
@@ -61,7 +61,12 @@ runDoctor = do
         [ "checks"   .= checks
         , "all_pass" .= allPass
         ]
-  pure $ Outcome body DoctorCmd allPass [] mempty
+  -- Built through 'successOutcome' rather than the positional
+  -- constructor: 'Outcome' takes a 'Bool' third, and spelling this out
+  -- as @Outcome body DoctorCmd allPass [] mempty@ silently filed
+  -- 'allPass' as @outside_plan@, so a healthy doctor reported itself
+  -- outside a plan while its own plan_json check said otherwise.
+  pure (successOutcome DoctorCmd body)
 
 checkGhc :: IO CheckResult
 checkGhc = do
