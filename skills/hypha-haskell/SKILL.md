@@ -1,6 +1,6 @@
 ---
 name: hypha-haskell
-description: Use whenever working in a Haskell/cabal project — looking up a function, exploring a package, reading Haddock, or finding a symbol's source. Replaces WebFetch on hackage.haskell.org/hoogle.haskell.org and ad-hoc grepping of `.cabal-store` with the project-aware `hypha` CLI, which emits compact JSON pinned to the project's `plan.json`. Triggers on `.hs`/`.cabal`/`cabal.project` edits, Haskell library or module mentions, and any "what's the type of …", "where is … defined", "which version of … are we using" question.
+description: Use whenever working in a Haskell/cabal project — looking up a function, exploring a package, reading Haddock, or finding a symbol's source. Replaces WebFetch on hackage.haskell.org/hoogle.haskell.org and ad-hoc grepping of `.cabal-store` with the project-aware `hypha` CLI, which emits compact YAML (`--json` for JSON) pinned to the project's `plan.json`. Triggers on `.hs`/`.cabal`/`cabal.project` edits, Haskell library or module mentions, and any "what's the type of …", "where is … defined", "which version of … are we using" question.
 ---
 
 # hypha — Haskell-aware code/doc browser

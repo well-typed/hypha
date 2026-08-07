@@ -40,9 +40,6 @@ follow-up question. Both are expensive.
   &nbsp;
   <img src="./images/hero-server.png" width="47%" alt="hypha server — doc browser UI" />
 </p>
-<!-- These currently show labelled placeholders. Overwrite images/hero-cli.png
-     and images/hero-server.png in place with real captures — no edits needed
-     here. See images/CAPTURE-LIST.md. -->
 
 ## Where to next
 

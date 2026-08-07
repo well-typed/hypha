@@ -29,6 +29,24 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`hypha --version` / `-V`.** There was no way to ask a hypha binary what
+  it was; `hypha --version` exited `1` with a usage message. The version
+  comes from cabal's `CURRENT_PACKAGE_VERSION`, so it cannot drift from
+  the build.
+- **`--hoogle-timeout SECONDS`**, and hypha no longer advertises
+  environment variables it does not read. `HYPHA_OFFLINE` and
+  `HYPHA_HOOGLE_TIMEOUT` both appeared in hypha's *own* error output — the
+  first in the message for a suppressed remote tier, the second as the
+  suggested retry after a remote failure — and neither was ever looked up,
+  so a user who followed hypha's advice still hit the network and the
+  recommended retry failed identically. `HYPHA_OFFLINE` is now simply gone
+  from the error text and the docs: `--offline` already exists, and
+  hypha's own MCP server passes it explicitly, so the variable only
+  shadowed a flag. `HYPHA_HOOGLE_TIMEOUT` had no flag to shadow, so it
+  became one — it appears in `--help`, which no environment variable does,
+  and a value that is not a positive whole number of seconds is rejected
+  by the parser rather than silently ignored. The remote-failure action
+  now suggests `hypha lookup <query> --hoogle-timeout 30`.
 - **The compiler answers where a re-export comes from.** An export list
   says *which* names a module exports and never *whence*, so a syntactic
   pass has to guess between the imports that could plausibly supply one —

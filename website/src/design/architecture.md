@@ -10,7 +10,7 @@ hypha-mcp .......... MCP/stdio shim (Pattern B: shells out to hypha CLI)
 library: hypha
   ├── BuildEnv ....... Cabal store + Nix store + composition
   ├── Project ........ plan.json → BuildPlan + per-package components
-  ├── Hoogle ......... Per-project DB + freshness via plan-hash
+  ├── Hoogle ......... Per-project DB + freshness via hoogle-stamp
   ├── Hackage ........ JSON API + ETag/Last-Modified cache
   ├── Search ......... Index (typed rows carrying a definition site),
   │                    Indexer (the build pass), Reexport (resolution

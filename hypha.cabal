@@ -14,7 +14,7 @@ maintainer:         info@well-typed.com
 copyright:          2026 Well-Typed LLP
 category:           Development
 build-type:         Simple
-tested-with:        GHC == 9.6.*, GHC == 9.8.*, GHC == 9.10.*
+tested-with:        GHC == 9.6.7, GHC == 9.10.3, GHC == 9.12.4
 data-files:
   ui/css/base.css
   ui/css/layout.css
@@ -230,6 +230,7 @@ test-suite hypha-tests
     Unit.BuildEnv
     Unit.BuildEnvCompose
     Unit.BuildPlanOrder
+    Unit.CliParser
     Unit.Components
     Unit.Doctor
     Unit.EmbeddedAssets
@@ -280,6 +281,7 @@ test-suite hypha-tests
     , hypha
     , iproute
     , lucid2
+    , optparse-applicative
     , prettyprinter
     , prettyprinter-ansi-terminal
     , tar

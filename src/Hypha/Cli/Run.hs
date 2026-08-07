@@ -458,9 +458,9 @@ runLookupCommand q = do
   -- No catch-all 'try' around this block: HTTP failures are caught
   -- (and converted to 'RemoteError') inside Hoogle.Remote, every other
   -- structurally-handled failure flows through 'HyphaError' explicitly,
-  -- and genuinely-unexpected exceptions bubble up to the top-level
-  -- 'catchAny' in @app/hypha/Main.hs@ where they become a single
-  -- structured @INTERNAL_ERROR@ envelope.
+  -- and genuinely-unexpected exceptions bubble up to the 'tryAny' in
+  -- 'runClientMain' where they become a single structured
+  -- @INTERNAL_ERROR@ envelope.
   opts <- askOpts
   cacheRoot <- asks heCacheDir
   mRoot <- liftIO $ warnOnLeft
@@ -503,7 +503,13 @@ runLookupCommand q = do
         , Lookup.loCacheScope   = scope
         , Lookup.loRemote       =
             HogRemote.defaultRemoteOptions
-              { HogRemote.roOffline = hoOffline opts }
+              { HogRemote.roOffline       = hoOffline opts
+              , HogRemote.roTimeoutMicros =
+                  maybe (HogRemote.roTimeoutMicros
+                           HogRemote.defaultRemoteOptions)
+                        timeoutMicros
+                        (hoHoogleTimeout opts)
+              }
         , Lookup.loPrepareLocal = prepLocal
         }
   liftEitherIO (Lookup.runLookup cache hoogleLocal lookupOpts (HoogleQuery q))

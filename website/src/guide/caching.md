@@ -10,7 +10,7 @@ derived state as possible — under `$XDG_CACHE_HOME/hypha/` (defaults to
 | Hackage HTTP responses | `hackage/<sha256>.json` | ETag + `If-Modified-Since` revalidation; 15 min TTL per entry |
 | Source tarballs | `source/<pkg>-<ver>/` | Immutable once extracted |
 | Haddock HTML | `haddock/<pkg>-<ver>/` | Built on demand, reused across runs |
-| Hoogle DB | `<projectRoot>/.hypha/hoogle.hoo` (with `.hypha/plan-hash` sibling) | Rebuilt when `plan.json` changes |
+| Hoogle DB | `<projectRoot>/.hypha/hoogle.hoo` (with `.hypha/hoogle-stamp` sibling) | Rebuilt when `plan.json` changes |
 
 The fallback chain is automatic for network reads:
 **local HTTP cache → build plan → cabal store → Hackage**.

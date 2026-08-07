@@ -113,6 +113,9 @@ One known gap, reported on stderr as it happens:
   contributes no rows, and every module that re-exports from it loses
   exactly what it re-exported — which is why `Prelude` is sparse. On a
   283-package plan this is 159 modules; each one is named on stderr with
-  GHC's own message. This covers a type's members too: `GHC.Internal.Base`
-  is one of those modules, so `liftA2` and `pure` have no `base` row even
-  though `fmap` and `mempty` reach one through a re-exporter that parses.
+  GHC's own message. This covers class methods and constructors too — a
+  member presented only by a module that needs CPP is unreachable, while
+  one that is *also* re-exported by a module that parses is found. Which
+  symbols fall on which side shifts as packages and GHC change, so treat
+  any specific example as a snapshot: the stderr list is the authority for
+  your plan.

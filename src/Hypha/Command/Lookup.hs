@@ -95,7 +95,7 @@ data LookupOptions = LookupOptions
 data RemoteTierOutcome
     -- | Earlier tier hit; remote tier never consulted.
   = RemoteNotConsulted
-    -- | @--offline@ (or @HYPHA_OFFLINE@) suppressed the remote call.
+    -- | @--offline@ suppressed the remote call.
   | RemoteSkippedOffline
     -- | Remote returned with zero hits.
   | RemoteEmpty

@@ -235,7 +235,7 @@ errorMessage = \case
       <> "; run `cabal build --dry-run`"
     PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
   HoogleOffline      _ _ ->
-    "--offline (or HYPHA_OFFLINE) suppresses remote tier"
+    "--offline suppresses remote tier"
   HoogleNotFound     _ _ ->
     "no providers found"
   HoogleRemoteError  _ _ remoteErr -> renderRemoteError remoteErr
@@ -289,7 +289,7 @@ errorActions = \case
     [ ("retry_offline",
         "hypha lookup " <> q <> " --offline")
     , ("raise_timeout",
-        "HYPHA_HOOGLE_TIMEOUT=30 hypha lookup " <> q)
+        "hypha lookup " <> q <> " --hoogle-timeout 30")
     , ("query",           q)
     , ("tiers_consulted", renderTierList tiers)
     ]
