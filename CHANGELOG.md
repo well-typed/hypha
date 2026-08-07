@@ -158,6 +158,26 @@ loosely follows [Semantic Versioning](https://semver.org/).
   rows for the same symbol, module and package differed in nothing the
   renderer could see and printed as an unexplained duplicate. Emitted on
   the cache tier only: a Hoogle hit carries a package name and no version.
+- **A signature is a type again.** Signatures were sliced out of the
+  declaration's source span, so any comment inside that span came with
+  them and the newlines were collapsed on the way — `hypha symbol
+  text/Data.Text/splitOn` answered `splitOn :: HasCallStack => Text -- ^
+  String to split on. If this string is empty, an error -- will occur. ->
+  Text -- ^ Input text. -> [Text]`, in which the second line of the first
+  comment reads as part of the type. Measured on a real cache: **9,365
+  rows, 5.27%, across 262 packages** including `base`, `Cabal`, `text` and
+  `primitive`. A data constructor had the same problem from the other
+  direction, carrying the `=` or `|` and the trailing `-- ^` of the line
+  it shared, and a record field inherited the opening brace.
+
+  Signatures now come from the parse tree, with GHC's `HsDocTy` nodes
+  removed, the way `declDoc` already did. That is exact where a textual
+  strip is not: `arrow :: (a --> b) -> Int` is an operator, and everything
+  after its `--` is the rest of the type. The index format generation is
+  bumped to `4`, because a stored signature cannot be repaired after the
+  fact — telling a comment from an operator needs the parse tree the row
+  no longer has — so without it every existing cache would keep serving
+  the mangled text. Expect one background re-index.
 - **User-facing docs corrected against measured behaviour.** Exit code `1`
   (argument-parser failures — unknown subcommand, unknown flag, missing
   argument) was undocumented despite covering the most common way to

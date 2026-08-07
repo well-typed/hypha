@@ -72,6 +72,61 @@ tests = testGroup "Unit.SourceParser"
           declSigText src d @?= Just "sourceList, sourceListC :: Monad m => [a] -> m ()"
         Left e -> fail (show e)
 
+  , testCase "per-argument Haddock comments stay out of the signature" $ do
+      -- A signature is a type, and a type has no comments in it.  The
+      -- span-slicing this used to do swept up every line between the
+      -- first and last line of the declaration, comments included, and
+      -- collapsed the newlines — so the second line of the first
+      -- comment ended up reading as part of the type.
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "splitOn :: HasCallStack"
+            , "        => Text"
+            , "        -- ^ String to split on. If this string is empty, an error"
+            , "        -- will occur."
+            , "        -> Text"
+            , "        -- ^ Input text."
+            , "        -> [Text]"
+            , "splitOn = undefined"
+            ]
+      case parseDecls "M.hs" src of
+        Right ds -> do
+          d <- maybe (fail "splitOn missing") pure (findDecl "splitOn" ds)
+          declSigText src d
+            @?= Just "splitOn :: HasCallStack => Text -> Text -> [Text]"
+        Left e -> fail (show e)
+
+  , testCase "an operator spelled with a comment marker survives" $ do
+      -- The reason this is not a textual strip: everything from the
+      -- first @--@ onwards is the rest of the type, not a comment.
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "arrow :: (a --> b) -> Int"
+            , "arrow = undefined"
+            ]
+      case parseDecls "M.hs" src of
+        Right ds -> do
+          d <- maybe (fail "arrow missing") pure (findDecl "arrow" ds)
+          declSigText src d @?= Just "arrow :: (a --> b) -> Int"
+        Left e -> fail (show e)
+
+  , testCase "a documented class method's signature is a type too" $ do
+      let src = Text.unlines
+            [ "module M where"
+            , ""
+            , "class Pretty a where"
+            , "  render :: a"
+            , "         -- ^ The thing to render."
+            , "         -> String"
+            ]
+      case parseDecls "M.hs" src of
+        Right ds -> do
+          d <- maybe (fail "render missing") pure (findDecl "render" ds)
+          declSigText src d @?= Just "render :: a -> String"
+        Left e -> fail (show e)
+
   , testCase "function definition without an explicit signature" $ do
       let src = Text.unlines
             [ "module M where"

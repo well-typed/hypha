@@ -6,7 +6,7 @@ derived state as possible — under `$XDG_CACHE_HOME/hypha/` (defaults to
 
 | Cache | Layout | Freshness |
 |-------|--------|-----------|
-| Search index | `hypha.db` (SQLite, WAL) | Keyed on `(pkg, version)` and on a row-format generation (`index_format`, currently `3`), shared across every project on the host |
+| Search index | `hypha.db` (SQLite, WAL) | Keyed on `(pkg, version)` and on a row-format generation (`index_format`, currently `4`), shared across every project on the host |
 | Hackage HTTP responses | `hackage/<sha256>.json` | ETag + `If-Modified-Since` revalidation; 15 min TTL per entry |
 | Source tarballs | `source/<pkg>-<ver>/` | Immutable once extracted |
 | Haddock HTML | `haddock/<pkg>-<ver>/` | Built on demand, reused across runs |
@@ -30,10 +30,12 @@ The fallback chain is automatic for network reads:
 
 The row format is versioned. When `hypha` opens a `hypha.db` written by an
 older build it clears the index outright rather than migrating it: an old
-row's module name may have been derived from a file path, and its
-signature may have been matched by name rather than read at the
-definition site — and neither defect is detectable row by row, so the
-choice is re-index or lie.
+row's module name may have been derived from a file path, its signature
+may have been matched by name rather than read at the definition site, or
+that signature may have been sliced out of the source span and so carry a
+per-argument Haddock comment as though it were part of the type — and
+none of those defects is detectable row by row, so the choice is re-index
+or lie.
 
 Expect one full background re-index the first time you run a new `hypha`
 version (a few minutes for a large plan). While it runs, `hypha server`'s
