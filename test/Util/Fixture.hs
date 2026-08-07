@@ -76,7 +76,7 @@ depSources :: IO [ModuleSource]
 depSources = componentSources "test/fixtures/reexport-dep"
 
 componentSources :: FilePath -> IO [ModuleSource]
-componentSources root = concatMap snd <$> packageSources root
+componentSources root = concatMap snd <$> packageSources root Nothing
 
 -- The fixture packages, named once.  These were duplicated across the
 -- golden and the unit suite, which is two declarations of one fact and

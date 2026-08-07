@@ -141,5 +141,12 @@ data IndexRow = IndexRow
 -- comment from an operator like @-->@ needs the parse tree the row no
 -- longer has — and without the bump every existing cache would keep
 -- serving the mangled text forever.
+--
+-- Generation 4 rows go for the adjacent reason: they were built with an
+-- empty CPP macro environment, so a module gated on
+-- @__GLASGOW_HASKELL__@ or @MIN_VERSION_*@ was read from its oldest
+-- branch.  The per-component fingerprint cannot notice that — the source
+-- did not change, the macros did — so the generation is the only thing
+-- that can force those rows to be rebuilt.
 currentIndexFormat :: Int
-currentIndexFormat = 4
+currentIndexFormat = 5

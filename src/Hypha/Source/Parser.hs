@@ -229,8 +229,8 @@ parseModuleIO ls path source = do
    preprocess
      | not (needsCpp source) = pure (Right source)
      | otherwise = do
-         out <- try (Text.pack <$> Cpphs.runCpphs cpphsOpts path
-                                     (Text.unpack source))
+         out <- try (Text.pack <$> Cpphs.runCpphs (cpphsOpts (Extensions.lsCpp ls))
+                                     path (Text.unpack source))
          pure $ case out of
            Right t                   -> Right t
            Left (e :: SomeException) -> Left ParseError
@@ -306,9 +306,18 @@ needsCpp src =
 -- branches reachable under no externally-supplied symbol table, and
 -- keep blank lines in place so line numbers in the produced AST
 -- still match the original source.
-cpphsOpts :: Cpphs.CpphsOptions
-cpphsOpts = Cpphs.defaultCpphsOptions
-  { Cpphs.boolopts = Cpphs.defaultBoolOptions
+cpphsOpts :: Extensions.CppEnv -> Cpphs.CpphsOptions
+cpphsOpts env = Cpphs.defaultCpphsOptions
+  { -- cabal generates a @cabal_macros.h@ and passes it to every CPP
+    -- invocation; hypha synthesises the same thing from the plan and
+    -- passes it the same way.  Without it @__GLASGOW_HASKELL__@ and
+    -- @MIN_VERSION_*@ are undefined, and an undefined macro is zero, so
+    -- every version gate resolves to its oldest branch.
+    Cpphs.preInclude = maybe [] pure (Extensions.cppPreInclude env)
+    -- @#include@ of a package's own header fails without a search path,
+    -- and a failed include takes the whole module out of the index.
+  , Cpphs.includes   = Extensions.cppIncludeDirs env
+  , Cpphs.boolopts = Cpphs.defaultBoolOptions
       { Cpphs.locations = True     -- emit @{-# LINE #-}@ pragmas so the
                                    -- parser's @usePosPrags@ option tracks
                                    -- original-source line numbers under

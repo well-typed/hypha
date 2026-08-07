@@ -413,7 +413,8 @@ runSourceArm ref modPath mSym = do
   -- reach empty too: the plan-less path keeps reporting the re-export it
   -- cannot follow rather than guessing at one.
   reach <- liftIO (dependencyReach plan resolver (ownerOracleFor plan) pid)
-  oc  <- liftEitherIO (Source.runSourceFromDir reach pid dir modPath mSym)
+  oc  <- liftEitherIO
+           (Source.runSourceFromDir (bpCppMacros plan) reach pid dir modPath mSym)
   pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
 -- | Symbol command arm.  Shares the reach with 'runSourceArm', because it
@@ -427,7 +428,7 @@ runSymbolArm arg = do
   -- 'Symbol.runSymbolWith'.  Handing over 'dependencyReach' partially
   -- applied keeps that parse in one place.
   liftEitherIO
-    (Symbol.runSymbolWith env resolver
+    (Symbol.runSymbolWith (bpCppMacros plan) env resolver
        (dependencyReach plan resolver (ownerOracleFor plan)) arg)
 
 -- | How the reach asks which unit owns a module: @ghc-pkg@ over the global

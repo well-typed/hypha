@@ -158,6 +158,39 @@ loosely follows [Semantic Versioning](https://semver.org/).
   rows for the same symbol, module and package differed in nothing the
   renderer could see and printed as an unexplained duplicate. Emitted on
   the cache tier only: a Hoogle hit carries a package name and no version.
+- **CPP conditionals are evaluated against the plan's macros.** cabal
+  generates a `cabal_macros.h` for every build — `__GLASGOW_HASKELL__`,
+  and a `MIN_VERSION_<pkg>` per dependency — and passes it to every CPP
+  invocation. hypha read the same sources without it, and in CPP an
+  undefined macro is `0`, so a module written the way most of Hackage is
+  written:
+
+  ```haskell
+  #if __GLASGOW_HASKELL__ >= 710
+  modern :: Int -> Int
+  #else
+  ancient :: Int -> Int
+  #endif
+  ```
+
+  was indexed as `ancient` — on a plan pinning **GHC 9.10.3**. Likewise
+  `MIN_VERSION_base(4,18,0)` was false against **base 4.20.2.0**. The
+  module parses, contributes rows, and nothing is reported, so unlike a
+  skipped module there was no stderr line to notice. **2,684 modules
+  across 559 packages** — 15.3% of a real source cache — carry such a
+  gate.
+
+  hypha now synthesises the header from the build plan, which already
+  holds the compiler and a version per package, so the macros cannot
+  drift from the answers they describe; it is written once per plan,
+  content-addressed under `<cache>/cpp-macros/`. A package's
+  `include-dirs` are passed as the `#include` search path too, so a
+  module including its own package's header is no longer dropped
+  outright.
+
+  The index format generation goes to `5`: the per-component fingerprint
+  cannot notice this, because the source did not change — the macros did
+  — so nothing else would force the affected rows to be rebuilt.
 - **A signature is a type again.** Signatures were sliced out of the
   declaration's source span, so any comment inside that span came with
   them and the newlines were collapsed on the way — `hypha symbol

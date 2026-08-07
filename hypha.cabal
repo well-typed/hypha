@@ -128,6 +128,7 @@ library
     Hypha.Search.Fuzzy
     Hypha.Search.Reexport
     Hypha.Source.Dependencies
+    Hypha.Source.CppMacros
     Hypha.Source.Extensions
     Hypha.Source.Interface
     Hypha.Source.Extract
@@ -232,6 +233,7 @@ test-suite hypha-tests
     Unit.BuildPlanOrder
     Unit.CliParser
     Unit.Components
+    Unit.CppMacros
     Unit.Doctor
     Unit.EmbeddedAssets
     Unit.Hackage

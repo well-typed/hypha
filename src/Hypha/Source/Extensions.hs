@@ -19,6 +19,8 @@
 -- @ghc-lib-parser@ supports.
 module Hypha.Source.Extensions
   ( LanguageSettings (..)
+  , CppEnv (..)
+  , noCppEnv
   , defaultLanguageSettings
   , UnknownExtension (..)
   , extensionFromFlagName
@@ -29,6 +31,8 @@ module Hypha.Source.Extensions
   , parserOptsFor
   , renderDiagnostics
   ) where
+
+import Hypha.Source.CppMacros (CppEnv (..), noCppEnv)
 
 import Control.Exception (evaluate)
 import Control.Exception.Safe (SomeException, displayException, try)
@@ -69,6 +73,11 @@ data LanguageSettings = LanguageSettings
     -- ^ @default-language@, when the stanza names one.
   , lsDefaultOn  :: ![Extension]
   , lsDefaultOff :: ![Extension]
+  , lsCpp        :: !CppEnv
+    -- ^ What the C preprocessor is given for this component.  A module's
+    -- @#if@ is only as right as the macros it is evaluated against, and
+    -- an undefined macro is zero — so this travels with the extensions
+    -- rather than being defaulted at each parse site.
   }
   deriving stock (Show, Eq)
 
@@ -79,6 +88,7 @@ defaultLanguageSettings = LanguageSettings
   { lsLanguage   = Nothing
   , lsDefaultOn  = []
   , lsDefaultOff = []
+  , lsCpp        = noCppEnv
   }
 
 -- | A @-X@ name GHC's own table does not know.  Carried out of

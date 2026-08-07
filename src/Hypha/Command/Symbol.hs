@@ -101,7 +101,9 @@ fullKeys = Set.fromList
 -- Following the re-export is what closes that gap, and a symbol that
 -- genuinely is not there is now an error rather than an empty card.
 runSymbolWith
-  :: BuildEnv IO
+  :: Maybe FilePath
+    -- ^ The plan's synthesised @cabal_macros.h@.
+  -> BuildEnv IO
   -> PackageResolver IO
   -> (PackageId -> IO (OutsideReach IO))
     -- ^ The dependency closure of the package asked about, for a re-export
@@ -109,7 +111,7 @@ runSymbolWith
     -- package that is only becomes known once the argument is parsed.
   -> Text
   -> IO (Either HyphaError (Outcome Value))
-runSymbolWith _env resolver mkReach rawArg = runExceptT $ do
+runSymbolWith mMacroHeader _env resolver mkReach rawArg = runExceptT $ do
   sp                 <- liftParseError rawArg (parseSymbolPath rawArg)
   (modPath, symName) <- requireModuleAndSymbol sp rawArg
   let ref = PackageRef (spPackage sp) (spVersion sp)
@@ -117,7 +119,8 @@ runSymbolWith _env resolver mkReach rawArg = runExceptT $ do
   let pid = rpPkgId rp
   d       <- ExceptT (resolveSrc resolver pid)
   reach   <- liftIO (mkReach pid)
-  located <- liftIO (Source.locateSymbolSite reach pid d modPath symName)
+  located <- liftIO
+    (Source.locateSymbolSite mMacroHeader reach pid d modPath symName)
   card    <- case located of
     Right site -> liftIO (cardFor symName site)
     Left err   -> throwE
