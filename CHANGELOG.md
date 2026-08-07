@@ -158,6 +158,25 @@ loosely follows [Semantic Versioning](https://semver.org/).
   rows for the same symbol, module and package differed in nothing the
   renderer could see and printed as an unexplained duplicate. Emitted on
   the cache tier only: a Hoogle hit carries a package name and no version.
+- **User-facing docs corrected against measured behaviour.** Exit code `1`
+  (argument-parser failures — unknown subcommand, unknown flag, missing
+  argument) was undocumented despite covering the most common way to
+  misuse the CLI, and `9` (`INTERNAL_ERROR`) was reachable but unlisted;
+  both are now in the table, with the `1`-versus-`2` distinction spelled
+  out. `lookup.md` claimed class methods and data constructors are not
+  indexed — they are; the determinant is whether a module survives CPP.
+  The Hoogle freshness stamp is `hoogle-stamp`, not `plan-hash`
+  (`caching.md` used both names, in the same file). `server/index.md`
+  illustrated sublibraries with a `hypha:lib-breakdown` that does not
+  exist. `flags.md` described `--full` as "every field", when it adds
+  `source` and `tiers_consulted` to output that already carries the whole
+  Haddock body. `quick-start.md`'s worked example predated three schema
+  changes. Seven "Placeholder" comments still told readers to overwrite
+  screenshots that are real captures. `tested-with` claimed GHC 9.8 (no
+  project file) and omitted 9.12 (which has one, and a green CI job).
+  Finally, `Hypha.Exit` and `Hypha.Cli.Run` both attributed exit `9` to a
+  `catchAny` in `app/hypha/Main.hs`; there is none — it comes from the
+  `tryAny` in `runClientMain`.
 - **`hypha doctor` no longer reports itself outside a plan.** `Outcome`
   is built positionally in one place and takes a `Bool` third, so
   `all_pass` was filed as `outside_plan` — a healthy doctor printed
