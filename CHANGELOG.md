@@ -121,6 +121,25 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`hypha lookup`'s cache tier is pinned to the build plan.** The
+  package cache is keyed on `(package, version)` and shared by every
+  project on the host, and a write for a new version does not evict the
+  old one — so "what is indexed here" is the machine's history, which is
+  wider than "what this project builds against". Tier 1 answered from all
+  of it: in a project pinning `base-compat-0.15.0`, `hypha lookup fmap`
+  also returned a row from `base-compat-0.14.1` that some other project
+  had indexed, labelled `tier: cache` as though it came from the plan.
+  The same query on a colleague's machine gave a different answer.
+  Reaching past the plan remains the remote Hoogle tier's job, and the
+  tier label is now what tells you how far an answer reached. Outside a
+  project there is no plan to pin to and the whole cache still answers; a
+  plan that cannot be read is reported on stderr rather than silently
+  treated as the same case.
+- **A `lookup` provider carries the version it was indexed under.** The
+  version is a property of the cache entry rather than of a row, so two
+  rows for the same symbol, module and package differed in nothing the
+  renderer could see and printed as an unexplained duplicate. Emitted on
+  the cache tier only: a Hoogle hit carries a package name and no version.
 - **`hypha doctor` no longer reports itself outside a plan.** `Outcome`
   is built positionally in one place and takes a `Bool` third, so
   `all_pass` was filed as `outside_plan` — a healthy doctor printed

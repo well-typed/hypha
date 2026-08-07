@@ -17,6 +17,8 @@
 -- without having to provision their own database.
 module Hypha.Search.Cache
   ( IndexCache
+  , CacheScope (..)
+  , VersionedRow (..)
   , openIndexCache
   , defaultCachePath
   , readIndex
@@ -31,6 +33,8 @@ module Hypha.Search.Cache
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Monad (void)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Database.SQLite.Simple
 import Database.SQLite.Simple qualified as Sql
 import Data.Text (Text)
@@ -41,7 +45,9 @@ import Hypha.Cache qualified as Cache
 import Hypha.Search.Index
   ( DefinitionRef (..), IndexRow (..), Visibility (Internal)
   , currentIndexFormat, visibilityFromText, visibilityToText )
-import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.ComponentName
+  ( ComponentKey (..), ComponentName (..), parseComponentName )
+import Hypha.Types.PackageId (PackageName, Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
@@ -164,20 +170,23 @@ writeFingerprint c pkg ver fp = withWrite c $ executeNamed (icConn c)
 -- parsing and project-shadows-global merging.
 lookupRowsByName
   :: IndexCache
+  -> CacheScope                            -- ^ which versions may answer
   -> Text                                  -- ^ symbol name
   -> Maybe Text                            -- ^ optional module qualifier
-  -> IO [IndexRow]
-lookupRowsByName c name mMod = (reportAnomalies . map fromStored =<<) $ case mMod of
-  Nothing ->
-    queryNamed (icConn c)
-      (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
-              \WHERE name = :n ORDER BY pkg, mod, version DESC"))
-      [":n" := name]
-  Just modT ->
-    queryNamed (icConn c)
-      (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
-              \WHERE name = :n AND mod = :m ORDER BY pkg, mod, version DESC"))
-      [":n" := name, ":m" := modT]
+  -> IO [VersionedRow]
+lookupRowsByName c scope name mMod =
+  (reportAnomalies . filter (inScope scope . fst)
+                   . map fromStoredVersioned =<<) $ case mMod of
+    Nothing ->
+      queryNamed (icConn c)
+        (Query ("SELECT version, " <> rowColumns <> " FROM pkg_index \
+                \WHERE name = :n ORDER BY pkg, mod, version DESC"))
+        [":n" := name]
+    Just modT ->
+      queryNamed (icConn c)
+        (Query ("SELECT version, " <> rowColumns <> " FROM pkg_index \
+                \WHERE name = :n AND mod = :m ORDER BY pkg, mod, version DESC"))
+        [":n" := name, ":m" := modT]
 
 -- | Every row a component's module presents, whatever the version.
 --
@@ -227,11 +236,64 @@ readIndex c pkg ver =
             \WHERE pkg = :p AND version = :v"))
     [":p" := pkg, ":v" := ver]
 
+-- | Which of the cache's versions a lookup may answer from.
+--
+-- The DB is keyed on @(package, version)@ and shared by every project on
+-- the host, and a write for a new version does not evict the old one.  So
+-- \"what is in the cache\" is the host's indexing history, which is a
+-- wider set than \"what this project builds against\" and a narrower one
+-- than Hackage.  A caller has to say which of the two it is asking about;
+-- there is no sensible default.
+-- | An index row together with the version of the @(pkg, version)@ entry
+-- it was written under.
+--
+-- The version stays outside 'IndexRow' because it is a property of the
+-- cache entry rather than of the row, and every writer already supplies
+-- it separately.  It travels with the row so a caller that has to tell
+-- two otherwise-identical rows apart — the same symbol in the same
+-- module of the same package, indexed at two versions — can.
+data VersionedRow = VersionedRow
+  { vrVersion :: !Version
+  , vrRow     :: !IndexRow
+  }
+  deriving stock (Show, Eq, Ord)
+
+data CacheScope
+  = ScopePlan !(Map PackageName Version)
+    -- ^ Answer only at the versions the build plan pins.  A row at any
+    -- other version belongs to some other project that happened to share
+    -- this cache, and nothing downstream could tell the two apart.
+  | ScopeWholeCache
+    -- ^ Answer from every indexed version, newest first.  For callers
+    -- with no plan to pin to — outside a project, or a module page that
+    -- was reached by component and module alone.
+  deriving stock (Show, Eq)
+
+-- | Whether a stored row's version is one the scope admits.
+--
+-- The @pkg@ column holds a /component/ key (@pkg@, @pkg:sublib@,
+-- @pkg:exe:name@) while a plan pins a version per /package/, so the key
+-- is reduced to its package before the comparison.
+inScope :: CacheScope -> VersionedRow -> Bool
+inScope ScopeWholeCache    _                  = True
+inScope (ScopePlan pinned) (VersionedRow v r) =
+    Map.lookup (packageOfComponent (rowComponent r)) pinned == Just v
+  where
+    packageOfComponent = cnPackage . parseComponentName . unComponentKey
+
 -- | The column list, written once so the SELECTs and 'fromStored' cannot
 -- drift apart.  Column order is a wire format: it is spelled out rather
 -- than derived.
 rowColumns :: Text
 rowColumns = "pkg, mod, name, sig, def_mod, def_pkg, visibility"
+
+-- | 'fromStored' with the @version@ column kept alongside.
+fromStoredVersioned
+  :: (Text, Text, Text, Text, Text, Text, Text, Text)
+  -> (VersionedRow, Maybe Text)
+fromStoredVersioned (ver, pkg, modPath, name, sig, defMod, defPkg, vis) =
+  let (r, anomaly) = fromStored (pkg, modPath, name, sig, defMod, defPkg, vis)
+  in (VersionedRow (Version ver) r, anomaly)
 
 -- | Rebuild a row from its stored columns, along with a description of
 -- anything about it we could not make sense of.
@@ -264,7 +326,7 @@ fromStored (pkg, modPath, name, sig, defMod, defPkg, vis) =
     definingPkg = if Text.null defPkg then pkg else defPkg
 
 -- | Trace every anomaly 'fromStored' found, then hand back the rows.
-reportAnomalies :: [(IndexRow, Maybe Text)] -> IO [IndexRow]
+reportAnomalies :: [(a, Maybe Text)] -> IO [a]
 reportAnomalies rows = do
   mapM_ report [ a | (_, Just a) <- rows ]
   pure (map fst rows)

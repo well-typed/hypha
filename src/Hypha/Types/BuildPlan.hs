@@ -14,6 +14,7 @@ module Hypha.Types.BuildPlan
     -- * Queries
   , lookupPackage
   , lookupUnit
+  , planVersions
   , applyOverrides
   , forwardDepsOf
   , reverseDepsOf
@@ -117,6 +118,15 @@ emptyBuildPlan = BuildPlan
 -- | Look up a package version in the plan.
 lookupPackage :: PackageName -> BuildPlan -> Maybe Version
 lookupPackage name bp = pkgVersion . puId <$> Map.lookup name (bpUnits bp)
+
+-- | The version this plan pins for each package it mentions.
+--
+-- The whole plan reduced to what a version check needs, so callers that
+-- only want "is this the version we build against" do not carry a
+-- 'BuildPlan' (and its source directories, dep lists and component
+-- inventories) around to ask it.
+planVersions :: BuildPlan -> Map PackageName Version
+planVersions = Map.map (pkgVersion . puId) . bpUnits
 
 -- | Look up a planned unit in the plan.
 lookupUnit :: PackageName -> BuildPlan -> Maybe PlannedUnit

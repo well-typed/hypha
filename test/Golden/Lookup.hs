@@ -22,6 +22,7 @@ import Hypha.Hoogle.Type (HoogleQuery (..))
 import Hypha.Output.Json
   ( EnvelopeOpts (..), encodeEnvelopeValue, encodeErrorEnvelope
   , encodeOutcomeBytes )
+import Hypha.Types.PackageId (Version (..))
 import Hypha.Output.Outcome (Outcome)
 
 tests :: TestTree
@@ -46,7 +47,12 @@ tests = testGroup "Golden.Lookup"
 
 mkProvider :: Tier -> Provider
 mkProvider t = Provider "containers" "Data.Map" "lookup"
-                 "Ord k => k -> Map k a -> Maybe a" t
+                 "Ord k => k -> Map k a -> Maybe a" t (versionFor t)
+  where
+    -- Only the cache tier reads a @(pkg, version)@ entry and so has a
+    -- version to report; a Hoogle hit carries a package name alone.
+    versionFor TierCache = Just (Version "0.6.7")
+    versionFor _         = Nothing
 
 cacheHitOutcome :: Either HyphaError (Outcome Value)
 cacheHitOutcome =

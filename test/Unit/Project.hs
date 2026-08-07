@@ -12,7 +12,7 @@ import Hypha.Project.Discovery (DiscoveryError (..))
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Project.Discovery (discoverProjectRoot)
-import Hypha.Project.Plan (loadBuildPlan)
+import Hypha.Project.Plan (loadBuildPlan, loadPlanVersions)
 import Hypha.Project.Overrides (parsePackageOverride)
 
 tests :: TestTree
@@ -20,6 +20,7 @@ tests = testGroup "Unit.Project"
   [ testDiscovery
   , testDiscoveryIgnoresDotCabalDir
   , testLoadBuildPlan
+  , testLoadPlanVersionsAgrees
   , testParseOverride
   , testApplyOverrides
   ]
@@ -77,6 +78,20 @@ testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $
           Nothing -> error "Expected a unit for mylib"
           Just pu -> puDistDir pu @?= Just
             ("test/fixtures/tiny-project/dist-newstyle/build/x86_64-linux/ghc-9.6.7/mylib-0.1.0")
+
+-- | The cheap reader must agree with the full one, or pinning a lookup
+-- to the plan would pin it to a different plan than the one every other
+-- command resolves against.
+testLoadPlanVersionsAgrees :: TestTree
+testLoadPlanVersionsAgrees =
+  testCase "loadPlanVersions agrees with the full plan's versions" $
+    withSystemTempDirectory "hypha-plan" $ \cacheDir -> do
+      let fixtureDir = "test" </> "fixtures" </> "tiny-project"
+      full  <- loadBuildPlan     cacheDir (ProjectRoot fixtureDir)
+      light <-                   loadPlanVersions (ProjectRoot fixtureDir)
+      case (full, light) of
+        (Right bp, Right vs) -> vs @?= planVersions bp
+        _ -> error "Expected both plan readers to parse the fixture"
 
 testParseOverride :: TestTree
 testParseOverride = testCase "parsePackageOverride parses async=2.2.6" $ do

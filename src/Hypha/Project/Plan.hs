@@ -6,6 +6,7 @@ module Hypha.Project.Plan
     PlanError (..)
     -- * Loading
   , loadBuildPlan
+  , loadPlanVersions
     -- * Staleness
   , planHash
   ) where
@@ -62,6 +63,28 @@ loadBuildPlan cacheRoot (ProjectRoot root) = do
         , bpUnits     = units
         , bpOverrides = []
         }))
+
+-- | Just the versions the plan pins, one per package.
+--
+-- 'loadBuildPlan' resolves a source directory per unit and reads a
+-- @.cabal@ file for each one to inventory its components — hundreds of
+-- file reads and cabal parses on a real plan.  A caller that only wants
+-- to know which versions this project builds against needs none of it,
+-- and @hypha lookup@ is on the tier-1 fast path where that work is the
+-- dominant cost.  Kept beside 'loadBuildPlan' so the two read the same
+-- @plan.json@ through the same discovery, and pinned to agreement by a
+-- test rather than by comment.
+loadPlanVersions :: ProjectRoot -> IO (Either PlanError (Map PackageName Version))
+loadPlanVersions (ProjectRoot root) = do
+  result <- try @IO @IOException
+              (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
+  pure $ case result of
+    Left e   -> Left (PlanNotFound (show e))
+    Right pj -> Right (Map.fromList
+      [ (PackageName name, Version (CP.dispVer ver))
+      | u <- Map.elems (CP.pjUnits pj)
+      , let CP.PkgId (CP.PkgName name) ver = CP.uPId u
+      ])
 
 -- | Extract compiler identifier from the plan.
 compilerFromPlan :: CP.PlanJson -> CompilerId
