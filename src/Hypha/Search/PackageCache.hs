@@ -14,6 +14,8 @@
 module Hypha.Search.PackageCache
   ( HyphaPackageCache
   , CacheOrigin (..)
+  , CacheScope (..)
+  , VersionedRow (..)
   , openPackageCache
   , openPackageCacheAt
   , haveFreshIndex
@@ -35,7 +37,9 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Search.Cache
-  ( IndexCache, defaultCachePath, lookupRowsByName, lookupRowsInModule
+  ( CacheScope (..)
+  , VersionedRow (..)
+  , IndexCache, defaultCachePath, lookupRowsByName, lookupRowsInModule
   , openIndexCache, readBlob, readFingerprint, readIndex
   , writeBlob, writeFingerprint, writeIndex )
 import Hypha.Search.Index (IndexRow (..))
@@ -127,15 +131,16 @@ readCachedIndex c pkg ver =
 -- copy at the same version.
 lookupByName
   :: HyphaPackageCache
+  -> CacheScope
   -> Text
-  -> IO [IndexRow]
-lookupByName c rawQuery = do
+  -> IO [VersionedRow]
+lookupByName c scope rawQuery = do
   let (mMod, name) = splitQualified rawQuery
   projectRows <- case hpcProject c of
-    Just p  -> lookupRowsByName p name mMod
+    Just p  -> lookupRowsByName p scope name mMod
     Nothing -> pure []
-  globalRows  <- lookupRowsByName (hpcGlobal c) name mMod
-  pure (mergeShadow projectRows globalRows)
+  globalRows  <- lookupRowsByName (hpcGlobal c) scope name mMod
+  pure (mergeShadowOn vrRow projectRows globalRows)
 
 -- | Every row a component's module presents, project rows shadowing global
 -- ones on the same @(pkg, mod, name)@ triple.
@@ -167,10 +172,15 @@ splitQualified raw =
 -- | Project rows take precedence per @(pkg, mod, name)@; global rows
 -- fill in any triples the project does not cover.
 mergeShadow :: [IndexRow] -> [IndexRow] -> [IndexRow]
-mergeShadow project global =
-  let key r = (rowComponent r, rowModule r, rowName r)
+mergeShadow = mergeShadowOn id
+
+-- | 'mergeShadow' over anything carrying a row, so the versioned and
+-- bare forms share the one shadowing rule rather than restating it.
+mergeShadowOn :: (a -> IndexRow) -> [a] -> [a] -> [a]
+mergeShadowOn rowOf project global =
+  let key x = let r = rowOf x in (rowComponent r, rowModule r, rowName r)
       projectKeys = Set.fromList (map key project)
-  in project ++ filter (\r -> not (key r `Set.member` projectKeys)) global
+  in project ++ filter (\x -> not (key x `Set.member` projectKeys)) global
 
 -- | Route a write to the DB picked by 'CacheOrigin'.  When the caller
 -- asks for 'OriginProject' but no project cache exists we fall back to

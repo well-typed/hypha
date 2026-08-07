@@ -13,29 +13,37 @@ cabal build --dry-run        # writes dist-newstyle/cache/plan.json
 ## 2. Query a symbol — compact YAML
 
 ```bash
-hypha symbol async/Control.Concurrent.Async/concurrently
+hypha symbol aeson/Data.Aeson/encode
 ```
 
 ```yaml
-result:
-  name: concurrently
-  package: async
-  version: '2.2.5'
-  module: Control.Concurrent.Async
-  signature: IO a -> IO b -> IO (a, b)
 actions:
-  view_source: hypha source async/Control.Concurrent.Async/concurrently
-  module_index: hypha module async/Control.Concurrent.Async
+  module_index: hypha module aeson/Data.Aeson
+  package_info: hypha package aeson
+  view_source: hypha source aeson/Data.Aeson/encode
+result:
+  haddock_raw: " Efficiently serialize a JSON value as a lazy 'L.ByteString'.\n\n This is implemented in terms of the 'ToJSON' class's 'toEncoding' method."
+  kind: function
+  module: Data.Aeson
+  name: encode
+  package: aeson
+  signature: "encode :: (ToJSON a) => a -> L.ByteString"
+  version: '2.2.5.0'
 ```
 
 YAML is the **default** output: compact, readable in a terminal, and cheap
 for an agent to parse. The top level is just `result:` (the answer) and
-`actions:` (suggested follow-up commands).
+`actions:` (suggested follow-up commands). Keys are emitted in sorted
+order, which is why `actions:` comes first — do not rely on field order,
+rely on the field names.
+
+A symbol whose definition lives in another module gains a `defined_in:`
+block naming it; `encode` is declared where it is exported, so there is
+none here.
 
 <p align="center">
   <img src="../images/cli-yaml.png" width="70%" alt="hypha symbol — compact YAML output" />
 </p>
-<!-- Placeholder; overwrite images/cli-yaml.png in place. See images/CAPTURE-LIST.md. -->
 
 ## 3. Project only the fields you need
 

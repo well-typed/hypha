@@ -3,7 +3,7 @@
 `hypha` is a single cabal package producing two executables: `hypha` (the
 CLI) and `hypha-mcp` (the [MCP](../mcp/index.md) stdio shim).
 
-## From source (requires GHC ≥ 9.6)
+## From source (requires GHC ≥ 9.6; tested on 9.6.7, 9.10.3 and 9.12.4)
 
 ```bash
 git clone https://gitlab.well-typed.com/well-typed/hypha.git

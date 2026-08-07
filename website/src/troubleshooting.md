@@ -107,12 +107,21 @@ in the meantime by falling through to Hoogle.
 
 One known gap, reported on stderr as it happens:
 
-- **Modules that need CPP are skipped.** A module whose source does not
-  parse without preprocessing (`parse error on input '#'`, or an
-  `#error` guarded on a macro only a real GHC invocation defines)
-  contributes no rows, and every module that re-exports from it loses
-  exactly what it re-exported — which is why `Prelude` is sparse. On a
-  283-package plan this is 159 modules; each one is named on stderr with
-  GHC's own message. This covers a type's members too: `GHC.Internal.Base`
-  is one of those modules, so `liftA2` and `pure` have no `base` row even
-  though `fmap` and `mempty` reach one through a re-exporter that parses.
+- **A few modules still will not parse.** CPP itself is not the problem:
+  `hypha` runs the preprocessor with the macros your plan implies
+  (`__GLASGOW_HASKELL__`, `MIN_VERSION_<pkg>`), so `#if`-guarded code is
+  read from the branch your compiler would actually compile. What remains
+  are modules that do not parse even then — a `foreign import` calling
+  convention that only exists on Windows, a Template Haskell quotation the
+  parser cannot take standalone. Measured on a 289-package index: **28
+  modules across 14 packages**, and each one is named on stderr with GHC's
+  own message.
+
+  A module that contributes nothing takes with it whatever it re-exported,
+  and that covers class methods and constructors too — a member presented
+  only by a skipped module is unreachable, while one that is *also*
+  re-exported by a module that parses is found. `mempty` is a current
+  example: it resolves to `ghc-internal` but has no `base` row. Which
+  symbols fall on which side shifts as packages and GHC change, so treat
+  any specific example as a snapshot — the stderr list is the authority
+  for your plan.

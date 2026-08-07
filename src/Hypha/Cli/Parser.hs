@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP                #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings  #-}
 
@@ -10,21 +11,41 @@ module Hypha.Cli.Parser
   , ClientCommandTag (..)
     -- * Parser
   , parseCli
+  , cliParserInfo
   ) where
 
 import Options.Applicative
+import Text.Read (readMaybe)
 
 import Hypha.Cli.Types as Types
 
 -- | Parse the CLI arguments.
 parseCli :: IO (HyphaOptions, Command)
-parseCli = execParser opts
-  where
-    opts = info (cliParser <**> helper)
-      ( fullDesc
-      <> progDesc "Agent-first CLI for browsing Hackage and Hoogle"
-      <> header "hypha — probe your Haskell build plan"
-      )
+parseCli = execParser cliParserInfo
+
+-- | The parser the CLI is driven from.
+--
+-- Exposed separately from 'parseCli' because 'execParser' terminates the
+-- process, which leaves the argument surface untestable; with the
+-- 'ParserInfo' in hand a test can drive it through 'execParserPure'.
+cliParserInfo :: ParserInfo (HyphaOptions, Command)
+cliParserInfo = info (cliParser <**> versionOption <**> helper)
+  ( fullDesc
+  <> progDesc "Agent-first CLI for browsing Hackage and Hoogle"
+  <> header "hypha — probe your Haskell build plan"
+  )
+
+-- | @--version@ / @-V@.
+--
+-- The version comes from cabal's @CURRENT_PACKAGE_VERSION@ macro rather
+-- than a hand-maintained constant, so it cannot drift from the version
+-- the binary was actually built at.
+versionOption :: Parser (a -> a)
+versionOption = infoOption ("hypha " <> CURRENT_PACKAGE_VERSION)
+  ( long "version"
+ <> short 'V'
+ <> help "Show the hypha version and exit"
+  )
 
 cliParser :: Parser (HyphaOptions, Command)
 cliParser = (,) <$> hyphaOptionsParser <*> commandParser
@@ -77,6 +98,25 @@ hyphaOptionsParser = HyphaOptions
        <> metavar "DIR"
        <> help "Override cache root (default: XDG)"
         ))
+  <*> optional (option timeoutSecondsReader
+        ( long "hoogle-timeout"
+       <> metavar "SECONDS"
+       <> help "Remote Hoogle request timeout in seconds (default: 10)"
+        ))
+
+-- | Whole positive seconds.
+--
+-- Rejected at the parser rather than clamped or defaulted: this flag is
+-- what hypha suggests when the remote tier times out, and a value that
+-- quietly changed nothing would make the suggested retry fail
+-- identically with nothing to show for it.
+timeoutSecondsReader :: ReadM TimeoutSeconds
+timeoutSecondsReader = eitherReader $ \raw ->
+  case readMaybe raw of
+    Just n | n > 0 -> Right (TimeoutSeconds n)
+    _              ->
+      Left ("expected a whole number of seconds greater than 0, got "
+            <> (if null raw then "an empty value" else show raw))
 
 commandParser :: Parser Command
 commandParser = hsubparser

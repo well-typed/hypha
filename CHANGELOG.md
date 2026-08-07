@@ -29,6 +29,24 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`hypha --version` / `-V`.** There was no way to ask a hypha binary what
+  it was; `hypha --version` exited `1` with a usage message. The version
+  comes from cabal's `CURRENT_PACKAGE_VERSION`, so it cannot drift from
+  the build.
+- **`--hoogle-timeout SECONDS`**, and hypha no longer advertises
+  environment variables it does not read. `HYPHA_OFFLINE` and
+  `HYPHA_HOOGLE_TIMEOUT` both appeared in hypha's *own* error output — the
+  first in the message for a suppressed remote tier, the second as the
+  suggested retry after a remote failure — and neither was ever looked up,
+  so a user who followed hypha's advice still hit the network and the
+  recommended retry failed identically. `HYPHA_OFFLINE` is now simply gone
+  from the error text and the docs: `--offline` already exists, and
+  hypha's own MCP server passes it explicitly, so the variable only
+  shadowed a flag. `HYPHA_HOOGLE_TIMEOUT` had no flag to shadow, so it
+  became one — it appears in `--help`, which no environment variable does,
+  and a value that is not a positive whole number of seconds is rejected
+  by the parser rather than silently ignored. The remote-failure action
+  now suggests `hypha lookup <query> --hoogle-timeout 30`.
 - **The compiler answers where a re-export comes from.** An export list
   says *which* names a module exports and never *whence*, so a syntactic
   pass has to guess between the imports that could plausibly supply one —
@@ -120,6 +138,102 @@ loosely follows [Semantic Versioning](https://semver.org/).
   Claude-Code harnesses.
 
 ### Fixed
+
+- **`hypha lookup`'s cache tier is pinned to the build plan.** The
+  package cache is keyed on `(package, version)` and shared by every
+  project on the host, and a write for a new version does not evict the
+  old one — so "what is indexed here" is the machine's history, which is
+  wider than "what this project builds against". Tier 1 answered from all
+  of it: in a project pinning `base-compat-0.15.0`, `hypha lookup fmap`
+  also returned a row from `base-compat-0.14.1` that some other project
+  had indexed, labelled `tier: cache` as though it came from the plan.
+  The same query on a colleague's machine gave a different answer.
+  Reaching past the plan remains the remote Hoogle tier's job, and the
+  tier label is now what tells you how far an answer reached. Outside a
+  project there is no plan to pin to and the whole cache still answers; a
+  plan that cannot be read is reported on stderr rather than silently
+  treated as the same case.
+- **A `lookup` provider carries the version it was indexed under.** The
+  version is a property of the cache entry rather than of a row, so two
+  rows for the same symbol, module and package differed in nothing the
+  renderer could see and printed as an unexplained duplicate. Emitted on
+  the cache tier only: a Hoogle hit carries a package name and no version.
+- **CPP conditionals are evaluated against the plan's macros.** cabal
+  generates a `cabal_macros.h` for every build — `__GLASGOW_HASKELL__`,
+  and a `MIN_VERSION_<pkg>` per dependency — and passes it to every CPP
+  invocation. hypha read the same sources without it, and in CPP an
+  undefined macro is `0`, so a module written the way most of Hackage is
+  written:
+
+  ```haskell
+  #if __GLASGOW_HASKELL__ >= 710
+  modern :: Int -> Int
+  #else
+  ancient :: Int -> Int
+  #endif
+  ```
+
+  was indexed as `ancient` — on a plan pinning **GHC 9.10.3**. Likewise
+  `MIN_VERSION_base(4,18,0)` was false against **base 4.20.2.0**. The
+  module parses, contributes rows, and nothing is reported, so unlike a
+  skipped module there was no stderr line to notice. **2,684 modules
+  across 559 packages** — 15.3% of a real source cache — carry such a
+  gate.
+
+  hypha now synthesises the header from the build plan, which already
+  holds the compiler and a version per package, so the macros cannot
+  drift from the answers they describe; it is written once per plan,
+  content-addressed under `<cache>/cpp-macros/`. A package's
+  `include-dirs` are passed as the `#include` search path too, so a
+  module including its own package's header is no longer dropped
+  outright.
+
+  The index format generation goes to `5`: the per-component fingerprint
+  cannot notice this, because the source did not change — the macros did
+  — so nothing else would force the affected rows to be rebuilt.
+- **A signature is a type again.** Signatures were sliced out of the
+  declaration's source span, so any comment inside that span came with
+  them and the newlines were collapsed on the way — `hypha symbol
+  text/Data.Text/splitOn` answered `splitOn :: HasCallStack => Text -- ^
+  String to split on. If this string is empty, an error -- will occur. ->
+  Text -- ^ Input text. -> [Text]`, in which the second line of the first
+  comment reads as part of the type. Measured on a real cache: **9,365
+  rows, 5.27%, across 262 packages** including `base`, `Cabal`, `text` and
+  `primitive`. A data constructor had the same problem from the other
+  direction, carrying the `=` or `|` and the trailing `-- ^` of the line
+  it shared, and a record field inherited the opening brace.
+
+  Signatures now come from the parse tree, with GHC's `HsDocTy` nodes
+  removed, the way `declDoc` already did. That is exact where a textual
+  strip is not: `arrow :: (a --> b) -> Int` is an operator, and everything
+  after its `--` is the rest of the type. The index format generation is
+  bumped to `4`, because a stored signature cannot be repaired after the
+  fact — telling a comment from an operator needs the parse tree the row
+  no longer has — so without it every existing cache would keep serving
+  the mangled text. Expect one background re-index.
+- **User-facing docs corrected against measured behaviour.** Exit code `1`
+  (argument-parser failures — unknown subcommand, unknown flag, missing
+  argument) was undocumented despite covering the most common way to
+  misuse the CLI, and `9` (`INTERNAL_ERROR`) was reachable but unlisted;
+  both are now in the table, with the `1`-versus-`2` distinction spelled
+  out. `lookup.md` claimed class methods and data constructors are not
+  indexed — they are; the determinant is whether a module survives CPP.
+  The Hoogle freshness stamp is `hoogle-stamp`, not `plan-hash`
+  (`caching.md` used both names, in the same file). `server/index.md`
+  illustrated sublibraries with a `hypha:lib-breakdown` that does not
+  exist. `flags.md` described `--full` as "every field", when it adds
+  `source` and `tiers_consulted` to output that already carries the whole
+  Haddock body. `quick-start.md`'s worked example predated three schema
+  changes. Seven "Placeholder" comments still told readers to overwrite
+  screenshots that are real captures. `tested-with` claimed GHC 9.8 (no
+  project file) and omitted 9.12 (which has one, and a green CI job).
+  Finally, `Hypha.Exit` and `Hypha.Cli.Run` both attributed exit `9` to a
+  `catchAny` in `app/hypha/Main.hs`; there is none — it comes from the
+  `tryAny` in `runClientMain`.
+- **`hypha doctor` no longer reports itself outside a plan.** `Outcome`
+  is built positionally in one place and takes a `Bool` third, so
+  `all_pass` was filed as `outside_plan` — a healthy doctor printed
+  `outside_plan: true` directly above its own passing `plan_json` check.
 
 - **`hypha source` and `hypha symbol` follow a re-export out of the
   package.** `hypha source base/Data.List/sortOn` reported `NOT_FOUND`:

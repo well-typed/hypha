@@ -818,15 +818,21 @@ stanzaModules ci =
 -- @[]@ both for a cabal file we cannot read and for one that names no
 -- library, and a caller told only "no components" would silently fall
 -- back to the sweep it was written to avoid.
-packageSources :: FilePath -> IO [(Comp.ComponentInfo, [ModuleSource])]
-packageSources pkgRoot = do
+packageSources
+  :: FilePath
+  -> Maybe FilePath
+     -- ^ The plan's synthesised @cabal_macros.h@, so a module read on
+     -- this path is preprocessed against the same macros the indexer
+     -- used.  'Nothing' outside a project.
+  -> IO [(Comp.ComponentInfo, [ModuleSource])]
+packageSources pkgRoot mMacroHeader = do
   mCabal <- Comp.findCabalFile pkgRoot
   case mCabal of
     Nothing    -> do
       report "has no cabal file"
       pure []
     Just cabal -> do
-      comps <- Comp.parseLibComponents cabal pkgRoot
+      comps <- Comp.parseLibComponents cabal pkgRoot mMacroHeader
       if null comps
         then do
           report ("cabal file " <> cabal <> " named no library component")

@@ -279,12 +279,12 @@ tests = testGroup "Unit.SearchIndexBuild"
       let ci = indexComponentPure (ComponentKey "reexport") reexportDeps emptyEnv
                  defaultLanguageSettings srcs
           sigOf n = map rowSignature (rowsFor ci n)
-      -- Slicing is line-granular throughout this module, so a member
-      -- carries whatever punctuation shares its line -- the same text the
-      -- module page shows.  Trimming it would need column spans.
-      sigOf "Circle" @?= [Signature "= Circle { radius :: Int }"]
-      sigOf "Square" @?= [Signature "| Square Int"]
-      sigOf "radius" @?= [Signature "{ radius :: Int"]
+      -- Rendered from the parse tree, so a member carries no punctuation
+      -- from the line it happened to share: the leading @=@ / @|@ and the
+      -- brace were the data declaration's syntax, never the member's.
+      sigOf "Circle" @?= [Signature "Circle {radius :: Int}"]
+      sigOf "Square" @?= [Signature "Square Int"]
+      sigOf "radius" @?= [Signature "radius :: Int"]
       sequence_
         [ assertBool (show n <> " leaves the unresolved report")
             (n `notElem` map oeName (ciUnresolved ci))

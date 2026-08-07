@@ -14,6 +14,7 @@ module Hypha.Types.BuildPlan
     -- * Queries
   , lookupPackage
   , lookupUnit
+  , planVersions
   , applyOverrides
   , forwardDepsOf
   , reverseDepsOf
@@ -103,6 +104,11 @@ data BuildPlan = BuildPlan
   { bpCompiler  :: !CompilerId
   , bpUnits     :: !(Map PackageName PlannedUnit)
   , bpOverrides :: ![PackageOverride]
+  , bpCppMacros :: !(Maybe FilePath)
+    -- ^ The synthesised @cabal_macros.h@ for this plan, written when the
+    -- plan was loaded.  Carried here because every consumer that needs to
+    -- preprocess a module already holds the plan, and the macros must
+    -- describe the same compiler and versions the rest of the answers do.
   }
   deriving stock (Show)
 
@@ -112,11 +118,21 @@ emptyBuildPlan = BuildPlan
   { bpCompiler  = CompilerId "unknown"
   , bpUnits     = Map.empty
   , bpOverrides = []
+  , bpCppMacros = Nothing
   }
 
 -- | Look up a package version in the plan.
 lookupPackage :: PackageName -> BuildPlan -> Maybe Version
 lookupPackage name bp = pkgVersion . puId <$> Map.lookup name (bpUnits bp)
+
+-- | The version this plan pins for each package it mentions.
+--
+-- The whole plan reduced to what a version check needs, so callers that
+-- only want "is this the version we build against" do not carry a
+-- 'BuildPlan' (and its source directories, dep lists and component
+-- inventories) around to ask it.
+planVersions :: BuildPlan -> Map PackageName Version
+planVersions = Map.map (pkgVersion . puId) . bpUnits
 
 -- | Look up a planned unit in the plan.
 lookupUnit :: PackageName -> BuildPlan -> Maybe PlannedUnit

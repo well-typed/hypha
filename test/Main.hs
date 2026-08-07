@@ -23,7 +23,9 @@ import qualified Property.SymbolPath
 import qualified Unit.BuildEnv
 import qualified Unit.BuildEnvCompose
 import qualified Unit.BuildPlanOrder
+import qualified Unit.CliParser
 import qualified Unit.Components
+import qualified Unit.CppMacros
 import qualified Unit.Deps
 import qualified Unit.Doctor
 import qualified Unit.EmbeddedAssets
@@ -91,7 +93,9 @@ allTests = testGroup "hypha"
   , Unit.BuildEnv.tests
   , Unit.BuildEnvCompose.tests
   , Unit.BuildPlanOrder.tests
+  , Unit.CliParser.tests
   , Unit.Components.tests
+  , Unit.CppMacros.tests
   , Unit.Deps.tests
   , Unit.Doctor.tests
   , Unit.EmbeddedAssets.tests

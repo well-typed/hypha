@@ -20,7 +20,7 @@ tests = testGroup "Unit.Components"
   [ testCase "parses main lib + two sublibs + two exes from fixture" $ do
       let root  = "test" </> "fixtures" </> "cabal"
           cabal = root </> "hypha.cabal"
-      comps <- parseLibComponents cabal root
+      comps <- parseLibComponents cabal root Nothing
       let summary =
             sort [ ( renderKind (ciKind c)
                    , sort (ciHsSourceDirs c)
@@ -35,12 +35,12 @@ tests = testGroup "Unit.Components"
         , ( "sublib:internal",  [root </> "internal-src"] )
         ]
   , testCase "missing cabal file returns []" $ do
-      res <- parseLibComponents "/does/not/exist.cabal" "/does/not"
+      res <- parseLibComponents "/does/not/exist.cabal" "/does/not" Nothing
       res @?= []
 
   , testCase "cabal other-modules, default-extensions and language are read" $ do
       let root = "test" </> "fixtures" </> "cabal"
-      comps <- parseLibComponents (root </> "extensions.cabal") "/pkg"
+      comps <- parseLibComponents (root </> "extensions.cabal") "/pkg" Nothing
       case comps of
         [c] -> do
           ciExposedModules    c @?= ["Fixture.Wrapper"]
@@ -60,7 +60,7 @@ tests = testGroup "Unit.Components"
       -- assignment the package was built with, and a module whose file is
       -- not on disk is dropped downstream anyway.
       let root = "test" </> "fixtures" </> "cabal"
-      comps <- parseLibComponents (root </> "conditional.cabal") "/pkg"
+      comps <- parseLibComponents (root </> "conditional.cabal") "/pkg" Nothing
       case comps of
         [c] -> do
           sort (ciExposedModules c)
@@ -80,7 +80,7 @@ tests = testGroup "Unit.Components"
       -- The union can name the same module twice; two rows for one file
       -- would be read and indexed twice.
       let root = "test" </> "fixtures" </> "cabal"
-      comps <- parseLibComponents (root </> "conditional.cabal") "/pkg"
+      comps <- parseLibComponents (root </> "conditional.cabal") "/pkg" Nothing
       case comps of
         [c] -> do
           let mods = ciExposedModules c ++ ciOtherModules c

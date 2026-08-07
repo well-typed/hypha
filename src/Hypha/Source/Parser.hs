@@ -44,6 +44,7 @@ import GHC.Parser.Lexer qualified as L
 import GHC.Parser qualified as P
 import GHC.Types.Name.Occurrence qualified as Occ
 import GHC.Types.Name.Reader (RdrName, rdrNameOcc)
+import GHC.Utils.Outputable (Outputable, SDoc, ppr, showSDocUnsafe)
 import GHC.Data.Bag qualified as Bag
 import GHC.Types.Error (errMsgSpan, getMessages)
 import GHC.Types.SrcLoc
@@ -77,6 +78,16 @@ data Decl = Decl
     -- ^ End line of the definition span (inclusive, 1-based).  For
     -- data\/class declarations this delimits the whole body so callers
     -- can slice the constructor\/method block out of the source.
+  , declSignature  :: !(Maybe Text)
+    -- ^ The declaration's signature, rendered from the parse tree rather
+    -- than sliced out of the source.  A type has no comments in it, but
+    -- a /span/ over the source does — GHC keeps per-argument Haddock as
+    -- 'HsDocTy' nodes inside the type, and re-slicing the lines swept
+    -- them up and collapsed the newlines, so @Text -- ^ Input text.@
+    -- reached the user as though it were part of the type.  Rendered
+    -- here, with those nodes removed, for the same reason 'declDoc'
+    -- comes from the tree: the structured form is the one that is right.
+    -- 'Nothing' for a declaration with no signature of its own.
   , declDoc        :: !(Maybe Text)
     -- ^ The Haddock documentation attached to this declaration, as
     -- rendered by GHC (comment markers already stripped, contiguous
@@ -218,8 +229,8 @@ parseModuleIO ls path source = do
    preprocess
      | not (needsCpp source) = pure (Right source)
      | otherwise = do
-         out <- try (Text.pack <$> Cpphs.runCpphs cpphsOpts path
-                                     (Text.unpack source))
+         out <- try (Text.pack <$> Cpphs.runCpphs (cpphsOpts (Extensions.lsCpp ls))
+                                     path (Text.unpack source))
          pure $ case out of
            Right t                   -> Right t
            Left (e :: SomeException) -> Left ParseError
@@ -295,9 +306,18 @@ needsCpp src =
 -- branches reachable under no externally-supplied symbol table, and
 -- keep blank lines in place so line numbers in the produced AST
 -- still match the original source.
-cpphsOpts :: Cpphs.CpphsOptions
-cpphsOpts = Cpphs.defaultCpphsOptions
-  { Cpphs.boolopts = Cpphs.defaultBoolOptions
+cpphsOpts :: Extensions.CppEnv -> Cpphs.CpphsOptions
+cpphsOpts env = Cpphs.defaultCpphsOptions
+  { -- cabal generates a @cabal_macros.h@ and passes it to every CPP
+    -- invocation; hypha synthesises the same thing from the plan and
+    -- passes it the same way.  Without it @__GLASGOW_HASKELL__@ and
+    -- @MIN_VERSION_*@ are undefined, and an undefined macro is zero, so
+    -- every version gate resolves to its oldest branch.
+    Cpphs.preInclude = maybe [] pure (Extensions.cppPreInclude env)
+    -- @#include@ of a package's own header fails without a search path,
+    -- and a failed include takes the whole module out of the index.
+  , Cpphs.includes   = Extensions.cppIncludeDirs env
+  , Cpphs.boolopts = Cpphs.defaultBoolOptions
       { Cpphs.locations = True     -- emit @{-# LINE #-}@ pragmas so the
                                    -- parser's @usePosPrags@ option tracks
                                    -- original-source line numbers under
@@ -335,8 +355,14 @@ declSigText = declSigTextIn . numberedLines
 -- | 'declSigText' over lines already numbered, for callers slicing many
 -- declarations out of one module: numbering the source per declaration is
 -- what made the batch path quadratic.
+-- The rendered form wins when there is one: it is the declaration's type
+-- as the parser understood it.  The slice remains for declarations that
+-- have source worth showing and no type node to render — a data
+-- constructor, and anything the renderer does not yet cover.
 declSigTextIn :: [(Int, Text)] -> Decl -> Maybe Text
-declSigTextIn ls d = sliceJoined ls (declSigLine d) (declSigEndLine d)
+declSigTextIn ls d = case declSignature d of
+  Just rendered -> Just rendered
+  Nothing       -> sliceJoined ls (declSigLine d) (declSigEndLine d)
 
 -- | 'declSigTextIn', falling back to the definition span for a data
 -- constructor — the one kind that has real source worth showing and no
@@ -494,6 +520,9 @@ mergeByName = go []
       , declSigEndLine = declSigEndLine a `orFirst` declSigEndLine b
       , declDefLine    = declDefLine a    `orFirst` declDefLine b
       , declDefEndLine = declDefEndLine a `orFirst` declDefEndLine b
+        -- The signature half of the merge is the one that has a type to
+        -- render; the definition half never does.
+      , declSignature  = declSignature a  `orFirst` declSignature b
       , declDoc        = declDoc a        `appendDoc` declDoc b
       }
 
@@ -511,14 +540,18 @@ mergeByName = go []
 
 declsFromTop :: LHsDecl GhcPs -> [Decl]
 declsFromTop ld = case unLoc ld of
-  SigD _ (TypeSig _ lnames _ty) ->
+  SigD _ (TypeSig _ lnames ty) ->
     let names    = map (rdrText . unLoc) lnames
         (mS, mE) = locLines ld
-    in [ sigDecl nm names mS mE DkFunction Nothing | nm <- names ]
-  SigD _ (PatSynSig _ lnames _ty) ->
+        rendered = renderSigWcType names ty
+    in [ (sigDecl nm names mS mE DkFunction Nothing)
+           { declSignature = Just rendered } | nm <- names ]
+  SigD _ (PatSynSig _ lnames ty) ->
     let names    = map (rdrText . unLoc) lnames
         (mS, mE) = locLines ld
-    in [ sigDecl nm names mS mE DkPatternSyn Nothing | nm <- names ]
+        rendered = renderSigType names ty
+    in [ (sigDecl nm names mS mE DkPatternSyn Nothing)
+           { declSignature = Just rendered } | nm <- names ]
   ValD _ (FunBind { fun_id = L _ rn }) ->
     let (mS, mE) = locLines ld
     in [ defDecl (rdrText rn) mS mE DkFunction Nothing ]
@@ -560,8 +593,119 @@ sigDecl nm names mS mE k parent = Decl
   , declSigEndLine = mE
   , declDefLine    = Nothing
   , declDefEndLine = Nothing
+  , declSignature  = Nothing
   , declDoc        = Nothing
   }
+
+-- | @name[, name...] :: type@, rendered from the parse tree.
+--
+-- The name list is reproduced as written so a comma-grouped signature
+-- still reads as one — @sourceList, sourceListC :: Monad m => [a] -> m ()@
+-- is what the source says and what a reader expects to see.
+renderSigWith :: (a -> SDoc) -> [Text] -> a -> Text
+renderSigWith pp names ty =
+  Text.intercalate ", " names <> " :: " <> renderPp' (pp ty)
+
+-- | 'ppr' lays a long type out over several lines; a signature is one
+-- line everywhere it is consumed (a YAML scalar, a table cell, a search
+-- row), so the layout is flattened here rather than at each of them.
+renderPp' :: SDoc -> Text
+renderPp' = Text.unwords . Text.words . Text.pack . showSDocUnsafe
+
+renderPp :: Outputable a => a -> Text
+renderPp = renderPp' . ppr
+
+-- | A whole-signature type with its per-argument docs removed.
+renderSigWcType :: [Text] -> LHsSigWcType GhcPs -> Text
+renderSigWcType names = renderSigWith ppr names . stripSigWcDocs
+
+-- | 'renderSigWcType' for the bare 'LHsSigType' a class method carries.
+renderSigType :: [Text] -> LHsSigType GhcPs -> Text
+renderSigType names = renderSigWith ppr names . stripSigDocs
+
+-- | A field's type, which is an 'LHsType' with no @forall@ wrapper.
+renderFieldType :: [Text] -> LHsType GhcPs -> Text
+renderFieldType names = renderSigWith ppr names . stripDocTy
+
+-- | A data constructor rendered from the tree.
+--
+-- A constructor has no type of its own to render, so it used to slice its
+-- source span — which is why @| BoxedRep Levity -- ^ boxed; represented
+-- by a pointer@ reached the user as a signature, leading punctuation and
+-- all.  Its Haddock is already carried on 'declDoc', so reproducing it
+-- here was duplication as well as corruption.
+renderConDecl :: ConDecl GhcPs -> Text
+renderConDecl = renderPp . stripConDocs
+
+-- | Every doc a constructor can carry: its own, its fields', and any
+-- buried in its argument or result types.
+stripConDocs :: ConDecl GhcPs -> ConDecl GhcPs
+stripConDocs c = case c of
+  ConDeclH98{}  -> c { con_doc    = Nothing
+                     , con_args   = stripH98Details (con_args c)
+                     }
+  ConDeclGADT{} -> c { con_doc    = Nothing
+                     , con_g_args = stripGadtDetails (con_g_args c)
+                     , con_res_ty = stripDocTy (con_res_ty c)
+                     }
+
+stripH98Details :: HsConDeclH98Details GhcPs -> HsConDeclH98Details GhcPs
+stripH98Details = \case
+  PrefixCon tys args -> PrefixCon tys (map stripScaled args)
+  InfixCon a b       -> InfixCon (stripScaled a) (stripScaled b)
+  RecCon flds        -> RecCon (fmap (map stripConField) flds)
+
+stripGadtDetails :: HsConDeclGADTDetails GhcPs -> HsConDeclGADTDetails GhcPs
+stripGadtDetails = \case
+  PrefixConGADT x args -> PrefixConGADT x (map stripScaled args)
+  RecConGADT x flds    -> RecConGADT x (fmap (map stripConField) flds)
+
+stripScaled :: HsScaled GhcPs (LHsType GhcPs) -> HsScaled GhcPs (LHsType GhcPs)
+stripScaled (HsScaled m t) = HsScaled m (stripDocTy t)
+
+stripConField :: LConDeclField GhcPs -> LConDeclField GhcPs
+stripConField (L l f) =
+  L l f { cd_fld_type = stripDocTy (cd_fld_type f), cd_fld_doc = Nothing }
+
+stripSigWcDocs :: LHsSigWcType GhcPs -> LHsSigWcType GhcPs
+stripSigWcDocs (HsWC x body) = HsWC x (stripSigDocs body)
+
+stripSigDocs :: LHsSigType GhcPs -> LHsSigType GhcPs
+stripSigDocs (L l (HsSig x bndrs body)) = L l (HsSig x bndrs (stripDocTy body))
+
+-- | Remove every 'HsDocTy' node from a type.
+--
+-- A per-argument Haddock comment is not part of the type; GHC parks it in
+-- the tree so Haddock can find it, and 'ppr' faithfully prints it back
+-- out as @-- |@.  Removing the nodes is exact where a textual strip is
+-- not: @(a --> b)@ is an operator, and everything after its @--@ is the
+-- rest of the type rather than a comment.
+--
+-- The catch-all covers the leaf types, which cannot contain one.  A
+-- composite form not listed here keeps its docs — the behaviour before
+-- this function existed — rather than losing the type; a promoted tuple
+-- is deliberately in that group, because its constructor's arity differs
+-- across the @ghc-lib-parser@ pins the three supported compilers use and
+-- a Haddock comment inside one is not worth a CPP branch.
+stripDocTy :: LHsType GhcPs -> LHsType GhcPs
+stripDocTy (L l ty) = case ty of
+  HsDocTy _ inner _        -> stripDocTy inner
+  HsForAllTy x tele body   -> L l (HsForAllTy x tele (stripDocTy body))
+  HsQualTy x ctx body      -> L l (HsQualTy x (fmap (map stripDocTy) ctx)
+                                             (stripDocTy body))
+  HsFunTy x arr a b        -> L l (HsFunTy x arr (stripDocTy a) (stripDocTy b))
+  HsParTy x a              -> L l (HsParTy x (stripDocTy a))
+  HsAppTy x a b            -> L l (HsAppTy x (stripDocTy a) (stripDocTy b))
+  HsAppKindTy x a k        -> L l (HsAppKindTy x (stripDocTy a) k)
+  HsListTy x a             -> L l (HsListTy x (stripDocTy a))
+  HsTupleTy x srt as       -> L l (HsTupleTy x srt (map stripDocTy as))
+  HsSumTy x as             -> L l (HsSumTy x (map stripDocTy as))
+  HsOpTy x p a op b        -> L l (HsOpTy x p (stripDocTy a) op (stripDocTy b))
+  HsKindSig x a k          -> L l (HsKindSig x (stripDocTy a) (stripDocTy k))
+  HsBangTy x b a           -> L l (HsBangTy x b (stripDocTy a))
+  HsIParamTy x n a         -> L l (HsIParamTy x n (stripDocTy a))
+  HsExplicitListTy x p as  -> L l (HsExplicitListTy x p (map stripDocTy as))
+  _                        -> L l ty
 
 -- | A definition declaration.
 defDecl :: Text -> Maybe Int -> Maybe Int -> DeclKind -> Maybe Text -> Decl
@@ -574,6 +718,7 @@ defDecl nm mS mE k parent = Decl
   , declSigEndLine = Nothing
   , declDefLine    = mS
   , declDefEndLine = mE
+  , declSignature  = Nothing
   , declDoc        = Nothing
   }
 
@@ -628,10 +773,12 @@ data BodyItem
 -- | A method's type signature, ordinary or generic @default@.
 methodSigDecls :: Text -> LSig GhcPs -> [Decl]
 methodSigDecls cls sigL = case unLoc sigL of
-  ClassOpSig _ _ lnames _ty ->
+  ClassOpSig _ _ lnames ty ->
     let names    = map (rdrText . unLoc) lnames
         (mS, mE) = spanLines (locA (getLoc sigL))
-    in [ sigDecl nm names mS mE DkClassMethod (Just cls) | nm <- names ]
+        rendered = renderSigType names ty
+    in [ (sigDecl nm names mS mE DkClassMethod (Just cls))
+           { declSignature = Just rendered } | nm <- names ]
   _ -> []
 
 -- | A default-method binding inside the class body.
@@ -653,7 +800,9 @@ constructorsOf tyName defn =
   , let con      = unLoc lcon
         (mS, mE) = spanLines (locA (getLoc lcon))
   , d <- [ (defDecl nm mS mE DkConstructor (Just tyName))
-             { declDoc = fmap docTextOf (conDoc con) }
+             { declSignature = Just (renderConDecl con)
+             , declDoc       = fmap docTextOf (conDoc con)
+             }
          | nm <- constructorNames con
          ]
            ++ fieldsOf tyName con
@@ -681,14 +830,16 @@ conDoc = \case
 fieldsOf :: Text -> ConDecl GhcPs -> [Decl]
 fieldsOf tyName con =
   [ (sigDecl nm names mS mE DkRecordField (Just tyName))
-      { declDoc = fmap docTextOf mdoc }
+      { declSignature = Just rendered, declDoc = fmap docTextOf mdoc }
   | lfld <- recordFieldsOf con
-  , ConDeclField { cd_fld_names = lnames, cd_fld_doc = mdoc } <- [unLoc lfld]
+  , ConDeclField { cd_fld_names = lnames, cd_fld_type = fty
+                , cd_fld_doc = mdoc } <- [unLoc lfld]
   , let (mS, mE) = spanLines (locA (getLoc lfld))
         names    = [ rdrText rn
                    | lname <- lnames
                    , FieldOcc { foLabel = L _ rn } <- [unLoc lname]
                    ]
+        rendered = renderFieldType names fty
   , nm <- names
   ]
 

@@ -37,18 +37,27 @@ import Hypha.Hoogle.Remote ( RemoteError (..), RemoteOptions, searchRemote )
 import Hypha.Hoogle.Tier (Tier (..), tierLabel)
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
 import Hypha.Output.Outcome (Outcome (..))
+import Hypha.Search.Cache (CacheScope, VersionedRow (..))
 import Hypha.Search.Index (IndexRow (..))
 import Hypha.Search.PackageCache (HyphaPackageCache, lookupByName)
 import Hypha.Types.ComponentName (ComponentKey (..))
+import Hypha.Types.PackageId (Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 
 -- | A single hit, tagged with its origin tier.
 data Provider = Provider
-  { pPkg  :: !Text
-  , pMod  :: !Text
-  , pName :: !Text
-  , pSig  :: !Text
-  , pTier :: !Tier
+  { pPkg     :: !Text
+  , pMod     :: !Text
+  , pName    :: !Text
+  , pSig     :: !Text
+  , pTier    :: !Tier
+  , pVersion :: !(Maybe Version)
+    -- ^ The version the row was indexed under.  'Just' on the cache
+    -- tier, which reads a @(pkg, version)@ entry and so always knows;
+    -- 'Nothing' on the Hoogle tiers, which answer with a package name
+    -- and no version.  Without it two rows for the same symbol in the
+    -- same module of the same package — the shape a cache holding two
+    -- versions produces — render identically and read as a duplicate.
   }
   deriving stock (Show, Eq)
 
@@ -62,6 +71,11 @@ data LookupResult = LookupResult
 
 data LookupOptions = LookupOptions
   { loOffline      :: !Bool
+  , loCacheScope   :: !CacheScope
+    -- ^ Which of the shared cache's versions tier 1 may answer from.
+    -- The DB is keyed on @(package, version)@ and shared across every
+    -- project on the host, so left unscoped it answers from the host's
+    -- indexing history rather than from this project's plan.
   , loRemote       :: !RemoteOptions
   , loPrepareLocal :: !(IO ())
     -- ^ Action invoked /just-in-time/ before tier 2 ('searchLocal').
@@ -81,7 +95,7 @@ data LookupOptions = LookupOptions
 data RemoteTierOutcome
     -- | Earlier tier hit; remote tier never consulted.
   = RemoteNotConsulted
-    -- | @--offline@ (or @HYPHA_OFFLINE@) suppressed the remote call.
+    -- | @--offline@ suppressed the remote call.
   | RemoteSkippedOffline
     -- | Remote returned with zero hits.
   | RemoteEmpty
@@ -99,7 +113,7 @@ runLookup
   -> IO (Either HyphaError (Outcome Value))
 runLookup cache hoogleLocal opts q@(HoogleQuery qText) = do
   -- Tier 1
-  cacheHits <- lookupByName cache qText
+  cacheHits <- lookupByName cache (loCacheScope opts) qText
   case cacheHits of
     (_:_) -> pure (buildOutcome q
                     (map (toProvider TierCache) cacheHits)
@@ -186,27 +200,43 @@ chooseTiers t1 t2 offline _t3
 -- | A cached index row as a lookup provider.  The row's definition
 -- module and visibility do not appear in @hypha lookup@'s output shape,
 -- which reports where a symbol is /available/, not where it is declared.
-toProvider :: Tier -> IndexRow -> Provider
-toProvider t r = Provider
-  (unComponentKey (rowComponent r))
-  (unModulePath   (rowModule r))
-  (unSymbolName   (rowName r))
-  (unSignature    (rowSignature r))
-  t
+-- Built with record syntax rather than positionally: 'Provider' now has
+-- two adjacent fields the type checker cannot tell apart by shape, and
+-- the same positional habit is what filed a doctor's @all_pass@ as its
+-- @outside_plan@.
+toProvider :: Tier -> VersionedRow -> Provider
+toProvider t (VersionedRow v r) = Provider
+  { pPkg     = unComponentKey (rowComponent r)
+  , pMod     = unModulePath   (rowModule r)
+  , pName    = unSymbolName   (rowName r)
+  , pSig     = unSignature    (rowSignature r)
+  , pTier    = t
+  , pVersion = Just v
+  }
 
 hitProvider :: Tier -> HoogleHit -> Provider
-hitProvider t h = Provider (hhPackage h) (hhModule h) (hhName h) (hhSig h) t
+hitProvider t h = Provider
+  { pPkg     = hhPackage h
+  , pMod     = hhModule h
+  , pName    = hhName h
+  , pSig     = hhSig h
+  , pTier    = t
+  , pVersion = Nothing
+  }
 
 -- JSON ------------------------------------------------------------------
 
 providerToJSON :: Provider -> Value
-providerToJSON p = object
+providerToJSON p = object $
   [ "pkg"  .= pPkg p
   , "mod"  .= pMod p
   , "name" .= pName p
   , "sig"  .= pSig p
   , "tier" .= tierLabel (pTier p)
   ]
+  -- Emitted only when known: a Hoogle hit carries a package name and no
+  -- version, and a @version: null@ would read as "no version exists".
+  <> [ "version" .= unVersion v | Just v <- [pVersion p] ]
 
 lookupResultToJSON :: LookupResult -> Value
 lookupResultToJSON r = object

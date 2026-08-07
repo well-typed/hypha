@@ -13,7 +13,6 @@ hypha server listening on http://127.0.0.1:4287
 <p align="center">
   <img src="../images/hero-server.png" width="80%" alt="hypha server — command palette and symbol card" />
 </p>
-<!-- Placeholder; overwrite images/hero-server.png in place. -->
 
 ## Highlights
 
@@ -25,7 +24,6 @@ hypha server listening on http://127.0.0.1:4287
   <p align="center">
     <img src="../images/server-search.png" width="80%" alt="fuzzy search dropdown mid-query" />
   </p>
-  <!-- Placeholder; overwrite images/server-search.png in place. -->
 
 - **One result per definition.** Rows that share a definition site collapse
   into a single hit — `Data.Traversable.mapAccumL` and
@@ -63,17 +61,17 @@ hypha server listening on http://127.0.0.1:4287
   <p align="center">
     <img src="../images/server-symbol-card.png" width="80%" alt="rendered symbol card with Haddock" />
   </p>
-  <!-- Placeholder; overwrite images/server-symbol-card.png in place. -->
 
 - **Skylighting-rendered source view** with a `?line=N` scroll target.
 
   <p align="center">
     <img src="../images/server-source-view.png" width="80%" alt="highlighted source view" />
   </p>
-  <!-- Placeholder; overwrite images/server-source-view.png in place. -->
 
-- **Private libraries.** Sublibs appear as separate sidebar entries (`hypha`,
-  `hypha:lib-breakdown`), each with their own pages and search scope.
+- **Private libraries.** Sublibs appear as separate sidebar entries — a
+  package's main library under its own name, a sublibrary as
+  `pkg:sublib` (e.g. `happy-lib:frontend`) — each with their own pages
+  and search scope.
 
 See **[Endpoints & Flags](reference.md)** for the full HTTP surface and
 command-line options.

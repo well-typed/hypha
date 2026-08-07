@@ -29,8 +29,6 @@ the same data.
   &nbsp;
   <img src="website/src/images/hero-server.png" width="46%" alt="hypha doc-browser server" />
 </p>
-<!-- Placeholders until captured; overwrite website/src/images/hero-cli.png
-     and hero-server.png in place — see website/src/images/CAPTURE-LIST.md. -->
 
 ## Install
 
@@ -43,7 +41,7 @@ cd hypha && cabal install exe:hypha exe:hypha-mcp
 
 ```bash
 cd your-cabal-project && cabal build --dry-run   # writes plan.json
-hypha symbol async/Control.Concurrent.Async/concurrently
+hypha symbol aeson/Data.Aeson/encode
 ```
 
 ## Development

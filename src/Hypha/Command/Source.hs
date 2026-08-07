@@ -101,33 +101,37 @@ fullKeys = Set.fromList
 --   Parses the argument as @PKG/MOD[/SYM]@ and returns a 30-line snippet
 --   around the symbol definition (or the module header if no symbol).
 runSource
-  :: BuildEnv IO -> OutsideReach IO -> PackageId -> Text -> Maybe Text
+  :: Maybe FilePath -> BuildEnv IO -> OutsideReach IO -> PackageId -> Text
+  -> Maybe Text
   -> IO (Either HyphaError (Outcome Value))
-runSource env reach pid modPath mSym = runExceptT $ do
+runSource mMacroHeader env reach pid modPath mSym = runExceptT $ do
   srcDir <- liftMaybe (NotFound (NotFoundSource pid))
     =<< liftIO (locatePackageSource env pid)
-  sourceFromDirE reach pid srcDir modPath mSym
+  sourceFromDirE mMacroHeader reach pid srcDir modPath mSym
 
 -- | Variant that takes an already-resolved source directory.  Used by the
 -- 'PackageResolver'-driven dispatch path so the full fallback chain (plan
 -- → store → Hackage tarball) can locate sources before this command runs.
 runSourceFromDir
-  :: OutsideReach IO
+  :: Maybe FilePath
+    -- ^ The plan's synthesised @cabal_macros.h@.
+  -> OutsideReach IO
     -- ^ The dependency closure, for a re-export that leaves the package.
   -> PackageId
   -> FilePath   -- ^ Source directory (resolved upstream).
   -> Text       -- ^ Module path (dotted).
   -> Maybe Text -- ^ Optional symbol name.
   -> IO (Either HyphaError (Outcome Value))
-runSourceFromDir reach pid srcDir modPath mSym =
-  runExceptT (sourceFromDirE reach pid srcDir modPath mSym)
+runSourceFromDir mMacroHeader reach pid srcDir modPath mSym =
+  runExceptT (sourceFromDirE mMacroHeader reach pid srcDir modPath mSym)
 
 -- | Shared ExceptT body: find the module file, locate the (optional)
 -- symbol, then build the snippet.
 sourceFromDirE
-  :: OutsideReach IO -> PackageId -> FilePath -> Text -> Maybe Text
+  :: Maybe FilePath -> OutsideReach IO -> PackageId -> FilePath -> Text
+  -> Maybe Text
   -> ExceptT HyphaError IO (Outcome Value)
-sourceFromDirE reach pid srcDir modPath mSym = do
+sourceFromDirE mMacroHeader reach pid srcDir modPath mSym = do
   -- Split, because the two cases fail differently and the merged version
   -- could build a 'NotFoundSymbol' carrying an empty symbol name -- a
   -- value no caller could ever produce.  It also stopped locating a
@@ -142,7 +146,8 @@ sourceFromDirE reach pid srcDir modPath mSym = do
       pure (SweptSite (SourceLocation filePath 1))
     Just sym -> do
       located <- liftIO
-        (locateSymbolSite reach pid srcDir (ModulePath modPath) (SymbolName sym))
+        (locateSymbolSite mMacroHeader reach pid srcDir
+           (ModulePath modPath) (SymbolName sym))
       case located of
         Right s  -> pure s
         Left err -> throwE
@@ -207,14 +212,17 @@ siteLocation = \case
 -- package.  A caller with no plan gets an empty reach — the plan-less path
 -- reports the re-export it cannot follow rather than guessing at one.
 locateSymbolSite
-  :: OutsideReach IO
+  :: Maybe FilePath
+     -- ^ The plan's synthesised @cabal_macros.h@, so this path
+     -- preprocesses a module the same way the indexer does.
+  -> OutsideReach IO
   -> PackageId
   -> FilePath
   -> ModulePath
   -> SymbolName
   -> IO (Either SymbolSearchFailure SymbolSite)
-locateSymbolSite reach pid srcDir asking sym = do
-  comps <- Indexer.packageSources srcDir
+locateSymbolSite mMacroHeader reach pid srcDir asking sym = do
+  comps <- Indexer.packageSources srcDir mMacroHeader
   -- The component key comes from the 'PackageId' the caller already
   -- holds.  Deriving it from the cabal file's basename was a second,
   -- weaker answer to a question that was already settled -- and for a

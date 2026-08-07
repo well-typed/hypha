@@ -60,6 +60,6 @@ runSymbolCommand =
     pipeline = do
       let env      = mockBuildEnv asyncDir
           resolver = resolverFor [(asyncId, asyncDir)]
-      ExceptT (liftIO (runSymbolWith env resolver
+      ExceptT (liftIO (runSymbolWith Nothing env resolver
                         (dependencyReach emptyBuildPlan resolver noOwnerOracle)
                         "async/Control.Concurrent.Async/concurrently"))

@@ -9,7 +9,7 @@ import qualified Data.Text as Text
 import System.Directory (getCurrentDirectory, setCurrentDirectory)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (testCase, assertBool)
+import Test.Tasty.HUnit (testCase, assertBool, (@?=))
 
 import Hypha.Command.Doctor (runDoctor)
 import Hypha.Output.Outcome (Outcome (..))
@@ -60,6 +60,19 @@ tests = testGroup "Doctor"
                      then allPass
                      else True
               _ -> True)
+
+      , testCase "a passing doctor does not claim to be outside a plan" $ do
+          -- 'outside_plan' answers "was there a plan to pin this answer
+          -- to", which for doctor is never a function of whether the
+          -- checks passed.  The precondition is asserted rather than
+          -- assumed: the suite runs from the repo root under cabal, so
+          -- ghc, haddock and plan.json are all present by construction,
+          -- and a run where they are not would otherwise let this test
+          -- pass without ever exercising the case it exists for.
+          outcome <- runDoctor
+          assertBool "precondition: every doctor check passes here"
+                     (extractAllPass (outcomeResult outcome))
+          outcomeOutsidePlan outcome @?= False
 
       , testCase "checks contain ghc, haddock, and plan_json" $ do
           outcome <- runDoctor

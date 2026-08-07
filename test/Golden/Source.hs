@@ -66,7 +66,7 @@ runSourceCommand = do
       modPath = "Control.Concurrent.Async" :: Text
       sym = Nothing :: Maybe Text  -- No symbol, just module header
 
-  result <- runSource env noOutsideReach asyncId modPath sym
+  result <- runSource Nothing env noOutsideReach asyncId modPath sym
   case result of
     Left err -> do
       putStrLn ("Source command failed: " ++ show err)
@@ -79,7 +79,7 @@ runFacadeSource reach = do
         { mockPackages =
             Map.fromList [ (reexportId, (Just reexportDir, Nothing)) ]
         }
-  result <- runSource env reach reexportId "Fixture.TwoHop" (Just "depThing")
+  result <- runSource Nothing env reach reexportId "Fixture.TwoHop" (Just "depThing")
   pure $ case result of
     Right outcome -> encodeSuccess outcome
     -- The plan-less arm is /meant/ to fail, and the shape of that failure

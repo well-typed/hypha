@@ -11,10 +11,13 @@ import Hypha.Error (HyphaError, errorActions, errorCode)
 import Hypha.Hoogle.Remote (RemoteError (..))
 import Hypha.Hoogle.Tier (Tier (..))
 import Hypha.Hoogle.Type (HoogleQuery (..))
+import Hypha.Types.PackageId (Version (..))
 import Hypha.Output.Outcome (Outcome (..))
 
 mkProvider :: Provider
-mkProvider = Provider "containers" "Data.Map" "lookup" "sig" TierCache
+mkProvider =
+  Provider "containers" "Data.Map" "lookup" "sig" TierCache
+           (Just (Version "0.6.7"))
 
 expectFailure :: Either HyphaError (Outcome a) -> (HyphaError -> IO ()) -> IO ()
 expectFailure r k = case r of

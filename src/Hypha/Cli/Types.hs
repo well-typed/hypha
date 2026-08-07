@@ -1,10 +1,13 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
 
 module Hypha.Cli.Types
   (
     HyphaOptions (..)
+  , TimeoutSeconds (..)
+  , timeoutMicros
   , Command (..)
   , ClientCommand (..)
   , ServerCommand (..)
@@ -43,8 +46,26 @@ data HyphaOptions = HyphaOptions
     -- ^ Show debug output.
   , hoCacheDir          :: !(Maybe FilePath)
     -- ^ Override cache root.  'Nothing' → XDG default.
+  , hoHoogleTimeout     :: !(Maybe TimeoutSeconds)
+    -- ^ Override the remote Hoogle request timeout.  'Nothing' → the
+    -- client's own default.
   }
   deriving stock (Show, Eq)
+
+-- | A remote-Hoogle request timeout, in whole seconds, as a user writes
+-- it on the command line.
+--
+-- Kept distinct from the microseconds
+-- 'Hypha.Hoogle.Remote.RemoteOptions' stores, because passing one where
+-- the other is meant is a silent factor-of-a-million error that no type
+-- would otherwise catch.  Construction is the parser's job, which is
+-- where the positivity check lives.
+newtype TimeoutSeconds = TimeoutSeconds { unTimeoutSeconds :: Int }
+  deriving stock (Show, Eq)
+
+-- | Convert to the unit the Hoogle client stores.
+timeoutMicros :: TimeoutSeconds -> Int
+timeoutMicros (TimeoutSeconds s) = s * 1_000_000
 
 data ClientCommandTag =
     LookupCmd

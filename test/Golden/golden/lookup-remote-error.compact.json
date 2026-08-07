@@ -1,1 +1,1 @@
-{"actions":{"query":"x","raise_timeout":"HYPHA_HOOGLE_TIMEOUT=30 hypha lookup x","retry_offline":"hypha lookup x --offline","tiers_consulted":"cache,local-hoogle,remote-hoogle"},"error":{"code":"HOOGLE_REMOTE_ERROR","exit_code":5,"message":"remote Hoogle HTTP error: timeout after 10s"}}
+{"actions":{"query":"x","raise_timeout":"hypha lookup x --hoogle-timeout 30","retry_offline":"hypha lookup x --offline","tiers_consulted":"cache,local-hoogle,remote-hoogle"},"error":{"code":"HOOGLE_REMOTE_ERROR","exit_code":5,"message":"remote Hoogle HTTP error: timeout after 10s"}}

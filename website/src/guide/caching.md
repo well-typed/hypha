@@ -6,11 +6,11 @@ derived state as possible — under `$XDG_CACHE_HOME/hypha/` (defaults to
 
 | Cache | Layout | Freshness |
 |-------|--------|-----------|
-| Search index | `hypha.db` (SQLite, WAL) | Keyed on `(pkg, version)` and on a row-format generation (`index_format`, currently `3`), shared across every project on the host |
+| Search index | `hypha.db` (SQLite, WAL) | Keyed on `(pkg, version)` and on a row-format generation (`index_format`, currently `5`), shared across every project on the host |
 | Hackage HTTP responses | `hackage/<sha256>.json` | ETag + `If-Modified-Since` revalidation; 15 min TTL per entry |
 | Source tarballs | `source/<pkg>-<ver>/` | Immutable once extracted |
 | Haddock HTML | `haddock/<pkg>-<ver>/` | Built on demand, reused across runs |
-| Hoogle DB | `<projectRoot>/.hypha/hoogle.hoo` (with `.hypha/plan-hash` sibling) | Rebuilt when `plan.json` changes |
+| Hoogle DB | `<projectRoot>/.hypha/hoogle.hoo` (with `.hypha/hoogle-stamp` sibling) | Rebuilt when `plan.json` changes |
 
 The fallback chain is automatic for network reads:
 **local HTTP cache → build plan → cabal store → Hackage**.
@@ -21,6 +21,7 @@ The fallback chain is automatic for network reads:
 |------|---------|
 | `~/.cache/hypha/hypha.db` | Global SQLite cache: store-package symbol index + remote-Hoogle KV cache |
 | `~/.cache/hypha/hoogle-txt/` | Scratch dir for `haddock --hoogle` outputs |
+| `~/.cache/hypha/cpp-macros/` | Synthesised `cabal_macros.h` per plan, named by content hash |
 | `<project>/.hypha/cache.db` | Project SQLite cache: local + SRP package symbol index |
 | `<project>/.hypha/hoogle.hoo` | Project Hoogle DB |
 | `<project>/.hypha/hoogle-stamp` | Plan-hash + aggregate-fingerprint stamp |
@@ -30,10 +31,14 @@ The fallback chain is automatic for network reads:
 
 The row format is versioned. When `hypha` opens a `hypha.db` written by an
 older build it clears the index outright rather than migrating it: an old
-row's module name may have been derived from a file path, and its
-signature may have been matched by name rather than read at the
-definition site — and neither defect is detectable row by row, so the
-choice is re-index or lie.
+row's module name may have been derived from a file path, its signature
+may have been matched by name rather than read at the definition site, or
+that signature may have been sliced out of the source span and so carry a
+per-argument Haddock comment as though it were part of the type — and
+or it may have been read from the wrong side of a
+`#if __GLASGOW_HASKELL__` gate, because the macros cabal defines for a
+build were not supplied — and none of those defects is detectable row by
+row, so the choice is re-index or lie.
 
 Expect one full background re-index the first time you run a new `hypha`
 version (a few minutes for a large plan). While it runs, `hypha server`'s

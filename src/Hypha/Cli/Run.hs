@@ -59,7 +59,7 @@ import Hypha.Project.Components qualified as Comp
 import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Overrides (parsePackageOverride)
-import Hypha.Project.Plan (loadBuildPlan, planHash)
+import Hypha.Project.Plan (loadBuildPlan, loadPlanVersions, planHash)
 import Hypha.Search.PackageCache qualified as PC
 import Hypha.Source.Dependencies (dependencyReach)
 import Hypha.Source.Origins qualified as Origins
@@ -413,7 +413,8 @@ runSourceArm ref modPath mSym = do
   -- reach empty too: the plan-less path keeps reporting the re-export it
   -- cannot follow rather than guessing at one.
   reach <- liftIO (dependencyReach plan resolver (ownerOracleFor plan) pid)
-  oc  <- liftEitherIO (Source.runSourceFromDir reach pid dir modPath mSym)
+  oc  <- liftEitherIO
+           (Source.runSourceFromDir (bpCppMacros plan) reach pid dir modPath mSym)
   pure (tagOutsidePlan oc (rpIsOutsidePlan rp))
 
 -- | Symbol command arm.  Shares the reach with 'runSourceArm', because it
@@ -427,7 +428,7 @@ runSymbolArm arg = do
   -- 'Symbol.runSymbolWith'.  Handing over 'dependencyReach' partially
   -- applied keeps that parse in one place.
   liftEitherIO
-    (Symbol.runSymbolWith env resolver
+    (Symbol.runSymbolWith (bpCppMacros plan) env resolver
        (dependencyReach plan resolver (ownerOracleFor plan)) arg)
 
 -- | How the reach asks which unit owns a module: @ghc-pkg@ over the global
@@ -458,9 +459,9 @@ runLookupCommand q = do
   -- No catch-all 'try' around this block: HTTP failures are caught
   -- (and converted to 'RemoteError') inside Hoogle.Remote, every other
   -- structurally-handled failure flows through 'HyphaError' explicitly,
-  -- and genuinely-unexpected exceptions bubble up to the top-level
-  -- 'catchAny' in @app/hypha/Main.hs@ where they become a single
-  -- structured @INTERNAL_ERROR@ envelope.
+  -- and genuinely-unexpected exceptions bubble up to the 'tryAny' in
+  -- 'runClientMain' where they become a single structured
+  -- @INTERNAL_ERROR@ envelope.
   opts <- askOpts
   cacheRoot <- asks heCacheDir
   mRoot <- liftIO $ warnOnLeft
@@ -496,14 +497,51 @@ runLookupCommand q = do
         Just root -> withQuietIfNotVerbose (hoVerbose opts) $
           ensureProjectHoogle cacheRoot storeRoot distRoot dotHypha hoogleLocal root
 
+  scope <- cacheScopeFor mRoot
+
   let lookupOpts = Lookup.LookupOptions
         { Lookup.loOffline      = hoOffline opts
+        , Lookup.loCacheScope   = scope
         , Lookup.loRemote       =
             HogRemote.defaultRemoteOptions
-              { HogRemote.roOffline = hoOffline opts }
+              { HogRemote.roOffline       = hoOffline opts
+              , HogRemote.roTimeoutMicros =
+                  maybe (HogRemote.roTimeoutMicros
+                           HogRemote.defaultRemoteOptions)
+                        timeoutMicros
+                        (hoHoogleTimeout opts)
+              }
         , Lookup.loPrepareLocal = prepLocal
         }
   liftEitherIO (Lookup.runLookup cache hoogleLocal lookupOpts (HoogleQuery q))
+
+-- | Which of the shared package cache's versions the lookup's first tier
+-- may answer from.
+--
+-- The cache is keyed on @(package, version)@ and shared by every project
+-- on the host, and a write for a new version does not evict the old one.
+-- So inside a project the plan is what says which of the versions on this
+-- machine are this project's, and outside one there is nothing to pin to.
+-- A plan that cannot be read is the third case, and it is reported rather
+-- than quietly collapsed into the second: the answers still come back,
+-- but they are no longer this project's answers, and the user is the one
+-- who gets to notice.
+cacheScopeFor :: Maybe ProjectRoot -> Hypha PC.CacheScope
+cacheScopeFor Nothing     = pure PC.ScopeWholeCache
+cacheScopeFor (Just root) = do
+  opts      <- askOpts
+  overrides <- collectOverrides (hoPackageOverrides opts)
+  ePinned   <- liftIO (loadPlanVersions root)
+  case ePinned of
+    Left planErr -> do
+      liftIO $ hPutStrLn stderr $
+        "warning: lookup is not pinned to this project's plan — "
+        <> Text.unpack (errorMessage (PlanFailure root planErr))
+      pure PC.ScopeWholeCache
+    Right pinned ->
+      pure (PC.ScopePlan (foldr override pinned overrides))
+  where
+    override (PackageOverride n v) = Map.insert n v
 
 -- | Materialise the project Hoogle DB: load the plan, derive a
 -- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),

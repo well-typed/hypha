@@ -32,7 +32,8 @@ import Distribution.Utils.Path qualified as UP
 import Language.Haskell.Extension qualified as Cabal
 import GHC.Driver.Session qualified as GHCLang
 import Hypha.Source.Extensions
-  ( LanguageSettings (..), UnknownExtension (..), extensionFromFlagName )
+  ( CppEnv (..), LanguageSettings (..), UnknownExtension (..)
+  , extensionFromFlagName )
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.IO (hPutStrLn, stderr)
 import System.FilePath ((</>), takeExtension)
@@ -100,10 +101,11 @@ findCabalFile dir = do
 -- component (main + sublibs).  Returns @[]@ on parse failure or
 -- missing file.
 parseLibComponents
-  :: FilePath  -- ^ cabal file path
-  -> FilePath  -- ^ package root (for resolving relative source dirs)
+  :: FilePath        -- ^ cabal file path
+  -> FilePath        -- ^ package root (for resolving relative source dirs)
+  -> Maybe FilePath  -- ^ synthesised @cabal_macros.h@, when a plan supplied one
   -> IO [ComponentInfo]
-parseLibComponents cabalPath pkgRoot = do
+parseLibComponents cabalPath pkgRoot mMacroHeader = do
   eBs <- try @IO @IOException (BS.readFile cabalPath)
   case eBs of
     Left err -> do
@@ -171,6 +173,18 @@ parseLibComponents cabalPath pkgRoot = do
              { lsLanguage   = ghcLanguageOf =<< PD.defaultLanguage bi
              , lsDefaultOn  = on
              , lsDefaultOff = off
+             , lsCpp        = CppEnv
+                 { cppPreInclude  = mMacroHeader
+                   -- The stanza's own @include-dirs@, plus the package
+                   -- root and its source dirs: a module's @#include@ is
+                   -- resolved against the including file's directory
+                   -- already, but a header declared for the whole
+                   -- package lives at one of these instead.
+                 , cppIncludeDirs = nubOrd $
+                     [ pkgRoot </> UP.getSymbolicPath p
+                     | p <- PD.includeDirs bi ]
+                     <> (pkgRoot : dirs)
+                 }
              }
          , ciUnknownExtensions = unknown
          }
@@ -249,6 +263,7 @@ getExposedModules root = do
   case mCabal of
     Nothing  -> pure []
     Just fp  -> do
-      comps <- parseLibComponents fp root
+      -- Only the module list is wanted here, which no macro affects.
+      comps <- parseLibComponents fp root Nothing
       pure $ concatMap ciExposedModules comps
 

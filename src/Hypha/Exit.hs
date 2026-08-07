@@ -54,8 +54,10 @@ exitEnvironmentError = ExitCode 7
 exitToolMissing :: ExitCode
 exitToolMissing = ExitCode 8
 
--- | Internal error — an exception escaped the library and was caught
--- by the top-level @catchAny@ in @app/hypha/Main.hs@.  Distinct from
+-- | Internal error — an exception escaped the library and was caught by
+-- the @tryAny@ in 'Hypha.Cli.Run.runClientMain' \/ @runServerMain@, or,
+-- for the @hypha-mcp@ binary, by the @catchAny@ in
+-- @app\/hypha-mcp\/Main.hs@.  Distinct from
 -- every other code because it signals a /bug or genuinely unhandled
 -- environment failure/ in hypha itself, not a user- or input-level
 -- problem.

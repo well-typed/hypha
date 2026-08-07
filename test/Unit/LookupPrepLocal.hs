@@ -27,7 +27,7 @@ import Hypha.Hoogle.Local (openLocalHoogle)
 import Hypha.Hoogle.Remote (defaultRemoteOptions, roOffline)
 import Hypha.Hoogle.Type   (HoogleQuery (..))
 import Hypha.Search.PackageCache
-  ( CacheOrigin (..), openPackageCacheAt, writeCachedIndex )
+  ( CacheOrigin (..), CacheScope (..), openPackageCacheAt, writeCachedIndex )
 import Util.Row (row)
 
 tests :: TestTree
@@ -41,6 +41,7 @@ tests = testGroup "Unit.LookupPrepLocal"
         prepRef <- IORef.newIORef (0 :: Int)
         let opts = LookupOptions
               { loOffline      = True   -- short-circuit any remote
+              , loCacheScope   = ScopeWholeCache
               , loRemote       = defaultRemoteOptions { roOffline = True }
               , loPrepareLocal = IORef.modifyIORef' prepRef (+ 1)
               }
@@ -56,6 +57,7 @@ tests = testGroup "Unit.LookupPrepLocal"
         prepRef <- IORef.newIORef (0 :: Int)
         let opts = LookupOptions
               { loOffline      = True
+              , loCacheScope   = ScopeWholeCache
               , loRemote       = defaultRemoteOptions { roOffline = True }
               , loPrepareLocal = IORef.modifyIORef' prepRef (+ 1)
               }

@@ -1,6 +1,6 @@
 ---
 name: hypha-haskell
-description: Use whenever working in a Haskell/cabal project — looking up a function, exploring a package, reading Haddock, or finding a symbol's source. Replaces WebFetch on hackage.haskell.org/hoogle.haskell.org and ad-hoc grepping of `.cabal-store` with the project-aware `hypha` CLI, which emits compact JSON pinned to the project's `plan.json`. Triggers on `.hs`/`.cabal`/`cabal.project` edits, Haskell library or module mentions, and any "what's the type of …", "where is … defined", "which version of … are we using" question.
+description: Use whenever working in a Haskell/cabal project — looking up a function, exploring a package, reading Haddock, or finding a symbol's source. Replaces WebFetch on hackage.haskell.org/hoogle.haskell.org and ad-hoc grepping of `.cabal-store` with the project-aware `hypha` CLI, which emits compact YAML (`--json` for JSON) pinned to the project's `plan.json`. Triggers on `.hs`/`.cabal`/`cabal.project` edits, Haskell library or module mentions, and any "what's the type of …", "where is … defined", "which version of … are we using" question.
 ---
 
 # hypha — Haskell-aware code/doc browser
@@ -54,9 +54,11 @@ flows.
   fields, so it varies per command: those two are `hypha symbol` fields.
   `hypha lookup` has no top-level `sig` — its signatures live inside each
   entry of `providers`, and its default output is already compact.
-- `--full` — opt into the heavier payload (full Haddock prose, all
-  fields). Use sparingly; only when `--select` cannot express what you
-  need.
+- `--full` — adds the fields the compact form omits: `source` (the path
+  and line a symbol is defined at) on `hypha symbol`, `tiers_consulted`
+  on `hypha lookup`. The default already carries the whole Haddock body,
+  so this is a small addition rather than a heavier mode — but prefer
+  `--select` when you know which fields you want.
 - `--json` — JSON envelope instead of YAML. Use when feeding output to
   a JSON-consuming tool or pipeline.
 - `--pretty-json` — pretty-printed JSON. Debugging only; wastes tokens.
@@ -65,6 +67,8 @@ flows.
 - `--project-dir DIR` — explicit project root. Use only when not already
   in one.
 - `--quiet` / `--verbose` — log verbosity. Default is fine.
+- `--hoogle-timeout SECONDS` — raise the remote Hoogle timeout (default
+  10). Only useful after a remote-tier timeout says so.
 
 ## Identifier syntax
 

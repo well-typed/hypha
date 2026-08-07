@@ -12,6 +12,8 @@ These apply to every subcommand and are given before or after the command.
 | `--full` | Include all fields (default: compact) |
 | `--select f1,f2,...` | Post-filter output to the listed fields |
 | `--cache-dir DIR` | Override the cache root (default: XDG, `~/.cache/hypha`) |
+| `--hoogle-timeout SECONDS` | Remote Hoogle request timeout (default: 10) |
+| `--version` / `-V` | Print the hypha version and exit |
 | `--quiet` / `-q` | Suppress informational output; overrides `--verbose`. Does not suppress the indexer's and the browser's diagnostics — a skipped module, an export it could not resolve, a cabal file it could not read — which always go to stderr |
 | `--verbose` / `-v` | Show debug output |
 
@@ -21,7 +23,11 @@ YAML is the default — compact, terminal-readable, and cheap for an agent to
 parse. `--json` switches to a JSON envelope for machine pipelines;
 `--pretty-json` indents it.
 
-- **`--full`** includes every field the command can produce.
+- **`--full`** adds the fields the compact form omits. Today that is
+  `source` (the `path` and `line` a symbol is defined at) on `symbol`, and
+  `tiers_consulted` on `lookup` — the default already carries the full
+  Haddock body, so `--full` is a small addition rather than a different
+  mode.
 - **`--select`** trims the output to just the fields you name, e.g.
   `hypha symbol … --select signature,haddock`. Great for keeping token
   cost down. The short spellings `sig` and `haddock` mean the same fields

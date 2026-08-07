@@ -6,6 +6,7 @@ module Hypha.Project.Plan
     PlanError (..)
     -- * Loading
   , loadBuildPlan
+  , loadPlanVersions
     -- * Staleness
   , planHash
   ) where
@@ -26,6 +27,8 @@ import qualified Cabal.Plan as CP
 import Hypha.Cache (sourceCacheRoot)
 import qualified Hypha.Hackage.Source as Src
 import qualified Hypha.Project.Components as Comp
+import qualified Hypha.Source.CppMacros as Cpp
+import System.IO (hPutStrLn, stderr)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PackageOrigin (..), PlannedUnit (..)
   , ProjectRoot (..) )
@@ -56,12 +59,64 @@ loadBuildPlan cacheRoot (ProjectRoot root) = do
     Left e   -> pure (Left (PlanNotFound (show e)))
     Right pj -> do
       cache <- Src.enumerateSourceCache (sourceCacheRoot cacheRoot)
-      units <- unitsFromPlan pj cache
+      -- The macro environment every module in this plan is preprocessed
+      -- against.  Derived here because this is the one place that holds
+      -- the compiler and every package version at once, and materialised
+      -- once rather than per module.
+      mMacroHeader <- macroHeaderFor cacheRoot pj
+      units <- unitsFromPlan pj cache mMacroHeader
       pure (Right (BuildPlan
         { bpCompiler  = compilerFromPlan pj
         , bpUnits     = units
         , bpOverrides = []
+        , bpCppMacros = mMacroHeader
         }))
+
+-- | Just the versions the plan pins, one per package.
+--
+-- 'loadBuildPlan' resolves a source directory per unit and reads a
+-- @.cabal@ file for each one to inventory its components — hundreds of
+-- file reads and cabal parses on a real plan.  A caller that only wants
+-- to know which versions this project builds against needs none of it,
+-- and @hypha lookup@ is on the tier-1 fast path where that work is the
+-- dominant cost.  Kept beside 'loadBuildPlan' so the two read the same
+-- @plan.json@ through the same discovery, and pinned to agreement by a
+-- test rather than by comment.
+loadPlanVersions :: ProjectRoot -> IO (Either PlanError (Map PackageName Version))
+loadPlanVersions (ProjectRoot root) = do
+  result <- try @IO @IOException
+              (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
+  pure $ case result of
+    Left e   -> Left (PlanNotFound (show e))
+    Right pj -> Right (Map.fromList
+      [ (PackageName name, Version (CP.dispVer ver))
+      | u <- Map.elems (CP.pjUnits pj)
+      , let CP.PkgId (CP.PkgName name) ver = CP.uPId u
+      ])
+
+-- | Write the @cabal_macros.h@ this plan implies, and return its path.
+--
+-- Best-effort: a cache root that cannot be written is not a reason to
+-- fail loading a plan, but it is a reason to say so — without the header
+-- every version gate silently resolves to its oldest branch.
+macroHeaderFor :: FilePath -> CP.PlanJson -> IO (Maybe FilePath)
+macroHeaderFor cacheRoot pj = do
+  let CompilerId compiler = compilerFromPlan pj
+      pkgs =
+        [ (PackageName name, Version (CP.dispVer ver))
+        | u <- Map.elems (CP.pjUnits pj)
+        , let CP.PkgId (CP.PkgName name) ver = CP.uPId u
+        ]
+      header = Cpp.renderMacroHeader compiler pkgs
+  r <- try @IO @IOException (Cpp.materialiseMacroHeader cacheRoot header)
+  case r of
+    Right path -> pure (Just path)
+    Left err   -> do
+      hPutStrLn stderr $
+        "warning: CPP macros unavailable (" <> show err
+        <> "); modules guarded by #if __GLASGOW_HASKELL__ or MIN_VERSION_* \
+           \will be read from their oldest branch"
+      pure Nothing
 
 -- | Extract compiler identifier from the plan.
 compilerFromPlan :: CP.PlanJson -> CompilerId
@@ -76,8 +131,11 @@ unitsFromPlan
   -> Map FilePath FilePath
      -- ^ @\"pkg-ver\" -> sourceDir@ for dependency packages.  Empty in
      -- this task; Task 5 populates it from the source cache.
+  -> Maybe FilePath
+     -- ^ Synthesised @cabal_macros.h@ for this plan, when one could be
+     -- written.
   -> IO (Map PackageName PlannedUnit)
-unitsFromPlan pj sourceCacheLookup = do
+unitsFromPlan pj sourceCacheLookup mMacroHeader = do
       -- A package contributes one unit per component (lib, exes, test
       -- suites).  The map below is keyed by package *name* and
       -- 'Map.fromList' retains the last duplicate, so order units
@@ -91,7 +149,7 @@ unitsFromPlan pj sourceCacheLookup = do
         [ (CP.uId u, CP.uPId u) | u <- allUnits ]
   pairs <- mapM
     (\u -> do
-       pu <- toPlannedUnit unitIdToPkgId sourceCacheLookup u
+       pu <- toPlannedUnit unitIdToPkgId sourceCacheLookup mMacroHeader u
        let CP.PkgId (CP.PkgName pkgText) _ = CP.uPId u
        pure (PackageName pkgText, pu))
     allUnits
@@ -101,9 +159,10 @@ unitsFromPlan pj sourceCacheLookup = do
 toPlannedUnit
   :: Map CP.UnitId CP.PkgId
   -> Map FilePath FilePath
+  -> Maybe FilePath
   -> CP.Unit
   -> IO PlannedUnit
-toPlannedUnit unitIdToPkgId sourceCacheLookup u = do
+toPlannedUnit unitIdToPkgId sourceCacheLookup mMacroHeader u = do
   let CP.PkgId (CP.PkgName name) ver = CP.uPId u
       pkgId   = PackageId (PackageName name) (Version (CP.dispVer ver))
       libDeps = concatMap (Set.toList . CP.ciLibDeps) (Map.elems (CP.uComps u))
@@ -117,7 +176,7 @@ toPlannedUnit unitIdToPkgId sourceCacheLookup u = do
         Just d  -> Just d
         Nothing -> Map.lookup depKey sourceCacheLookup
   comps <- case sourceDir of
-    Just d  -> componentsFor d
+    Just d  -> componentsFor d mMacroHeader
     Nothing -> pure []
   pure PlannedUnit
     { puId            = pkgId
@@ -131,11 +190,11 @@ toPlannedUnit unitIdToPkgId sourceCacheLookup u = do
 
 -- | Parse the @.cabal@ file in a directory and return its library
 -- components.  Silent fallback to @[]@ on any kind of failure.
-componentsFor :: FilePath -> IO [Comp.ComponentInfo]
-componentsFor d = do
+componentsFor :: FilePath -> Maybe FilePath -> IO [Comp.ComponentInfo]
+componentsFor d mMacroHeader = do
   mCabal <- Comp.findCabalFile d
   case mCabal of
-    Just c  -> Comp.parseLibComponents c d
+    Just c  -> Comp.parseLibComponents c d mMacroHeader
     Nothing -> pure []
 
 -- | Extract the source directory from a @PkgLoc@ value.
