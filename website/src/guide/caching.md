@@ -21,6 +21,7 @@ The fallback chain is automatic for network reads:
 |------|---------|
 | `~/.cache/hypha/hypha.db` | Global SQLite cache: store-package symbol index + remote-Hoogle KV cache |
 | `~/.cache/hypha/hoogle-txt/` | Scratch dir for `haddock --hoogle` outputs |
+| `~/.cache/hypha/cpp-macros/` | Synthesised `cabal_macros.h` per plan, named by content hash |
 | `<project>/.hypha/cache.db` | Project SQLite cache: local + SRP package symbol index |
 | `<project>/.hypha/hoogle.hoo` | Project Hoogle DB |
 | `<project>/.hypha/hoogle-stamp` | Plan-hash + aggregate-fingerprint stamp |

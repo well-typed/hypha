@@ -30,8 +30,10 @@ follow-up question. Both are expensive.
   package in the plan. Symbols point to the `file:line` where they're
   actually defined, not the re-export module — following a chain of
   re-exports across module *and* package boundaries, so `base`'s façades
-  resolve into `ghc-internal`. Modules that need CPP preprocessing are
-  reported as skipped rather than guessed at.
+  resolve into `ghc-internal`. CPP is preprocessed with the macros your
+  build plan implies, so a `#if`-guarded declaration is read from the
+  branch your compiler would compile; the few modules that still fail to
+  parse are reported rather than guessed at.
 - **One tool, two surfaces.** The same library powers the CLI and the
   local doc-browser server, so agents and humans see the same data.
 

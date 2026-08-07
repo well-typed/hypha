@@ -7,7 +7,7 @@ and returns at the first hit:
 1. **`PackageCache`** (SQLite): exact-name + qualified-name lookup — e.g.
    both `lookup` and `Data.Map.lookup`. Indexes top-level declarations,
    class methods, data constructors and record fields alike. What it does
-   not cover is a module that will not parse without CPP preprocessing:
+   not cover is a module that will not parse even after preprocessing:
    such a module contributes no rows, so a symbol only that module
    presents falls through to the tiers below — see
    [Troubleshooting](../troubleshooting.md). Tier 1 is also empty for one
