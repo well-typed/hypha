@@ -12,6 +12,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty (TestTree, testGroup)
 
+import Hypha.Project.BuildContext (hostBuildContext)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Command.Symbol (runSymbolWith)
 import Hypha.Error (HyphaError, errorMessage)
@@ -60,6 +61,6 @@ runSymbolCommand =
     pipeline = do
       let env      = mockBuildEnv asyncDir
           resolver = resolverFor [(asyncId, asyncDir)]
-      ExceptT (liftIO (runSymbolWith Nothing env resolver
+      ExceptT (liftIO (runSymbolWith hostBuildContext env resolver
                         (dependencyReach emptyBuildPlan resolver noOwnerOracle)
                         "async/Control.Concurrent.Async/concurrently"))

@@ -30,6 +30,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
 
+import Hypha.Project.BuildContext (BuildContext, hostBuildContext)
 import Hypha.Project.Components (ComponentInfo)
 import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
 
@@ -104,11 +105,13 @@ data BuildPlan = BuildPlan
   { bpCompiler  :: !CompilerId
   , bpUnits     :: !(Map PackageName PlannedUnit)
   , bpOverrides :: ![PackageOverride]
-  , bpCppMacros :: !(Maybe FilePath)
-    -- ^ The synthesised @cabal_macros.h@ for this plan, written when the
-    -- plan was loaded.  Carried here because every consumer that needs to
-    -- preprocess a module already holds the plan, and the macros must
-    -- describe the same compiler and versions the rest of the answers do.
+  , bpBuildContext :: !BuildContext
+    -- ^ How this plan's sources are to be read: the CPP environment
+    -- (synthesised @cabal_macros.h@ and the compiler's own include
+    -- directory) and the platform its conditional stanzas resolve for.
+    -- Carried here because every consumer that needs to preprocess a
+    -- module already holds the plan, and it must describe the same
+    -- compiler, versions and platform the rest of the answers do.
   }
   deriving stock (Show)
 
@@ -118,7 +121,7 @@ emptyBuildPlan = BuildPlan
   { bpCompiler  = CompilerId "unknown"
   , bpUnits     = Map.empty
   , bpOverrides = []
-  , bpCppMacros = Nothing
+  , bpBuildContext = hostBuildContext
   }
 
 -- | Look up a package version in the plan.

@@ -30,6 +30,7 @@ module Hypha.Source.Parser
   , renderRdrName
   ) where
 
+import Control.Exception (evaluate)
 import Control.Exception.Safe (SomeException, displayException, try)
 import Data.Foldable qualified as Foldable
 import Data.List (sortOn)
@@ -226,11 +227,17 @@ parseModuleIO ls path source = do
    -- 'Control.Exception.Safe.try' rethrows asynchronous exceptions, so a
    -- timed-out server request still dies rather than being reported as a
    -- broken module.
+   -- 'evaluate' is what makes the 'try' above actually catch: cpphs
+   -- hands back a lazy 'String', so @Text.pack <$> runCpphs@ returns a
+   -- thunk and the 'error' inside it fires wherever the text is first
+   -- demanded — outside this handler.  Forcing the 'Text' here consumes
+   -- the whole string, so the failure lands in the 'Either'.
    preprocess
      | not (needsCpp source) = pure (Right source)
      | otherwise = do
-         out <- try (Text.pack <$> Cpphs.runCpphs (cpphsOpts (Extensions.lsCpp ls))
-                                     path (Text.unpack source))
+         out <- try (evaluate . Text.pack
+                       =<< Cpphs.runCpphs (cpphsOpts (Extensions.lsCpp ls))
+                             path (Text.unpack source))
          pure $ case out of
            Right t                   -> Right t
            Left (e :: SomeException) -> Left ParseError

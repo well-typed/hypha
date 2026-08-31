@@ -31,6 +31,7 @@ import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
 import Hypha.Output.Outcome (Outcome, successOutcome)
+import Hypha.Project.BuildContext (BuildContext)
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Index (ModuleSource (..))
 import Hypha.Search.Indexer qualified as Indexer
@@ -101,20 +102,20 @@ fullKeys = Set.fromList
 --   Parses the argument as @PKG/MOD[/SYM]@ and returns a 30-line snippet
 --   around the symbol definition (or the module header if no symbol).
 runSource
-  :: Maybe FilePath -> BuildEnv IO -> OutsideReach IO -> PackageId -> Text
+  :: BuildContext -> BuildEnv IO -> OutsideReach IO -> PackageId -> Text
   -> Maybe Text
   -> IO (Either HyphaError (Outcome Value))
-runSource mMacroHeader env reach pid modPath mSym = runExceptT $ do
+runSource ctx env reach pid modPath mSym = runExceptT $ do
   srcDir <- liftMaybe (NotFound (NotFoundSource pid))
     =<< liftIO (locatePackageSource env pid)
-  sourceFromDirE mMacroHeader reach pid srcDir modPath mSym
+  sourceFromDirE ctx reach pid srcDir modPath mSym
 
 -- | Variant that takes an already-resolved source directory.  Used by the
 -- 'PackageResolver'-driven dispatch path so the full fallback chain (plan
 -- → store → Hackage tarball) can locate sources before this command runs.
 runSourceFromDir
-  :: Maybe FilePath
-    -- ^ The plan's synthesised @cabal_macros.h@.
+  :: BuildContext
+    -- ^ How the plan says this package's sources are read.
   -> OutsideReach IO
     -- ^ The dependency closure, for a re-export that leaves the package.
   -> PackageId
@@ -122,16 +123,16 @@ runSourceFromDir
   -> Text       -- ^ Module path (dotted).
   -> Maybe Text -- ^ Optional symbol name.
   -> IO (Either HyphaError (Outcome Value))
-runSourceFromDir mMacroHeader reach pid srcDir modPath mSym =
-  runExceptT (sourceFromDirE mMacroHeader reach pid srcDir modPath mSym)
+runSourceFromDir ctx reach pid srcDir modPath mSym =
+  runExceptT (sourceFromDirE ctx reach pid srcDir modPath mSym)
 
 -- | Shared ExceptT body: find the module file, locate the (optional)
 -- symbol, then build the snippet.
 sourceFromDirE
-  :: Maybe FilePath -> OutsideReach IO -> PackageId -> FilePath -> Text
+  :: BuildContext -> OutsideReach IO -> PackageId -> FilePath -> Text
   -> Maybe Text
   -> ExceptT HyphaError IO (Outcome Value)
-sourceFromDirE mMacroHeader reach pid srcDir modPath mSym = do
+sourceFromDirE ctx reach pid srcDir modPath mSym = do
   -- Split, because the two cases fail differently and the merged version
   -- could build a 'NotFoundSymbol' carrying an empty symbol name -- a
   -- value no caller could ever produce.  It also stopped locating a
@@ -146,7 +147,7 @@ sourceFromDirE mMacroHeader reach pid srcDir modPath mSym = do
       pure (SweptSite (SourceLocation filePath 1))
     Just sym -> do
       located <- liftIO
-        (locateSymbolSite mMacroHeader reach pid srcDir
+        (locateSymbolSite ctx reach pid srcDir
            (ModulePath modPath) (SymbolName sym))
       case located of
         Right s  -> pure s
@@ -212,17 +213,17 @@ siteLocation = \case
 -- package.  A caller with no plan gets an empty reach — the plan-less path
 -- reports the re-export it cannot follow rather than guessing at one.
 locateSymbolSite
-  :: Maybe FilePath
-     -- ^ The plan's synthesised @cabal_macros.h@, so this path
-     -- preprocesses a module the same way the indexer does.
+  :: BuildContext
+     -- ^ The plan's CPP environment and platform, so this path reads a
+     -- module the same way the indexer does.
   -> OutsideReach IO
   -> PackageId
   -> FilePath
   -> ModulePath
   -> SymbolName
   -> IO (Either SymbolSearchFailure SymbolSite)
-locateSymbolSite mMacroHeader reach pid srcDir asking sym = do
-  comps <- Indexer.packageSources srcDir mMacroHeader
+locateSymbolSite ctx reach pid srcDir asking sym = do
+  comps <- Indexer.packageSources srcDir ctx
   -- The component key comes from the 'PackageId' the caller already
   -- holds.  Deriving it from the cabal file's basename was a second,
   -- weaker answer to a question that was already settled -- and for a

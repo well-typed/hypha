@@ -75,6 +75,8 @@ library
     Hypha.Output.Json
     Hypha.Output.Human
     Hypha.Project.Discovery
+    Hypha.Project.GhcIncludes
+    Hypha.Project.BuildContext
     Hypha.Project.Components
     Hypha.Project.Plan
     Hypha.Project.Overrides
@@ -248,6 +250,7 @@ test-suite hypha-tests
     Unit.Mcp
     Unit.PackageCache
     Unit.PackageCacheFingerprint
+    Unit.GhcIncludes
     Unit.HoogleLocalGen
     Unit.HoogleRemote
     Unit.PackageCacheLookup
@@ -275,6 +278,7 @@ test-suite hypha-tests
     , async
     , base
     , bytestring
+    , Cabal-syntax
     , containers
     , directory
     , filepath
