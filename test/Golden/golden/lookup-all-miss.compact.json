@@ -1,1 +1,1 @@
-{"actions":{"query":"doesNotExist","retry_with_prefix":"hypha lookup doesNotExist*","tiers_consulted":"cache,local-hoogle,remote-hoogle"},"error":{"code":"NOT_FOUND","exit_code":3,"message":"no providers found"}}
+{"actions":{"query":"doesNotExist","retry_with_prefix":"hypha lookup 'doesNotExist*'","tiers_consulted":"cache,local-hoogle,remote-hoogle"},"error":{"code":"NOT_FOUND","exit_code":3,"message":"no providers found"}}

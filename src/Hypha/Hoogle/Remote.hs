@@ -33,6 +33,7 @@ import Network.HTTP.Client
   ( HttpException, Manager, Request (..), Response, httpLbs, newManager
   , parseRequest, responseBody, responseTimeoutMicro )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.HTTP.Types.URI (renderQuery)
 
 import Hypha.Hoogle.Format
   ( decodeEntities, splitNameSig, stripTags )
@@ -120,25 +121,21 @@ searchRemoteWith transport opts cache q
                 pure (Right hits)
               Left err -> pure (Left (RemoteDecode err))
 
+-- | Type-signature queries are full of characters that are not URL
+-- syntax anywhere (@>@, @[@, @]@), so the query string is rendered by
+-- 'renderQuery' rather than by hand: @parseRequest@ parses the URL
+-- before it opens a socket, and an under-escaped one never reaches
+-- Hoogle at all — it comes back as an @InvalidUrlException@.
 endpointFor :: RemoteOptions -> HoogleQuery -> Text
 endpointFor opts (HoogleQuery q) =
   roEndpoint opts
-    <> "/?mode=json&count=20&hoogle="
-    <> urlEncode q
-
-urlEncode :: Text -> Text
-urlEncode = Text.concatMap encChar
-  where
-    encChar c
-      | c == ' ' = "+"
-      | c `elem` ("&?#=" :: String) = Text.pack ('%' : hex c)
-      | otherwise = Text.singleton c
-    hex c = let n = fromEnum c
-                d1 = n `div` 16
-                d2 = n `mod` 16
-            in [digit d1, digit d2]
-    digit n | n < 10 = toEnum (fromEnum '0' + n)
-            | otherwise = toEnum (fromEnum 'A' + n - 10)
+    <> "/"
+    <> Text.decodeUtf8
+         (renderQuery True
+            [ ("mode",   Just "json")
+            , ("count",  Just "20")
+            , ("hoogle", Just (Text.encodeUtf8 q))
+            ])
 
 cacheKey :: HoogleQuery -> Text
 cacheKey (HoogleQuery q) =

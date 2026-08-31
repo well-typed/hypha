@@ -16,6 +16,7 @@ module Hypha.Error
   , errorActions
   ) where
 
+import Data.Char (isAlphaNum)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -276,25 +277,43 @@ errorActions = \case
          | not (null gaps)
          ]
   HoogleOffline (HoogleQuery q) tiers -> Map.fromList
-    [ ("retry_online",    "hypha lookup " <> q)
+    [ ("retry_online",    lookupCommand q "")
     , ("query",           q)
     , ("tiers_consulted", renderTierList tiers)
     ]
   HoogleNotFound (HoogleQuery q) tiers -> Map.fromList
-    [ ("retry_with_prefix", "hypha lookup " <> q <> "*")
+    [ ("retry_with_prefix", lookupCommand (q <> "*") "")
     , ("query",             q)
     , ("tiers_consulted",   renderTierList tiers)
     ]
   HoogleRemoteError (HoogleQuery q) tiers _remoteErr -> Map.fromList
-    [ ("retry_offline",
-        "hypha lookup " <> q <> " --offline")
-    , ("raise_timeout",
-        "hypha lookup " <> q <> " --hoogle-timeout 30")
+    [ ("retry_offline",   lookupCommand q "--offline")
+    , ("raise_timeout",   lookupCommand q "--hoogle-timeout 30")
     , ("query",           q)
     , ("tiers_consulted", renderTierList tiers)
     ]
   HackageFailure _ (Hackage.TarballFailure tErr) -> tarballRecoveryActions tErr
   _ -> Map.empty
+
+-- | A @hypha lookup@ command line an agent (or a shell) can run
+-- verbatim.  Type-signature queries contain spaces, @>@ and @|@, so an
+-- unquoted suggestion is not the command we meant: @hypha lookup Ord b
+-- => (a -> b) -> [a] -> [a] --offline@ truncates a file called @b@.
+lookupCommand :: Text -> Text -> Text
+lookupCommand q flags =
+  Text.unwords (["hypha", "lookup", shellQuote q] <> [flags | not (Text.null flags)])
+
+-- | POSIX single-quoting: everything inside a single-quoted string is
+-- literal, and an embedded quote is closed, escaped and reopened.
+-- @*@ is deliberately not in the safe set — the prefix suggestion ends
+-- in one, and a bare @foo*@ is a glob the shell expands against the
+-- current directory before @hypha@ ever sees it.
+shellQuote :: Text -> Text
+shellQuote t
+  | not (Text.null t), Text.all safe t = t
+  | otherwise = "'" <> Text.replace "'" "'\\''" t <> "'"
+  where
+    safe c = isAlphaNum c || c `elem` ("-_./:@" :: String)
 
 -- | Whether the search settled the question or stopped short of it.
 --

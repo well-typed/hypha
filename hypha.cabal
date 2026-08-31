@@ -279,6 +279,7 @@ test-suite hypha-tests
     , directory
     , filepath
     , ghc-lib-parser
+    , http-client
     , sqlite-simple
     , hypha
     , iproute
