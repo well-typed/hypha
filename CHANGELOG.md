@@ -139,6 +139,24 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Type-signature queries reach the remote Hoogle tier again.** The
+  query string was percent-encoded by a hand-rolled escaper that only
+  knew about `&?#=` and the space, so `>`, `[` and `]` went out raw.
+  http-client parses a URL before it opens a socket, so
+  `hypha lookup 'Ord b => (a -> b) -> [a] -> [a]'` never left the
+  machine: it failed as `HOOGLE_REMOTE_ERROR` /
+  `InvalidUrlException … "Invalid URL"` whenever the cache and local
+  tiers missed. The query string is now rendered by
+  `Network.HTTP.Types.URI.renderQuery`.
+- **`hypha lookup`'s suggested retry commands are shell-quoted.** The
+  `retry_offline`, `raise_timeout`, `retry_online` and
+  `retry_with_prefix` hints interpolated the raw query, so the
+  suggestion printed for a type-signature query
+  (`hypha lookup Ord b => (a -> b) -> [a] -> [a] --offline`) was not
+  the command it looked like — pasted into a shell, `=>` truncates a
+  file named `b`. The query is single-quoted when it needs it; the
+  `query` field itself stays raw, since it is data rather than a
+  command.
 - **`hypha lookup`'s cache tier is pinned to the build plan.** The
   package cache is keyed on `(package, version)` and shared by every
   project on the host, and a write for a new version does not evict the

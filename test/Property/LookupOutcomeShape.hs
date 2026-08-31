@@ -53,6 +53,30 @@ tests = testGroup "Property.LookupOutcomeShape"
           assertBool "carries retry_offline"
             (Map.member "retry_offline" (errorActions err))
 
+  , testCase "suggested commands quote the query" $
+      expectFailure
+        (buildOutcome (HoogleQuery "Ord b => (a -> b) -> [a] -> [a]") []
+                      [TierCache, TierLocalHoogle, TierRemoteHoogle]
+                      (RemoteFailed (RemoteHttp "boom"))) $ \err -> do
+          -- Unquoted, "=>" makes the shell truncate the file the
+          -- suggestion tells the user to run.
+          Map.lookup "retry_offline" (errorActions err)
+            @?= Just "hypha lookup 'Ord b => (a -> b) -> [a] -> [a]' --offline"
+          Map.lookup "raise_timeout" (errorActions err)
+            @?= Just "hypha lookup 'Ord b => (a -> b) -> [a] -> [a]' \
+                     \--hoogle-timeout 30"
+          -- The query itself stays raw: it is data, not a command.
+          Map.lookup "query" (errorActions err)
+            @?= Just "Ord b => (a -> b) -> [a] -> [a]"
+
+  , testCase "the prefix suggestion is not a glob" $
+      expectFailure
+        (buildOutcome (HoogleQuery "sortOn") []
+                      [TierCache, TierLocalHoogle, TierRemoteHoogle]
+                      RemoteEmpty) $ \err ->
+          Map.lookup "retry_with_prefix" (errorActions err)
+            @?= Just "hypha lookup 'sortOn*'"
+
   , testCase "empty providers, remote consulted but empty => NOT_FOUND" $
       expectFailure
         (buildOutcome (HoogleQuery "x") []
