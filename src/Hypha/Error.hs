@@ -236,7 +236,7 @@ errorMessage = \case
       <> "; run `cabal build --dry-run`"
     PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
   HoogleOffline      _ _ ->
-    "--offline suppresses remote tier"
+    "--offline: no cached answer for this query and the network is disabled"
   HoogleNotFound     _ _ ->
     "no providers found"
   HoogleRemoteError  _ _ remoteErr -> renderRemoteError remoteErr

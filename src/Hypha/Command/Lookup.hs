@@ -95,7 +95,8 @@ data LookupOptions = LookupOptions
 data RemoteTierOutcome
     -- | Earlier tier hit; remote tier never consulted.
   = RemoteNotConsulted
-    -- | @--offline@ suppressed the remote call.
+    -- | @--offline@ and no cached answer on disk (the network call
+    -- was never attempted).
   | RemoteSkippedOffline
     -- | Remote returned with zero hits.
   | RemoteEmpty

@@ -26,7 +26,8 @@ and returns at the first hit:
    local packages. Handles type-signature queries such as
    `a -> Maybe a`.
 3. **Remote Hoogle** at `hoogle.haskell.org`: HTTP fallback. Cached in the
-   global `kv` table; skipped under `--offline`. Its request timeout is
+   global `kv` table; under `--offline` a cached answer is still served, only
+   the network call is skipped. Its request timeout is
    10s, raisable with `--hoogle-timeout SECONDS`.
 
    **This is the only tier that reaches beyond your build plan**, and it is

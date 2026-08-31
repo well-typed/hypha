@@ -15,6 +15,7 @@ module Hypha.Hoogle.Remote
   , defaultRemoteOptions
   , searchRemote
   , searchRemoteWith
+  , cacheKey
   , defaultTransport
   ) where
 
@@ -100,17 +101,21 @@ searchRemoteWith
   -> HyphaPackageCache
   -> HoogleQuery
   -> IO (Either RemoteError [HoogleHit])
-searchRemoteWith transport opts cache q
-  | roOffline opts = pure (Left RemoteOffline)
-  | otherwise = do
-      let kv  = hyphaGlobalCache cache
-          key = cacheKey q
-      cached <- readBlob kv key
-      case cached of
-        Just txt
-          | Right hits <- decodeHits (LBS.fromStrict (Text.encodeUtf8 txt))
-              -> pure (Right hits)
-        _ -> do
+-- The cache is consulted /before/ 'roOffline' is checked: an
+-- "offline" run must still be answered by bodies already on disk
+-- (the plane / CI / sandbox case), so 'RemoteOffline' means "offline
+-- and nothing cached" — not "pretend tier 3 does not exist".
+searchRemoteWith transport opts cache q = do
+  let kv  = hyphaGlobalCache cache
+      key = cacheKey q
+  cached <- readBlob kv key
+  case cached of
+    Just txt
+      | Right hits <- decodeHits (LBS.fromStrict (Text.encodeUtf8 txt))
+          -> pure (Right hits)
+    _
+      | roOffline opts -> pure (Left RemoteOffline)
+      | otherwise -> do
           let url = endpointFor opts q
           r <- runRemote transport url
           case r of
