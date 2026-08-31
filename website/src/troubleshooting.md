@@ -109,13 +109,17 @@ One known gap, reported on stderr as it happens:
 
 - **A few modules still will not parse.** CPP itself is not the problem:
   `hypha` runs the preprocessor with the macros your plan implies
-  (`__GLASGOW_HASKELL__`, `MIN_VERSION_<pkg>`), so `#if`-guarded code is
-  read from the branch your compiler would actually compile. What remains
-  are modules that do not parse even then — a `foreign import` calling
-  convention that only exists on Windows, a Template Haskell quotation the
-  parser cannot take standalone. Measured on a 289-package index: **28
-  modules across 14 packages**, and each one is named on stderr with GHC's
-  own message.
+  (`__GLASGOW_HASKELL__`, `MIN_VERSION_<pkg>`) and with your compiler's own
+  header directory on the include path (`MachDeps.h`, `ghcplatform.h`), and
+  it resolves each package's `os()` and `arch()` stanzas for the platform
+  your plan was solved for — so `#if`-guarded code is read from the branch
+  your compiler would actually compile, and a module your platform never
+  builds is not read at all. What remains are modules that do not parse
+  even then: a Template Haskell quotation the parser cannot take
+  standalone, or an `#include` of a header `configure` generates at build
+  time (`HsBaseConfig.h`), which is not in the released tarball. Measured
+  on this repo's 252-unit plan: **25 modules across 13 packages**, and each
+  one is named on stderr with GHC's own message.
 
   A module that contributes nothing takes with it whatever it re-exported,
   and that covers class methods and constructors too — a member presented

@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
 -- | Read a package's @.cabal@ file and report the library components
 -- it defines (main library + every @library NAME@ stanza), together
@@ -15,6 +16,7 @@ module Hypha.Project.Components
   , parseLibComponents
   , findCabalFile
   , getExposedModules
+  , evalCondition
   ) where
 
 import Control.Exception.Safe (IOException, displayException, try)
@@ -27,13 +29,17 @@ import Data.Text (Text)
 import Distribution.PackageDescription.Parsec qualified as PDP
 import Distribution.PackageDescription qualified as PD
 import Distribution.Pretty (pretty)
+import Distribution.System (Platform (..))
+import Distribution.Types.Condition (Condition (..))
+import Distribution.Types.ConfVar (ConfVar (..))
 import Distribution.Types.UnqualComponentName qualified as UC
 import Distribution.Utils.Path qualified as UP
 import Language.Haskell.Extension qualified as Cabal
 import GHC.Driver.Session qualified as GHCLang
+import Hypha.Project.BuildContext
+  ( BuildContext (..), hostBuildContext, withIncludeDirs )
 import Hypha.Source.Extensions
-  ( CppEnv (..), LanguageSettings (..), UnknownExtension (..)
-  , extensionFromFlagName )
+  ( LanguageSettings (..), UnknownExtension (..), extensionFromFlagName )
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.IO (hPutStrLn, stderr)
 import System.FilePath ((</>), takeExtension)
@@ -103,9 +109,9 @@ findCabalFile dir = do
 parseLibComponents
   :: FilePath        -- ^ cabal file path
   -> FilePath        -- ^ package root (for resolving relative source dirs)
-  -> Maybe FilePath  -- ^ synthesised @cabal_macros.h@, when a plan supplied one
+  -> BuildContext    -- ^ what the plan says: CPP environment + platform
   -> IO [ComponentInfo]
-parseLibComponents cabalPath pkgRoot mMacroHeader = do
+parseLibComponents cabalPath pkgRoot ctx = do
   eBs <- try @IO @IOException (BS.readFile cabalPath)
   case eBs of
     Left err -> do
@@ -173,26 +179,26 @@ parseLibComponents cabalPath pkgRoot mMacroHeader = do
              { lsLanguage   = ghcLanguageOf =<< PD.defaultLanguage bi
              , lsDefaultOn  = on
              , lsDefaultOff = off
-             , lsCpp        = CppEnv
-                 { cppPreInclude  = mMacroHeader
-                   -- The stanza's own @include-dirs@, plus the package
-                   -- root and its source dirs: a module's @#include@ is
-                   -- resolved against the including file's directory
-                   -- already, but a header declared for the whole
-                   -- package lives at one of these instead.
-                 , cppIncludeDirs = nubOrd $
-                     [ pkgRoot </> UP.getSymbolicPath p
-                     | p <- PD.includeDirs bi ]
-                     <> (pkgRoot : dirs)
-                 }
+               -- The stanza's own @include-dirs@, plus the package root
+               -- and its source dirs, ahead of whatever the plan
+               -- supplied (the compiler's own header directory): a
+               -- module's @#include@ is resolved against the including
+               -- file's directory already, but a header declared for the
+               -- whole package lives at one of these instead, and a
+               -- package's own header must shadow GHC's of the same name.
+             , lsCpp        = bcCpp $ withIncludeDirs
+                 (nubOrd $
+                    [ pkgRoot </> UP.getSymbolicPath p
+                    | p <- PD.includeDirs bi ]
+                    <> (pkgRoot : dirs))
+                 ctx
              }
          , ciUnknownExtensions = unknown
          }
 
     renderModule = T.pack . render . pretty
 
-    -- Every branch of a conditional stanza, unioned with the
-    -- unconditional node.
+    -- The unconditional node, plus the branches that apply here.
     --
     -- @condTreeData@ alone is only the unconditional part, and cabal files
     -- put real module lists behind conditions: @base@ declares
@@ -202,17 +208,30 @@ parseLibComponents cabalPath pkgRoot mMacroHeader = do
     -- component's list, and since the indexer treats a non-empty list as
     -- authoritative, they were never indexed at all.
     --
-    -- The union is the right answer rather than resolving the flags: we
-    -- cannot know the flag assignment the package was built with, and
-    -- 'loadModuleSources' already drops a name whose file is not on disk,
-    -- so a Windows-only module simply does not resolve on Linux.
-    flattenCondTree :: Monoid a => PD.CondTree v c a -> a
+    -- A condition we can decide is decided: @os()@ and @arch()@ are
+    -- answered by the plan's platform, so @base@ on Linux contributes
+    -- @GHC.Event@ and not @GHC.Windows@.  Taking both branches there was
+    -- not merely wasteful — @GHC.Windows@ /is/ on disk in the sdist, and
+    -- it cannot preprocess off Windows (@WINDOWS_CCONV@ is defined only
+    -- under @mingw32_HOST_OS@), so every descent through @base@ reported
+    -- four parse failures for modules this platform never builds.
+    --
+    -- A condition we cannot decide is still unioned: the flag assignment
+    -- the package was built with is not in the plan, and @impl()@ ranges
+    -- over compilers we are not asked about.  Under-reading a module list
+    -- costs an absent symbol; over-reading one costs a file that
+    -- 'loadModuleSources' drops when it is not on disk.
+    flattenCondTree :: Monoid a => PD.CondTree ConfVar c a -> a
     flattenCondTree ct =
       mconcat (PD.condTreeData ct : concatMap branch (PD.condTreeComponents ct))
       where
-        branch b =
-          flattenCondTree (PD.condBranchIfTrue b)
-            : maybe [] (pure . flattenCondTree) (PD.condBranchIfFalse b)
+        branch b = case evalCondition (bcPlatform ctx) (PD.condBranchCondition b) of
+          Just True  -> [ flattenCondTree (PD.condBranchIfTrue b) ]
+          Just False -> map flattenCondTree
+                          (maybe [] (: []) (PD.condBranchIfFalse b))
+          Nothing    ->
+            flattenCondTree (PD.condBranchIfTrue b)
+              : map flattenCondTree (maybe [] (: []) (PD.condBranchIfFalse b))
 
     -- cabal models an extension as (name, enabled), and the name it
     -- carries can itself be negated (@NoImplicitPrelude@), so the two
@@ -243,6 +262,41 @@ parseLibComponents cabalPath pkgRoot mMacroHeader = do
       Cabal.DisableExtension k  -> (T.pack (show k), False)
       Cabal.UnknownExtension nm -> (T.pack nm, True)
 
+-- | Decide a cabal condition as far as the plan's platform allows.
+--
+-- Three-valued on purpose.  @os()@ and @arch()@ are facts the plan
+-- settles; @flag()@ and @impl()@ are not, and guessing either would
+-- silently pick a module list the package was never built with.
+-- 'Nothing' means "undecided", and the caller unions both branches for
+-- those — the behaviour every branch used to get.
+--
+-- The connectives are Kleene's, so a decidable half still decides the
+-- whole: @os(windows) && flag(x)@ is 'Just' 'False' off Windows even
+-- though the flag is unknown.
+evalCondition :: Platform -> Condition ConfVar -> Maybe Bool
+evalCondition (Platform arch os) = go
+  where
+    go = \case
+      Var (OS o)    -> Just (o == os)
+      Var (Arch a)  -> Just (a == arch)
+      Var (PackageFlag _) -> Nothing
+      Var (Impl _ _)  -> Nothing
+      Lit b         -> Just b
+      CNot c        -> not <$> go c
+      CAnd a b      -> kleeneAnd (go a) (go b)
+      COr  a b      -> kleeneOr  (go a) (go b)
+
+    -- One 'False' settles a conjunction whatever the other half is;
+    -- one 'True' settles a disjunction.  Keeps a decidable @os()@ from
+    -- being lost to an undecidable @flag()@ beside it.
+    kleeneAnd (Just False) _ = Just False
+    kleeneAnd _ (Just False) = Just False
+    kleeneAnd a b            = (&&) <$> a <*> b
+
+    kleeneOr (Just True) _ = Just True
+    kleeneOr _ (Just True) = Just True
+    kleeneOr a b           = (||) <$> a <*> b
+
 -- | Translate cabal's @default-language@ into the parser's language
 -- selector.  Cabal admits @UnknownLanguage@ for forward compatibility;
 -- an unrecognised value means \"no opinion\", which leaves the GHC2021
@@ -263,7 +317,8 @@ getExposedModules root = do
   case mCabal of
     Nothing  -> pure []
     Just fp  -> do
-      -- Only the module list is wanted here, which no macro affects.
-      comps <- parseLibComponents fp root Nothing
+      -- Only the module list is wanted here, which no macro affects —
+      -- but the platform does, so the host's is used rather than none.
+      comps <- parseLibComponents fp root hostBuildContext
       pure $ concatMap ciExposedModules comps
 

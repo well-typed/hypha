@@ -139,6 +139,34 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The preprocessor gets GHC's own headers, and reads only the branches
+  this platform builds.** `MachDeps.h` and `ghcplatform.h` ship with the
+  compiler rather than with the packages that `#include` them, and cabal
+  puts the compiler's include directory on every CPP invocation; hypha did
+  not, so every module asking for `WORD_SIZE_IN_BITS` or
+  `<arch>_HOST_ARCH` walked into its `#error` arm — 21 of
+  `base-4.16.4.0`'s modules, 20 of `ghc-internal-9.1003.0`'s, including
+  the ones a `Data.List` descent passes through. The directory is now
+  located from the *plan's* compiler (`ghc --print-libdir`, then a probe
+  for `MachDeps.h`, which covers both the pre-9.6 and the 9.6-and-later
+  layouts). Separately, a package's `os()` and `arch()` stanzas are now
+  resolved for the platform the plan was solved for instead of having
+  every branch unioned: `base`'s Windows-only modules are on disk in the
+  sdist and cannot preprocess off Windows, so reading them reported four
+  parse failures per descent for modules this platform never builds.
+  Conditions the plan does not settle — `flag()`, `impl()` — are still
+  unioned, since guessing a flag assignment would silently index a module
+  list the package was never built with. Measured: `hypha source
+  base/Data.List/sortOn` on a GHC 9.2.8 project went from ten
+  `could not be parsed` lines to two, and parse failures across this
+  repo's 252-unit plan went from 46 modules to 25.
+- **A `#error` in a module now reports as a parse failure rather than
+  escaping.** cpphs raises `#error` by calling `error` from pure code, and
+  the handler meant to catch it wrapped a thunk — `Text.pack <$> runCpphs`
+  is not forced inside the `try`, so the failure fired wherever the text
+  was first demanded. `Hypha.Source.Parser` forces it inside the handler,
+  which makes its pure entry points (`parseModuleWith` and friends) total
+  as their documentation already claimed.
 - **Type-signature queries reach the remote Hoogle tier again.** The
   query string was percent-encoded by a hand-rolled escaper that only
   knew about `&?#=` and the space, so `>`, `[` and `]` went out raw.

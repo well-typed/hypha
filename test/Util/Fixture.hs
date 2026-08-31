@@ -36,6 +36,7 @@ import qualified Data.Text.IO as TIO
 import           System.FilePath ((</>))
 
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
+import Hypha.Project.BuildContext (hostBuildContext)
 import Hypha.Package.Resolver (PackageResolver (..), ResolvedPackage (..))
 import Hypha.Search.Index (ModuleSource (..), Visibility (..))
 import Hypha.Search.Indexer (packageSources)
@@ -76,7 +77,7 @@ depSources :: IO [ModuleSource]
 depSources = componentSources "test/fixtures/reexport-dep"
 
 componentSources :: FilePath -> IO [ModuleSource]
-componentSources root = concatMap snd <$> packageSources root Nothing
+componentSources root = concatMap snd <$> packageSources root hostBuildContext
 
 -- The fixture packages, named once.  These were duplicated across the
 -- golden and the unit suite, which is two declarations of one fact and

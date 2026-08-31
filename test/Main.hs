@@ -34,6 +34,7 @@ import qualified Unit.Mcp
 import qualified Unit.PackageCache
 import qualified Unit.PackageCacheFingerprint
 import qualified Unit.HoogleLocalGen
+import qualified Unit.GhcIncludes
 import qualified Unit.HoogleRemote
 import qualified Unit.PackageCacheLookup
 import qualified Unit.Module
@@ -105,6 +106,7 @@ allTests = testGroup "hypha"
   , Unit.PackageCache.tests
   , Unit.PackageCacheFingerprint.tests
   , Unit.HoogleLocalGen.tests
+  , Unit.GhcIncludes.tests
   , Unit.HoogleRemote.tests
   , Unit.PackageCacheLookup.tests
   , Unit.Module.tests

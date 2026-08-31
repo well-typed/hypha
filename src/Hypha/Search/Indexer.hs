@@ -53,6 +53,7 @@ import System.IO (hPutStrLn, stderr)
 
 import Hypha.Error (errorMessage)
 import Hypha.Package.Resolver (PackageResolver (..))
+import Hypha.Project.BuildContext (BuildContext)
 import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Fuzzy qualified as Fuzzy
@@ -820,19 +821,20 @@ stanzaModules ci =
 -- back to the sweep it was written to avoid.
 packageSources
   :: FilePath
-  -> Maybe FilePath
-     -- ^ The plan's synthesised @cabal_macros.h@, so a module read on
-     -- this path is preprocessed against the same macros the indexer
-     -- used.  'Nothing' outside a project.
+  -> BuildContext
+     -- ^ So a module read on this path is preprocessed against the same
+     -- macros and headers, and its stanzas resolved for the same
+     -- platform, as the indexer used.  'hostBuildContext' outside a
+     -- project, where there is no plan to derive one from.
   -> IO [(Comp.ComponentInfo, [ModuleSource])]
-packageSources pkgRoot mMacroHeader = do
+packageSources pkgRoot ctx = do
   mCabal <- Comp.findCabalFile pkgRoot
   case mCabal of
     Nothing    -> do
       report "has no cabal file"
       pure []
     Just cabal -> do
-      comps <- Comp.parseLibComponents cabal pkgRoot mMacroHeader
+      comps <- Comp.parseLibComponents cabal pkgRoot ctx
       if null comps
         then do
           report ("cabal file " <> cabal <> " named no library component")

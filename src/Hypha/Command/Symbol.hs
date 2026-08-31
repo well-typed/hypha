@@ -26,6 +26,7 @@ import Hypha.Output.Outcome (Outcome (..), tagOutsidePlan)
 import Hypha.Package.Resolver
   ( PackageResolver (..), ResolvedPackage (..), resolveRef )
 import Hypha.Prelude (warnOnLeft)
+import Hypha.Project.BuildContext (BuildContext)
 import Hypha.Source.Extract
   (SymbolInfo (..), extractSymbolInfo, noSymbolInfo)
 import Hypha.Source.Extract qualified as Extract
@@ -101,8 +102,8 @@ fullKeys = Set.fromList
 -- Following the re-export is what closes that gap, and a symbol that
 -- genuinely is not there is now an error rather than an empty card.
 runSymbolWith
-  :: Maybe FilePath
-    -- ^ The plan's synthesised @cabal_macros.h@.
+  :: BuildContext
+    -- ^ How the plan says this package's sources are read.
   -> BuildEnv IO
   -> PackageResolver IO
   -> (PackageId -> IO (OutsideReach IO))
@@ -111,7 +112,7 @@ runSymbolWith
     -- package that is only becomes known once the argument is parsed.
   -> Text
   -> IO (Either HyphaError (Outcome Value))
-runSymbolWith mMacroHeader _env resolver mkReach rawArg = runExceptT $ do
+runSymbolWith ctx _env resolver mkReach rawArg = runExceptT $ do
   sp                 <- liftParseError rawArg (parseSymbolPath rawArg)
   (modPath, symName) <- requireModuleAndSymbol sp rawArg
   let ref = PackageRef (spPackage sp) (spVersion sp)
@@ -120,7 +121,7 @@ runSymbolWith mMacroHeader _env resolver mkReach rawArg = runExceptT $ do
   d       <- ExceptT (resolveSrc resolver pid)
   reach   <- liftIO (mkReach pid)
   located <- liftIO
-    (Source.locateSymbolSite mMacroHeader reach pid d modPath symName)
+    (Source.locateSymbolSite ctx reach pid d modPath symName)
   card    <- case located of
     Right site -> liftIO (cardFor symName site)
     Left err   -> throwE

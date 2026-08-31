@@ -38,6 +38,7 @@ module Hypha.Source.Origins
   , renderOriginError
     -- * Discovery
   , discoverPackageDbs
+  , ghcLibdir
   ) where
 
 import Control.Exception.Safe (IOException, try)
@@ -402,6 +403,19 @@ mkGhcModuleOwnerOracle cid dbs = do
     unitId raw = case parsePackageRef raw of
       PackageRef name (Just ver) -> Just (PackageId name ver)
       PackageRef _    Nothing    -> Nothing
+
+-- | @ghc --print-libdir@ for the installation matching the plan's
+-- compiler.
+--
+-- The compiler's own headers (@MachDeps.h@, @ghcplatform.h@) live under
+-- it, and every consumer wants the /plan's/ compiler rather than
+-- whichever @ghc@ answers first — so the toolchain selection below is
+-- shared rather than repeated.
+ghcLibdir :: CompilerId -> IO (Either OriginError FilePath)
+ghcLibdir cid = locateToolchain cid >>= \case
+  Left e   -> pure (Left e)
+  Right tc ->
+    fmap (Text.unpack . Text.strip) <$> runTool (gtGhc tc) ["--print-libdir"]
 
 -- | The first reachable installation whose @ghc@ reports the plan's
 -- version.

@@ -69,7 +69,9 @@ import Hypha.Source.Locate (findModuleFileIn)
 import Hypha.Source.Origins (ModuleOwnerOracle (..), OriginError)
 import Hypha.Source.Reach
   ( OutsideModule (..), OutsideReach (..), ReachGap (..) )
-import Hypha.Types.BuildPlan (BuildPlan, PlannedUnit (..), bpCppMacros, lookupUnit)
+import Hypha.Project.BuildContext (BuildContext)
+import Hypha.Types.BuildPlan
+  ( BuildPlan, PlannedUnit (..), bpBuildContext, lookupUnit )
 import Hypha.Types.ComponentName (ComponentKey, componentKeyOf)
 import Hypha.Types.PackageId (PackageId (..), PackageName, renderPackageId)
 import Hypha.Types.SymbolPath (ModulePath (..))
@@ -176,7 +178,7 @@ lookupModule plan resolver mkOracle ref m = go
         Just entry -> Just <$> readEntry entry
         Nothing    -> case clPending cl of
           (dep : _)  -> do
-            (found, gaps) <- indexDependency (bpCppMacros plan) resolver dep
+            (found, gaps) <- indexDependency (bpBuildContext plan) resolver dep
             -- Atomic because 'indexDependency' is slow and the value it
             -- is folded into was read before it ran: a plain write-back
             -- would drop whatever a concurrent lookup had learned in the
@@ -227,7 +229,7 @@ lookupModule plan resolver mkOracle ref m = go
                 <> Text.unpack (errorMessage err)
             Nothing <$ addGaps [GapOwnerUnfetchable owner m]
           Right dir -> do
-            (found, gaps) <- modulesUnder (bpCppMacros plan) owner dir
+            (found, gaps) <- modulesUnder (bpBuildContext plan) owner dir
             atomicModifyIORef' ref (\c -> (record owner found gaps c, ()))
             go
 
@@ -284,13 +286,13 @@ lookupModule plan resolver mkOracle ref m = go
 -- component owns a module, whether it is exposed, and which extensions it
 -- is parsed under.
 indexDependency
-  :: Maybe FilePath
+  :: BuildContext
   -> PackageResolver IO
   -> PackageId
   -> IO (Map ModulePath OutsideEntry, [ReachGap])
-indexDependency mMacroHeader resolver dep = resolveSrcLocal resolver dep >>= \case
+indexDependency ctx resolver dep = resolveSrcLocal resolver dep >>= \case
   Nothing  -> pure (Map.empty, [GapNoLocalSource dep])
-  Just dir -> modulesUnder mMacroHeader dep dir
+  Just dir -> modulesUnder ctx dep dir
 
 -- | The library modules of one unpacked package, however its source got
 -- there.
@@ -299,17 +301,17 @@ indexDependency mMacroHeader resolver dep = resolveSrcLocal resolver dep >>= \ca
 -- has the directory already — it fetched it — and reading the stanzas is
 -- the same work either way.
 modulesUnder
-  :: Maybe FilePath
-     -- ^ The plan's synthesised @cabal_macros.h@; the language settings
-     -- built here are the ones the module is later parsed with, so they
-     -- have to carry the same macros the indexer used.
+  :: BuildContext
+     -- ^ The language settings built here are the ones the module is
+     -- later parsed with, so they have to carry the same macros, headers
+     -- and platform the indexer used.
   -> PackageId
   -> FilePath
   -> IO (Map ModulePath OutsideEntry, [ReachGap])
-modulesUnder mMacroHeader dep dir = Comp.findCabalFile dir >>= \case
+modulesUnder ctx dep dir = Comp.findCabalFile dir >>= \case
     Nothing    -> heuristic
     Just cabal -> do
-      comps <- Comp.parseLibComponents cabal dir mMacroHeader
+      comps <- Comp.parseLibComponents cabal dir ctx
       if null comps then heuristic else do
         entries <- mapM fromComponent comps
         pure (Map.unions entries, [])
