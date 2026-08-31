@@ -183,18 +183,20 @@ buildOutcome q providers tiers remoteOutcome =
     ([], RemoteNotConsulted)   -> Left (HoogleNotFound     q tiers)
 
 -- | Pure tier-prefix model used by property tests.  Mirrors the
--- short-circuit logic of 'runLookup' without performing IO.
+-- short-circuit logic of 'runLookup' without performing IO: an
+-- offline warm hit still reaches tier 3 (served from its cache), so
+-- only "offline and tier 3 found nothing" stops the prefix short.
 chooseTiers
   :: Bool   -- ^ Tier 1 hit?
   -> Bool   -- ^ Tier 2 hit?
-  -> Bool   -- ^ offline?
-  -> Bool   -- ^ Tier 3 hit? (unused when offline)
+  -> Bool   -- ^ offline? (gates only the network call, not the cache)
+  -> Bool   -- ^ Tier 3 answered? (from disk under @--offline@, else the network)
   -> [Tier]
-chooseTiers t1 t2 offline _t3
-  | t1        = [TierCache]
-  | t2        = [TierCache, TierLocalHoogle]
-  | offline   = [TierCache, TierLocalHoogle]
-  | otherwise = [TierCache, TierLocalHoogle, TierRemoteHoogle]
+chooseTiers t1 t2 offline t3
+  | t1                 = [TierCache]
+  | t2                 = [TierCache, TierLocalHoogle]
+  | offline && not t3  = [TierCache, TierLocalHoogle]
+  | otherwise          = [TierCache, TierLocalHoogle, TierRemoteHoogle]
 
 -- Adapters --------------------------------------------------------------
 

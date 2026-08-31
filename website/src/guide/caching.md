@@ -11,6 +11,7 @@ derived state as possible — under `$XDG_CACHE_HOME/hypha/` (defaults to
 | Source tarballs | `source/<pkg>-<ver>/` | Immutable once extracted |
 | Haddock HTML | `haddock/<pkg>-<ver>/` | Built on demand, reused across runs |
 | Hoogle DB | `<projectRoot>/.hypha/hoogle.hoo` (with `.hypha/hoogle-stamp` sibling) | Rebuilt when `plan.json` changes |
+| Remote-Hoogle query bodies | `kv` table of `~/.cache/hypha/hypha.db` | No TTL: every successful remote lookup is kept and served even under `--offline`; cleared only by deleting `~/.cache/hypha` (negative-caching/TTL policy tracked in issue #40) |
 
 The fallback chain is automatic for network reads:
 **local HTTP cache → build plan → cabal store → Hackage**.

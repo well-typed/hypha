@@ -87,6 +87,40 @@ tests = testGroup "Unit.HoogleRemote"
             hits @?= [HoogleHit "foo" "Foo" "bar" "a -> a" ""]
           other -> assertFailure ("unexpected: " <> show other)
 
+  , testCase "offline + corrupt cache reports RemoteDecode, not offline" $
+      -- The blob exists; claiming "nothing cached" -- HOOGLE_OFFLINE --
+      -- would misdiagnose cache corruption.  Only the online path can
+      -- self-heal by refetching.
+      withSystemTempDirectory "hypha-rh" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        let q = HoogleQuery "foo"
+        writeBlob (hyphaGlobalCache c) (cacheKey q) "not json at all"
+        let transport = RemoteHoogleTransport $ \_ ->
+              assertFailure "transport must not be called"
+                >> pure (Left RemoteOffline)
+            opts = defaultRemoteOptions { roOffline = True }
+        r <- searchRemoteWith transport opts c q
+        case r of
+          Left (RemoteDecode _) -> pure ()
+          other -> assertFailure ("unexpected: " <> show other)
+
+  , testCase "offline + cached empty body answers (negative caching pinned)" $
+      -- writeBlob stores Right [] too and the kv cache honours no TTL,
+      -- so one fruitless online lookup turns later --offline runs into
+      -- an empty answer (which the cascade reports as NOT_FOUND) rather
+      -- than HOOGLE_OFFLINE.  Deliberate current behaviour; policy is
+      -- issue #40.
+      withSystemTempDirectory "hypha-rh" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        let q = HoogleQuery "foo"
+        writeBlob (hyphaGlobalCache c) (cacheKey q) "[]"
+        let transport = RemoteHoogleTransport $ \_ ->
+              assertFailure "transport must not be called"
+                >> pure (Left RemoteOffline)
+            opts = defaultRemoteOptions { roOffline = True }
+        r <- searchRemoteWith transport opts c q
+        r @?= Right []
+
   , testCase "malformed JSON returns RemoteDecode" $
       withSystemTempDirectory "hypha-rh" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing

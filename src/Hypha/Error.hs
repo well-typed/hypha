@@ -180,7 +180,7 @@ data HyphaError
     --   code / exit code mapping.
   | DiscoveryFailure  !DiscoveryError
   | PlanFailure       !ProjectRoot !PlanError
-    -- | @hypha lookup@: @--offline@ suppressed the remote tier.
+    -- | @hypha lookup@: @--offline@ and nothing cached for this query.
   | HoogleOffline      !HoogleQuery ![Tier]
     -- | @hypha lookup@: no providers found across every tier consulted.
   | HoogleNotFound     !HoogleQuery ![Tier]

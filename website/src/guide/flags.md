@@ -6,7 +6,7 @@ These apply to every subcommand and are given before or after the command.
 |------|-------------|
 | `--project-dir DIR` | Override project root |
 | `--package-override PKG=VER` | Replace a plan entry (repeatable) |
-| `--offline` | Completely disable network access; work only with local data (skips the remote Hoogle tier in `lookup`) |
+| `--offline` | Disable network access; a remote-Hoogle answer cached by a previous online `lookup` is still served, only the request is skipped (fails only if nothing is cached) |
 | `--json` | Emit the JSON envelope instead of YAML (the default) |
 | `--pretty-json` | Indent JSON output |
 | `--full` | Include all fields (default: compact) |
