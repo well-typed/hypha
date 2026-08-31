@@ -257,7 +257,9 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
             -- relabelled the card with a module name derived from a file
             -- path.
             sources  <- componentSourcesFor plan resolver pkgT dirs
-            imported <- importedSourcesFor cache resolver pkgT (ModulePath modT)
+            imported <- importedSourcesFor cache
+                          (Cache.scopeForPlan (planUnitIds plan))
+                          resolver pkgT (ModulePath modT)
             let langs   = componentLanguageSettings plan pkgT
                 cn      = parseComponentName pkgT
                 compKey = componentKeyOf (cnPackage cn) (cnKind cn)
@@ -410,7 +412,9 @@ moduleDocFor cacheRoot plan env resolver cache pkgT modT = do
         -- live in the modules it re-exports from, and resolving them is
         -- what fills the \"On this page\" rail for @Data.Map.Strict@.
         sources  <- lift (componentSourcesFor plan resolver pkgT dirs)
-        imported <- lift (importedSourcesFor cache resolver pkgT (ModulePath modT))
+        imported <- lift (importedSourcesFor cache
+                            (Cache.scopeForPlan (planUnitIds plan))
+                            resolver pkgT (ModulePath modT))
         let langs   = componentLanguageSettings plan pkgT
             compKey = componentKeyOf (cnPackage cn) (cnKind cn)
         resolved <- lift (Extract.resolveModuleEntries langs compKey sources
@@ -600,12 +604,13 @@ componentSourcesFor plan resolver rawName dirs = do
 -- than the module exports is indistinguishable from a correct one otherwise.
 importedSourcesFor
   :: Cache.HyphaPackageCache
+  -> Cache.CacheScope        -- ^ which configurations may answer
   -> PackageResolver IO
   -> Text                    -- ^ component name from the URL
   -> ModulePath
   -> IO Index.ImportedDefinitions
-importedSourcesFor cache resolver pkgT asking = do
-  indexed <- Cache.lookupInModule cache pkgT (unModulePath asking)
+importedSourcesFor cache scope resolver pkgT asking = do
+  indexed <- Cache.lookupInModule cache scope pkgT (unModulePath asking)
   -- Only rows whose definition is in another component: an intra-component
   -- one needs no extra source, the pure pass already has the module.
   let elsewhere =

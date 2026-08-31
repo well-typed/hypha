@@ -28,8 +28,9 @@ import Hypha.Search.Index
   , Visibility (..) )
 import Hypha.Source.Reach (reachFrom)
 import Hypha.Search.PackageCache
-  ( CacheOrigin (..), openPackageCacheAt, writeCachedIndex )
+  ( CacheOrigin (..), CacheScope (..), openPackageCacheAt, writeCachedIndex )
 import Hypha.Source.Extensions (defaultLanguageSettings)
+import Hypha.Types.PackageId (UnitId (..))
 import Hypha.Source.Locate (LocatedDefinition (..), locateDefinitionInComponent)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 import Hypha.Types.ComponentName (ComponentKey (..))
@@ -71,13 +72,20 @@ stubResolver = PackageResolver
 withCachedRow :: (ImportedDefinitions -> IO a) -> IO a
 withCachedRow k = withSystemTempDirectory "hypha-imp" $ \tmp -> do
   cache <- openPackageCacheAt (tmp </> "global.db") Nothing
-  writeCachedIndex cache OriginGlobal "reexport" "0.1.0"
+  writeCachedIndex cache OriginGlobal "reexport" "0.1.0" (cfgFor "reexport" "0.1.0")
     [ rowFrom "reexport" "Fixture.Imported" "depThing" "depThing :: Int -> Int"
         (DefinitionRef (ComponentKey "reexport-dep") (ModulePath "Dep.Internal"))
         Exposed
     ]
-  k =<< importedSourcesFor cache stubResolver "reexport"
+  -- No plan here, so no configuration to pin to: the whole cache is the
+  -- honest scope, and it holds exactly the row just written.
+  k =<< importedSourcesFor cache ScopeWholeCache stubResolver "reexport"
           (ModulePath "Fixture.Imported")
+
+-- | The configuration these tests write under: one per
+-- @(package, version)@, which is what a single project's plan resolves.
+cfgFor :: Text.Text -> Text.Text -> UnitId
+cfgFor pkg ver = UnitId (pkg <> "-" <> ver <> "-cfg")
 
 tests :: TestTree
 tests = testGroup "Unit.ImportedSources"
@@ -120,14 +128,14 @@ tests = testGroup "Unit.ImportedSources"
       -- an intra-component one needs no second parse.
       withSystemTempDirectory "hypha-imp" $ \tmp -> do
         cache <- openPackageCacheAt (tmp </> "global.db") Nothing
-        writeCachedIndex cache OriginGlobal "reexport" "0.1.0"
+        writeCachedIndex cache OriginGlobal "reexport" "0.1.0" (cfgFor "reexport" "0.1.0")
           [ rowFrom "reexport" "Fixture.Wrapper" "insertBag" "sig"
               (DefinitionRef (ComponentKey "reexport")
                              (ModulePath "Fixture.Internal"))
               Exposed
           ]
-        imported <- importedSourcesFor cache stubResolver "reexport"
-                      (ModulePath "Fixture.Wrapper")
+        imported <- importedSourcesFor cache ScopeWholeCache stubResolver
+                      "reexport" (ModulePath "Fixture.Wrapper")
         idSites imported   @?= Map.empty
         idSources imported @?= Map.empty
   ]

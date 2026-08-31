@@ -14,7 +14,8 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import Hypha.Command.Deps (runDeps)
 import Hypha.Output.Outcome (outcomeResult, outcomeActions)
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan
+  , unpinnedUnitIdFor )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 -- | Build a test plan with known dependency structure:
@@ -27,6 +28,7 @@ mkTestPlan = emptyBuildPlan
   { bpUnits = Map.fromList
       [ (PackageName "async", PlannedUnit
           { puId = PackageId (PackageName "async") (Version "2.2.5")
+          , puUnitId  = unpinnedUnitIdFor (PackageId (PackageName "async") (Version "2.2.5"))
           , puDeps =
               [ PackageId (PackageName "stm") (Version "2.5.1")
               , PackageId (PackageName "hashable") (Version "1.4.4")
@@ -39,6 +41,7 @@ mkTestPlan = emptyBuildPlan
           })
       , (PackageName "stm", PlannedUnit
           { puId = PackageId (PackageName "stm") (Version "2.5.1")
+          , puUnitId  = unpinnedUnitIdFor (PackageId (PackageName "stm") (Version "2.5.1"))
           , puDeps =
               [ PackageId (PackageName "array") (Version "0.5.6")
               ]
@@ -50,6 +53,7 @@ mkTestPlan = emptyBuildPlan
           })
       , (PackageName "hashable", PlannedUnit
           { puId = PackageId (PackageName "hashable") (Version "1.4.4")
+          , puUnitId  = unpinnedUnitIdFor (PackageId (PackageName "hashable") (Version "1.4.4"))
           , puDeps = []
           , puIsLocal = False
           , puOrigin = OriginHackage
@@ -59,6 +63,7 @@ mkTestPlan = emptyBuildPlan
           })
       , (PackageName "array", PlannedUnit
           { puId = PackageId (PackageName "array") (Version "0.5.6")
+          , puUnitId  = unpinnedUnitIdFor (PackageId (PackageName "array") (Version "0.5.6"))
           , puDeps = []
           , puIsLocal = False
           , puOrigin = OriginHackage

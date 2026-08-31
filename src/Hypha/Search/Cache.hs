@@ -6,10 +6,13 @@
 -- every package source tree and parsing its export lists; subsequent
 -- runs read the result back out of SQLite in milliseconds.
 --
--- The schema is intentionally generic and keyed on @(package, version)@
--- so the same DB is reused across every project on the host: if two
--- projects depend on @containers-0.6.7@, the second one inherits the
--- first one's work.  The DB is co-located with our other caches under
+-- The schema is keyed on @(component, version, unit-id)@ so the same DB
+-- is reused across every project on the host: if two projects depend on
+-- @containers-0.6.7@ /in the same configuration/, the second one
+-- inherits the first one's work.  The unit-id is what makes that "same
+-- configuration" precise — see 'UnitPin'.
+--
+-- The DB is co-located with our other caches under
 -- @$XDG_CACHE_HOME/hypha/hypha.db@.
 --
 -- The module also exposes a small key-value table ('readBlob' /
@@ -18,6 +21,8 @@
 module Hypha.Search.Cache
   ( IndexCache
   , CacheScope (..)
+  , UnitPin (..)
+  , scopeForPlan
   , VersionedRow (..)
   , openIndexCache
   , defaultCachePath
@@ -47,7 +52,7 @@ import Hypha.Search.Index
   , currentIndexFormat, visibilityFromText, visibilityToText )
 import Hypha.Types.ComponentName
   ( ComponentKey (..), ComponentName (..), parseComponentName )
-import Hypha.Types.PackageId (PackageName, Version (..))
+import Hypha.Types.PackageId (PackageName, UnitId (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
@@ -76,16 +81,19 @@ openIndexCache path = do
   -- writing, which matches our background-build pattern.
   execute_ conn "PRAGMA journal_mode = WAL"
   execute_ conn "PRAGMA synchronous = NORMAL"
-  mapM_ (execute_ conn) schema
+  mapM_ (execute_ conn) kvSchema
+  lock <- newMVar ()
+  let c = IndexCache conn lock
+  -- The guard runs between the two halves of the schema: it may drop a
+  -- previous generation's index tables, and what replaces them has to be
+  -- created afterwards.
+  ensureIndexFormat c
+  mapM_ (execute_ conn) indexSchema
+  -- Same-generation databases that predate a column still need it added.
   migrateAddColumn conn "pkg_index_meta" "fingerprint" "TEXT"
-  -- Columns first, so opening a generation-1 database does not throw
-  -- before 'ensureIndexFormat' gets the chance to clear it.
   migrateAddColumn conn "pkg_index" "def_mod"    "TEXT NOT NULL DEFAULT ''"
   migrateAddColumn conn "pkg_index" "def_pkg"    "TEXT NOT NULL DEFAULT ''"
   migrateAddColumn conn "pkg_index" "visibility" "TEXT NOT NULL DEFAULT ''"
-  lock <- newMVar ()
-  let c = IndexCache conn lock
-  ensureIndexFormat c
   pure c
 
 -- | Discard rows written under an older row format.
@@ -102,46 +110,61 @@ ensureIndexFormat c = do
   if stored == Just current
     then pure ()
     else do
+      -- Dropped rather than emptied: generation 6 moved the primary key
+      -- itself (it gained @unit_id@), and SQLite cannot alter one in
+      -- place.  The rows were going anyway, so the table goes with them.
       withWrite c $ Sql.withTransaction (icConn c) $ do
-        execute_ (icConn c) "DELETE FROM pkg_index"
-        execute_ (icConn c) "DELETE FROM pkg_index_meta"
+        execute_ (icConn c) "DROP TABLE IF EXISTS pkg_index"
+        execute_ (icConn c) "DROP TABLE IF EXISTS pkg_index_meta"
       writeBlob c indexFormatKey current
 
 -- | @kv@ key holding the row-format generation of a database.
 indexFormatKey :: Text
 indexFormatKey = "index_format"
 
-schema :: [Query]
-schema =
+-- | The key-value table, created before anything else: the format guard
+-- itself is stored in it.
+kvSchema :: [Query]
+kvSchema =
+  [ "CREATE TABLE IF NOT EXISTS kv \
+    \  ( k TEXT PRIMARY KEY NOT NULL \
+    \  , v BLOB NOT NULL )"
+  ]
+
+-- | The index tables.  Created /after/ the format guard has had its
+-- chance to drop a previous generation's, because a stale table cannot
+-- be extended into the current shape — generation 6 moved the primary
+-- key.
+indexSchema :: [Query]
+indexSchema =
   [ "CREATE TABLE IF NOT EXISTS pkg_index_meta \
     \  ( pkg     TEXT NOT NULL \
     \  , version TEXT NOT NULL \
+    \  , unit_id TEXT NOT NULL \
     \  , indexed_at INTEGER NOT NULL \
     \  , fingerprint TEXT \
-    \  , PRIMARY KEY (pkg, version) )"
+    \  , PRIMARY KEY (pkg, version, unit_id) )"
   , "CREATE TABLE IF NOT EXISTS pkg_index \
     \  ( pkg     TEXT NOT NULL \
     \  , version TEXT NOT NULL \
+    \  , unit_id TEXT NOT NULL \
     \  , mod     TEXT NOT NULL \
     \  , name    TEXT NOT NULL \
     \  , sig     TEXT NOT NULL \
     \  , def_mod TEXT NOT NULL \
     \  , def_pkg TEXT NOT NULL \
     \  , visibility TEXT NOT NULL )"
-  , "CREATE INDEX IF NOT EXISTS pkg_index_by_pv \
-    \  ON pkg_index (pkg, version)"
-  , "CREATE TABLE IF NOT EXISTS kv \
-    \  ( k TEXT PRIMARY KEY NOT NULL \
-    \  , v BLOB NOT NULL )"
+  , "CREATE INDEX IF NOT EXISTS pkg_index_by_pvu \
+    \  ON pkg_index (pkg, version, unit_id)"
   ]
 
--- | Read the stored fingerprint for a @(pkg, version)@ pair.
-readFingerprint :: IndexCache -> Text -> Text -> IO (Maybe Text)
-readFingerprint c pkg ver = do
+-- | Read the stored fingerprint for a @(pkg, version, unit-id)@ entry.
+readFingerprint :: IndexCache -> Text -> Text -> UnitId -> IO (Maybe Text)
+readFingerprint c pkg ver unit = do
   rs <- queryNamed (icConn c)
           "SELECT fingerprint FROM pkg_index_meta \
-          \WHERE pkg = :p AND version = :v LIMIT 1"
-          [":p" := pkg, ":v" := ver]
+          \WHERE pkg = :p AND version = :v AND unit_id = :u LIMIT 1"
+          [":p" := pkg, ":v" := ver, ":u" := unUnitId unit]
           :: IO [Only (Maybe Text)]
   pure (case rs of
           (Only mfp : _) -> mfp
@@ -150,12 +173,12 @@ readFingerprint c pkg ver = do
 -- | Stamp the fingerprint for an existing @pkg_index_meta@ row,
 -- inserting a placeholder row with @indexed_at = 0@ when none yet
 -- exists (the real value is written by 'writeIndex').
-writeFingerprint :: IndexCache -> Text -> Text -> Text -> IO ()
-writeFingerprint c pkg ver fp = withWrite c $ executeNamed (icConn c)
-  "INSERT INTO pkg_index_meta (pkg, version, indexed_at, fingerprint) \
-  \VALUES (:p, :v, 0, :f) \
-  \ON CONFLICT(pkg, version) DO UPDATE SET fingerprint = :f"
-  [":p" := pkg, ":v" := ver, ":f" := fp]
+writeFingerprint :: IndexCache -> Text -> Text -> UnitId -> Text -> IO ()
+writeFingerprint c pkg ver unit fp = withWrite c $ executeNamed (icConn c)
+  "INSERT INTO pkg_index_meta (pkg, version, unit_id, indexed_at, fingerprint) \
+  \VALUES (:p, :v, :u, 0, :f) \
+  \ON CONFLICT(pkg, version, unit_id) DO UPDATE SET fingerprint = :f"
+  [":p" := pkg, ":v" := ver, ":u" := unUnitId unit, ":f" := fp]
 
 -- | Look up every row whose @name@ matches the given symbol.  When
 -- the caller supplies a module qualifier, filter by @mod@ too.  Rows
@@ -179,12 +202,12 @@ lookupRowsByName c scope name mMod =
                    . map fromStoredVersioned =<<) $ case mMod of
     Nothing ->
       queryNamed (icConn c)
-        (Query ("SELECT version, " <> rowColumns <> " FROM pkg_index \
+        (Query ("SELECT version, unit_id, " <> rowColumns <> " FROM pkg_index \
                 \WHERE name = :n ORDER BY pkg, mod, version DESC"))
         [":n" := name]
     Just modT ->
       queryNamed (icConn c)
-        (Query ("SELECT version, " <> rowColumns <> " FROM pkg_index \
+        (Query ("SELECT version, unit_id, " <> rowColumns <> " FROM pkg_index \
                 \WHERE name = :n AND mod = :m ORDER BY pkg, mod, version DESC"))
         [":n" := name, ":m" := modT]
 
@@ -193,18 +216,24 @@ lookupRowsByName c scope name mMod =
 -- What a module page needs: for each name the module exposes, the definition
 -- site the indexer already resolved — transitively, which is the part no
 -- single-hop walk of the imports can reproduce.  Version-free because the
--- caller has a component and a module from a URL and no version to hand.
+-- caller has a component and a module from a URL and no version to hand —
+-- but not configuration-free: a browser inside a project still wants that
+-- project's rows, so the scope is asked for even here.
 lookupRowsInModule
   :: IndexCache
+  -> CacheScope                            -- ^ which configurations may answer
   -> Text                                  -- ^ component key
   -> Text                                  -- ^ module path
   -> IO [IndexRow]
-lookupRowsInModule c pkg modT =
-  (reportAnomalies . map fromStored =<<) $
-    queryNamed (icConn c)
-      (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
-              \WHERE pkg = :p AND mod = :m"))
-      [":p" := pkg, ":m" := modT]
+lookupRowsInModule c scope pkg modT =
+  map vrRow <$>
+    ( (reportAnomalies . filter (inScope scope . fst)
+                       . map fromStoredVersioned =<<) $
+        queryNamed (icConn c)
+          (Query ("SELECT version, unit_id, " <> rowColumns <> " FROM pkg_index \
+                  \WHERE pkg = :p AND mod = :m \
+                  \ORDER BY version DESC"))
+          [":p" := pkg, ":m" := modT] )
 
 withWrite :: IndexCache -> IO a -> IO a
 withWrite c io = withMVar (icLock c) (\_ -> io)
@@ -227,14 +256,14 @@ migrateAddColumn conn table column colType = do
               <> " ADD COLUMN " <> column
               <> " " <> colType))
 
--- | Read the cached @(pkg, mod, name, sig)@ rows for a given package
--- version.  Returns @[]@ when no entry exists.
-readIndex :: IndexCache -> Text -> Text -> IO [IndexRow]
-readIndex c pkg ver =
+-- | Read the cached @(pkg, mod, name, sig)@ rows for one configuration of
+-- one package version.  Returns @[]@ when no entry exists.
+readIndex :: IndexCache -> Text -> Text -> UnitId -> IO [IndexRow]
+readIndex c pkg ver unit =
   (reportAnomalies . map fromStored =<<) $ queryNamed (icConn c)
     (Query ("SELECT " <> rowColumns <> " FROM pkg_index \
-            \WHERE pkg = :p AND version = :v"))
-    [":p" := pkg, ":v" := ver]
+            \WHERE pkg = :p AND version = :v AND unit_id = :u"))
+    [":p" := pkg, ":v" := ver, ":u" := unUnitId unit]
 
 -- | Which of the cache's versions a lookup may answer from.
 --
@@ -254,20 +283,49 @@ readIndex c pkg ver =
 -- module of the same package, indexed at two versions — can.
 data VersionedRow = VersionedRow
   { vrVersion :: !Version
+  , vrUnitId  :: !UnitId
+    -- ^ The configuration the row was indexed under: cabal's own hash of
+    -- the compiler, the resolved dependency unit-ids and the flags.  Two
+    -- rows can agree on package, module, name and version and still
+    -- disagree, because a @MIN_VERSION_<dep>@ gate resolved differently.
   , vrRow     :: !IndexRow
   }
   deriving stock (Show, Eq, Ord)
 
 data CacheScope
-  = ScopePlan !(Map PackageName Version)
-    -- ^ Answer only at the versions the build plan pins.  A row at any
-    -- other version belongs to some other project that happened to share
+  = ScopePlan !(Map PackageName UnitPin)
+    -- ^ Answer only from what the build plan pins.  A row from any other
+    -- configuration belongs to some other project that happened to share
     -- this cache, and nothing downstream could tell the two apart.
   | ScopeWholeCache
-    -- ^ Answer from every indexed version, newest first.  For callers
-    -- with no plan to pin to — outside a project, or a module page that
-    -- was reached by component and module alone.
+    -- ^ Answer from every indexed configuration, newest first.  For
+    -- callers with no plan to pin to — outside a project, or a module
+    -- page that was reached by component and module alone.
   deriving stock (Show, Eq)
+
+-- | How precisely a scope pins one package.
+--
+-- A plan pins a unit-id, which is the exact configuration.  A
+-- @--package-override PKG=VER@ cannot: the user is naming a version the
+-- plan does not build, so there is no unit-id to name, and the honest
+-- reading of the request is "whatever configuration of that version this
+-- machine has".  Keeping the two apart in the type is what stops an
+-- override from being silently treated as a plan pin, or a plan pin from
+-- being weakened to its version.
+data UnitPin
+  = PinUnit !UnitId
+    -- ^ Exactly this configuration, as the plan resolved it.
+  | PinVersion !Version
+    -- ^ Any configuration of this version.  Only an override produces
+    -- this, and it says so where it is read.
+  deriving stock (Show, Eq)
+
+-- | The scope a build plan admits: exactly the configurations it pins.
+--
+-- Lives here, beside 'CacheScope', so "what the plan admits" has one
+-- definition rather than one per caller.
+scopeForPlan :: Map PackageName UnitId -> CacheScope
+scopeForPlan = ScopePlan . Map.map PinUnit
 
 -- | Whether a stored row's version is one the scope admits.
 --
@@ -275,9 +333,12 @@ data CacheScope
 -- @pkg:exe:name@) while a plan pins a version per /package/, so the key
 -- is reduced to its package before the comparison.
 inScope :: CacheScope -> VersionedRow -> Bool
-inScope ScopeWholeCache    _                  = True
-inScope (ScopePlan pinned) (VersionedRow v r) =
-    Map.lookup (packageOfComponent (rowComponent r)) pinned == Just v
+inScope ScopeWholeCache    _                    = True
+inScope (ScopePlan pinned) (VersionedRow v u r) =
+    case Map.lookup (packageOfComponent (rowComponent r)) pinned of
+      Nothing               -> False
+      Just (PinUnit unit)   -> unit == u
+      Just (PinVersion ver) -> ver == v
   where
     packageOfComponent = cnPackage . parseComponentName . unComponentKey
 
@@ -287,13 +348,13 @@ inScope (ScopePlan pinned) (VersionedRow v r) =
 rowColumns :: Text
 rowColumns = "pkg, mod, name, sig, def_mod, def_pkg, visibility"
 
--- | 'fromStored' with the @version@ column kept alongside.
+-- | 'fromStored' with the @version@ and @unit_id@ columns kept alongside.
 fromStoredVersioned
-  :: (Text, Text, Text, Text, Text, Text, Text, Text)
+  :: (Text, Text, Text, Text, Text, Text, Text, Text, Text)
   -> (VersionedRow, Maybe Text)
-fromStoredVersioned (ver, pkg, modPath, name, sig, defMod, defPkg, vis) =
+fromStoredVersioned (ver, unit, pkg, modPath, name, sig, defMod, defPkg, vis) =
   let (r, anomaly) = fromStored (pkg, modPath, name, sig, defMod, defPkg, vis)
-  in (VersionedRow (Version ver) r, anomaly)
+  in (VersionedRow (Version ver) (UnitId unit) r, anomaly)
 
 -- | Rebuild a row from its stored columns, along with a description of
 -- anything about it we could not make sense of.
@@ -340,21 +401,29 @@ writeIndex
   :: IndexCache
   -> Text                                 -- ^ package name
   -> Text                                 -- ^ package version
+  -> UnitId                               -- ^ the configuration these rows describe
   -> [IndexRow]
   -> IO ()
-writeIndex c pkg ver rows = withWrite c $ Sql.withTransaction (icConn c) $ do
+writeIndex c pkg ver unit rows = withWrite c $ Sql.withTransaction (icConn c) $ do
+  -- Scoped to this configuration.  Deleting every row for
+  -- @(pkg, version)@ is what made two projects evict each other: the
+  -- same package version resolved against a different compiler or a
+  -- different @text@ is a different row set, and both are wanted.
   executeNamed (icConn c)
-    "DELETE FROM pkg_index WHERE pkg = :p AND version = :v"
-    [":p" := pkg, ":v" := ver]
+    "DELETE FROM pkg_index \
+    \WHERE pkg = :p AND version = :v AND unit_id = :u"
+    [":p" := pkg, ":v" := ver, ":u" := unUnitId unit]
   executeNamed (icConn c)
-    "DELETE FROM pkg_index_meta WHERE pkg = :p AND version = :v"
-    [":p" := pkg, ":v" := ver]
+    "DELETE FROM pkg_index_meta \
+    \WHERE pkg = :p AND version = :v AND unit_id = :u"
+    [":p" := pkg, ":v" := ver, ":u" := unUnitId unit]
   case rows of
     [] -> pure ()
     _  -> do
       let expanded =
             [ ( unComponentKey (rowComponent r)
               , ver
+              , unUnitId unit
               , unModulePath (rowModule r)
               , unSymbolName (rowName r)
               , unSignature (rowSignature r)
@@ -366,15 +435,69 @@ writeIndex c pkg ver rows = withWrite c $ Sql.withTransaction (icConn c) $ do
             ]
       executeMany (icConn c)
         "INSERT INTO pkg_index \
-        \  (pkg, version, mod, name, sig, def_mod, def_pkg, visibility) \
-        \VALUES (?,?,?,?,?,?,?,?)"
+        \  (pkg, version, unit_id, mod, name, sig, def_mod, def_pkg \
+        \  , visibility) \
+        \VALUES (?,?,?,?,?,?,?,?,?)"
         expanded
   -- @strftime('%s','now')@ stores the timestamp as a Unix second so the
   -- meta row stays human-inspectable from a sqlite3 prompt.
   void $ execute (icConn c)
-    "INSERT INTO pkg_index_meta (pkg, version, indexed_at) \
-    \VALUES (?, ?, CAST(strftime('%s','now') AS INTEGER))"
-    (pkg, ver)
+    "INSERT INTO pkg_index_meta (pkg, version, unit_id, indexed_at) \
+    \VALUES (?, ?, ?, CAST(strftime('%s','now') AS INTEGER))"
+    (pkg, ver, unUnitId unit)
+  pruneConfigurations c pkg ver
+
+-- | How many configurations of one @(component, version)@ the cache
+-- keeps.
+--
+-- Configurations accumulate: every project whose plan resolves a package
+-- differently adds one, and nothing else would ever remove them.  Three
+-- is room for a couple of projects plus a compiler bump, which is the
+-- case this exists for, and it bounds the growth a machine-wide cache
+-- would otherwise have.  A pruned configuration costs one re-index the
+-- next time that project starts, not a wrong answer.
+configurationsKept :: Int
+configurationsKept = 3
+
+-- | Drop all but the 'configurationsKept' most recently indexed
+-- configurations of one @(component, version)@.
+--
+-- Least-recently-/written/ rather than least-recently-read: the cache
+-- records when rows were built and nothing records when they were used,
+-- and inventing a read timestamp would mean a write on every lookup.
+--
+-- @rowid@ breaks ties because @indexed_at@ is a Unix /second/ and a
+-- whole indexing run lands inside one: without it, "the newest three"
+-- of four configurations written in the same second is decided by
+-- whatever order SQLite returns.
+--
+-- Runs inside the caller's transaction.
+pruneConfigurations :: IndexCache -> Text -> Text -> IO ()
+pruneConfigurations c pkg ver = do
+  keep <- queryNamed (icConn c)
+    "SELECT unit_id FROM pkg_index_meta \
+    \WHERE pkg = :p AND version = :v \
+    \ORDER BY indexed_at DESC, rowid DESC LIMIT :k"
+    [":p" := pkg, ":v" := ver, ":k" := configurationsKept]
+    :: IO [Only Text]
+  stale <- queryNamed (icConn c)
+    "SELECT unit_id FROM pkg_index_meta \
+    \WHERE pkg = :p AND version = :v"
+    [":p" := pkg, ":v" := ver]
+    :: IO [Only Text]
+  let kept    = [ u | Only u <- keep ]
+      dropped = [ u | Only u <- stale, u `notElem` kept ]
+  mapM_ dropConfiguration dropped
+  where
+    dropConfiguration u = do
+      executeNamed (icConn c)
+        "DELETE FROM pkg_index \
+        \WHERE pkg = :p AND version = :v AND unit_id = :u"
+        [":p" := pkg, ":v" := ver, ":u" := u]
+      executeNamed (icConn c)
+        "DELETE FROM pkg_index_meta \
+        \WHERE pkg = :p AND version = :v AND unit_id = :u"
+        [":p" := pkg, ":v" := ver, ":u" := u]
 
 -- | Read a value from the generic key-value table.
 readBlob :: IndexCache -> Text -> IO (Maybe Text)

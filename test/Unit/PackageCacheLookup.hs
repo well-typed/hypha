@@ -4,6 +4,7 @@ module Unit.PackageCacheLookup (tests) where
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text qualified as Text
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (TestTree, testGroup)
@@ -11,19 +12,33 @@ import Test.Tasty.HUnit (testCase, (@?=))
 
 import Hypha.Search.Index (IndexRow (..))
 import Hypha.Search.PackageCache
-  ( CacheOrigin (..), CacheScope (..), VersionedRow (..), lookupByName
-  , openPackageCacheAt, writeCachedIndex )
+  ( CacheOrigin (..), CacheScope (..), HyphaPackageCache, UnitPin (..)
+  , VersionedRow (..), lookupByName, openPackageCacheAt, writeCachedIndex )
 import Hypha.Types.ComponentName (ComponentKey (..))
-import Hypha.Types.PackageId (PackageName (..), Version (..))
+import Hypha.Types.PackageId (PackageName (..), UnitId (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
 import Util.Row (row)
+
+-- | The configuration a package version is written under here.
+--
+-- Stands in for cabal's unit-id: one per @(package, version)@, which is
+-- what a single project's plan would resolve.  Tests that care about two
+-- projects disagreeing name their configurations explicitly instead.
+cfgFor :: Text -> Text -> UnitId
+cfgFor pkg ver = UnitId (pkg <> "-" <> ver <> "-cfg")
+
+-- | 'writeCachedIndex' in that configuration.
+writeCfg
+  :: HyphaPackageCache -> CacheOrigin -> Text -> Text -> [IndexRow] -> IO ()
+writeCfg c origin pkg ver =
+  writeCachedIndex c origin pkg ver (cfgFor pkg ver)
 
 tests :: TestTree
 tests = testGroup "Unit.PackageCacheLookup"
   [ testCase "exact name match" $
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "containers" "0.6.7"
+        writeCfg c OriginGlobal "containers" "0.6.7"
           [ row "containers" "Data.Map.Strict" "lookup"
               "Ord k => k -> Map k a -> Maybe a"
           , row "containers" "Data.Set" "member"
@@ -36,7 +51,7 @@ tests = testGroup "Unit.PackageCacheLookup"
   , testCase "qualified name match" $
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "containers" "0.6.7"
+        writeCfg c OriginGlobal "containers" "0.6.7"
           [ row "containers" "Data.Map.Strict" "lookup" "sig1"
           , row "containers" "Data.Map"        "lookup" "sig2" ]
         hits <- map vrRow <$> lookupByName c ScopeWholeCache "Data.Map.lookup"
@@ -45,9 +60,9 @@ tests = testGroup "Unit.PackageCacheLookup"
   , testCase "cross-package collisions return all" $
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "containers" "0.6.7"
+        writeCfg c OriginGlobal "containers" "0.6.7"
           [row "containers" "Data.Map" "lookup" "sig1"]
-        writeCachedIndex c OriginGlobal "unordered-containers" "0.2.20"
+        writeCfg c OriginGlobal "unordered-containers" "0.2.20"
           [row "unordered-containers" "Data.HashMap.Strict" "lookup" "sig2"]
         hits <- map vrRow <$> lookupByName c ScopeWholeCache "lookup"
         length hits @?= 2
@@ -61,9 +76,9 @@ tests = testGroup "Unit.PackageCacheLookup"
   , testCase "project rows shadow global on same triple" $
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") (Just (tmp </> "p.db"))
-        writeCachedIndex c OriginGlobal  "aeson" "2.2.3"
+        writeCfg c OriginGlobal  "aeson" "2.2.3"
           [row "aeson" "Data.Aeson" "fromJSON" "STORE"]
-        writeCachedIndex c OriginProject "aeson" "2.2.3"
+        writeCfg c OriginProject "aeson" "2.2.3"
           [row "aeson" "Data.Aeson" "fromJSON" "FORK"]
         hits <- map vrRow <$> lookupByName c ScopeWholeCache "fromJSON"
         sort hits @?= [row "aeson" "Data.Aeson" "fromJSON" "FORK"]
@@ -74,12 +89,12 @@ tests = testGroup "Unit.PackageCacheLookup"
       -- stable candidate list regardless of insertion history.
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "zebra" "1.0"
+        writeCfg c OriginGlobal "zebra" "1.0"
           [row "zebra" "Z.Top" "parseJSON" "z"]
-        writeCachedIndex c OriginGlobal "aeson" "2.0"
+        writeCfg c OriginGlobal "aeson" "2.0"
           [ row "aeson" "Data.Aeson.Types" "parseJSON" "a2"
           , row "aeson" "Data.Aeson"       "parseJSON" "a" ]
-        writeCachedIndex c OriginGlobal "mango" "1.0"
+        writeCfg c OriginGlobal "mango" "1.0"
           [row "mango" "M.Top" "parseJSON" "m"]
         hits <- map vrRow <$> lookupByName c ScopeWholeCache "parseJSON"
         map (\r -> (unComponentKey (rowComponent r), unModulePath (rowModule r))) hits
@@ -100,9 +115,9 @@ tests = testGroup "Unit.PackageCacheLookup"
       -- pin to, so every indexed version is a legitimate answer.
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "HTTP" "4000.4.1"
+        writeCfg c OriginGlobal "HTTP" "4000.4.1"
           [row "HTTP" "Network.HTTP.Base64" "encode" "[Octet] -> String"]
-        writeCachedIndex c OriginGlobal "HTTP" "4000.5.0"
+        writeCfg c OriginGlobal "HTTP" "4000.5.0"
           [row "HTTP" "Network.HTTP.Base64" "encode" "[Word8] -> String"]
         hits <- map vrRow <$> lookupByName c ScopeWholeCache "encode"
         hits @?=
@@ -117,9 +132,9 @@ tests = testGroup "Unit.PackageCacheLookup"
       -- the renderer indistinguishable and prints twice.
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "HTTP" "4000.4.1"
+        writeCfg c OriginGlobal "HTTP" "4000.4.1"
           [row "HTTP" "Network.HTTP.Base64" "encode" "[Octet] -> String"]
-        writeCachedIndex c OriginGlobal "HTTP" "4000.5.0"
+        writeCfg c OriginGlobal "HTTP" "4000.5.0"
           [row "HTTP" "Network.HTTP.Base64" "encode" "[Word8] -> String"]
         hits <- lookupByName c ScopeWholeCache "encode"
         map vrVersion hits @?= [Version "4000.5.0", Version "4000.4.1"]
@@ -133,9 +148,9 @@ tests = testGroup "Unit.PackageCacheLookup"
       -- project, and nothing in the output distinguishes the two rows.
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "base-compat" "0.14.1"
+        writeCfg c OriginGlobal "base-compat" "0.14.1"
           [row "base-compat" "Prelude.Compat" "fmap" "OLD"]
-        writeCachedIndex c OriginGlobal "base-compat" "0.15.0"
+        writeCfg c OriginGlobal "base-compat" "0.15.0"
           [row "base-compat" "Prelude.Compat" "fmap" "NEW"]
         hits <- map vrRow <$> lookupByName c (planScope [("base-compat", "0.15.0")]) "fmap"
         hits @?= [row "base-compat" "Prelude.Compat" "fmap" "NEW"]
@@ -147,7 +162,7 @@ tests = testGroup "Unit.PackageCacheLookup"
       -- come from the plan.
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "aeson" "2.2.5.0"
+        writeCfg c OriginGlobal "aeson" "2.2.5.0"
           [row "aeson" "Data.Aeson" "encode" "a -> ByteString"]
         hits <- map vrRow <$> lookupByName c (planScope [("containers", "0.6.8")]) "encode"
         hits @?= []
@@ -159,15 +174,71 @@ tests = testGroup "Unit.PackageCacheLookup"
       -- the plan would drop every non-main-library row.
       withSystemTempDirectory "hypha-lk" $ \tmp -> do
         c <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex c OriginGlobal "ansi-terminal:exe:ansi-terminal-example" "1.1.5"
+        -- Every component of a package is filed under that package's
+        -- configuration, the way the indexer files them.
+        writeCachedIndex c OriginGlobal
+          "ansi-terminal:exe:ansi-terminal-example" "1.1.5"
+          (cfgFor "ansi-terminal" "1.1.5")
           [row "ansi-terminal:exe:ansi-terminal-example" "Main" "main" "IO ()"]
-        writeCachedIndex c OriginGlobal "ansi-terminal:exe:ansi-terminal-example" "1.0.2"
+        writeCachedIndex c OriginGlobal
+          "ansi-terminal:exe:ansi-terminal-example" "1.0.2"
+          (cfgFor "ansi-terminal" "1.0.2")
           [row "ansi-terminal:exe:ansi-terminal-example" "Main" "main" "IO ()"]
         hits <- map vrRow <$> lookupByName c (planScope [("ansi-terminal", "1.1.5")]) "main"
         length hits @?= 1
+
+  , testCase "two configurations of one version coexist" $
+      -- The bug this replaces: the cache held one row set per
+      -- (pkg, version), so a second project indexing the same version in
+      -- its own configuration deleted the first project's rows, and
+      -- going back re-indexed and deleted the second's.  Both are wanted
+      -- and each project must see only its own.
+      withSystemTempDirectory "hypha-lk" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        let ghc92  = UnitId "attoparsec-0.14.4-ghc92"
+            ghc910 = UnitId "attoparsec-0.14.4-ghc910"
+            scope u = ScopePlan
+              (Map.singleton (PackageName "attoparsec") (PinUnit u))
+        writeCachedIndex c OriginGlobal "attoparsec" "0.14.4" ghc92
+          [row "attoparsec" "Data.Attoparsec.Text.Buffer" "append" "UTF16"]
+        writeCachedIndex c OriginGlobal "attoparsec" "0.14.4" ghc910
+          [row "attoparsec" "Data.Attoparsec.Text.Buffer" "append" "UTF8"]
+        older <- map vrRow <$> lookupByName c (scope ghc92)  "append"
+        newer <- map vrRow <$> lookupByName c (scope ghc910) "append"
+        older @?= [row "attoparsec" "Data.Attoparsec.Text.Buffer" "append" "UTF16"]
+        newer @?= [row "attoparsec" "Data.Attoparsec.Text.Buffer" "append" "UTF8"]
+
+  , testCase "an override pins a version, not a configuration" $
+      -- --package-override names a release the plan does not build, so
+      -- cabal never resolved a unit-id for it: the honest reading is
+      -- \"whatever configuration of that version this machine has\".
+      withSystemTempDirectory "hypha-lk" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        writeCachedIndex c OriginGlobal "aeson" "2.2.3" (UnitId "some-other-project")
+          [row "aeson" "Data.Aeson" "encode" "a -> ByteString"]
+        let scope = ScopePlan
+              (Map.singleton (PackageName "aeson") (PinVersion (Version "2.2.3")))
+        hits <- map vrRow <$> lookupByName c scope "encode"
+        hits @?= [row "aeson" "Data.Aeson" "encode" "a -> ByteString"]
+
+  , testCase "the oldest configurations are pruned, the newest kept" $
+      -- Configurations accumulate and nothing else would remove them.
+      -- Four written, three kept: the pruned one costs a re-index, not a
+      -- wrong answer.
+      withSystemTempDirectory "hypha-lk" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        let cfgs = [ UnitId ("cfg-" <> Text.pack (show n)) | n <- [1 :: Int .. 4] ]
+        mapM_ (\u -> writeCachedIndex c OriginGlobal "text" "2.1" u
+                       [row "text" "Data.Text" "strip" (unUnitId u)]) cfgs
+        found <- mapM (\u -> lookupByName c
+                        (ScopePlan (Map.singleton (PackageName "text") (PinUnit u)))
+                        "strip") cfgs
+        map (not . null) found @?= [False, True, True, True]
   ]
 
--- | A plan scope from @(package, version)@ pairs.
+-- | A plan scope from @(package, version)@ pairs, pinning the
+-- configuration 'cfgFor' writes under — what a project's own plan does.
 planScope :: [(Text, Text)] -> CacheScope
 planScope =
-  ScopePlan . Map.fromList . map (\(p, v) -> (PackageName p, Version v))
+  ScopePlan . Map.fromList
+    . map (\(p, v) -> (PackageName p, PinUnit (cfgFor p v)))

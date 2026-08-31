@@ -44,7 +44,8 @@ import Hypha.Source.Dependencies (dependencyReach)
 import Hypha.Source.Origins (ModuleOwnerOracle (..), OriginError)
 import Hypha.Source.Reach (OutsideReach)
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan
+  , unpinnedUnitIdFor )
 import Hypha.Types.PackageId
   (PackageId (..), PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..))
@@ -107,6 +108,7 @@ fixturePlan = emptyBuildPlan
   where
     unit pid dir deps = PlannedUnit
       { puId            = pid
+      , puUnitId  = unpinnedUnitIdFor pid
       , puDeps          = deps
       , puIsLocal       = True
       , puOrigin        = OriginLocal dir

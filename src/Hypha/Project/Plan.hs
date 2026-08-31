@@ -4,6 +4,7 @@
 module Hypha.Project.Plan
   ( -- * Types
     PlanError (..)
+  , PlanPin (..)
     -- * Loading
   , loadBuildPlan
   , loadPlanVersions
@@ -37,7 +38,21 @@ import System.IO (hPutStrLn, stderr)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PackageOrigin (..), PlannedUnit (..)
   , ProjectRoot (..) )
-import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
+import Hypha.Types.PackageId
+  ( PackageId (..), PackageName (..), UnitId (..), Version (..) )
+
+-- | What a plan pins for one package: the version, and the configuration
+-- cabal resolved it in.
+--
+-- Both, because the two answer different questions and the cheap plan
+-- reader is the only place that has them side by side: the version is
+-- what a user names and what a row is labelled with, the unit-id is what
+-- says two rows describe the same build.
+data PlanPin = PlanPin
+  { ppVersion :: !Version
+  , ppUnitId  :: !UnitId
+  }
+  deriving stock (Show, Eq)
 
 -- | Errors that can occur when loading the build plan.
 data PlanError
@@ -79,7 +94,8 @@ loadBuildPlan cacheRoot (ProjectRoot root) = do
         , bpBuildContext = ctx
         }))
 
--- | Just the versions the plan pins, one per package.
+-- | Just what the plan pins, one entry per package: the version and the
+-- configuration cabal resolved for it.
 --
 -- 'loadBuildPlan' resolves a source directory per unit and reads a
 -- @.cabal@ file for each one to inventory its components — hundreds of
@@ -89,15 +105,23 @@ loadBuildPlan cacheRoot (ProjectRoot root) = do
 -- dominant cost.  Kept beside 'loadBuildPlan' so the two read the same
 -- @plan.json@ through the same discovery, and pinned to agreement by a
 -- test rather than by comment.
-loadPlanVersions :: ProjectRoot -> IO (Either PlanError (Map PackageName Version))
+loadPlanVersions
+  :: ProjectRoot -> IO (Either PlanError (Map PackageName PlanPin))
 loadPlanVersions (ProjectRoot root) = do
   result <- try @IO @IOException
               (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
   pure $ case result of
     Left e   -> Left (PlanNotFound (show e))
     Right pj -> Right (Map.fromList
-      [ (PackageName name, Version (CP.dispVer ver))
-      | u <- Map.elems (CP.pjUnits pj)
+      [ ( PackageName name
+        , PlanPin (Version (CP.dispVer ver)) (unitIdOf u) )
+      -- Same ordering as 'unitsFromPlan': a package contributes one unit
+      -- per component, 'Map.fromList' keeps the last, and the
+      -- library-carrying unit is the one whose id the cache is keyed on.
+      -- Without the sort this reader pins @mylib-0.1.0-inplace-myexe@
+      -- while the indexer writes under @mylib-0.1.0-inplace@, and every
+      -- local package looks stale to the tier it is meant to warm.
+      | u <- libraryLast (Map.elems (CP.pjUnits pj))
       , let CP.PkgId (CP.PkgName name) ver = CP.uPId u
       ])
 
@@ -181,6 +205,22 @@ macroHeaderFor cacheRoot pj = do
            \will be read from their oldest branch"
       pure Nothing
 
+-- | Units ordered so a package's library-carrying one comes last.
+--
+-- Shared by both plan readers, which is the point: it decides which unit
+-- represents a package, and two answers to that is what the agreement
+-- test exists to catch.
+libraryLast :: [CP.Unit] -> [CP.Unit]
+libraryLast = sortOn (\u -> CP.CompNameLib `Map.member` CP.uComps u)
+
+-- | cabal's unit-id for a plan unit, as text.
+--
+-- @cabal-plan@ wraps it in its own newtype; ours is the one the rest of
+-- the codebase and the cache schema speak, and the conversion happens
+-- here so it happens once.
+unitIdOf :: CP.Unit -> UnitId
+unitIdOf u = let CP.UnitId t = CP.uId u in UnitId t
+
 -- | Extract compiler identifier from the plan.
 compilerFromPlan :: CP.PlanJson -> CompilerId
 compilerFromPlan pj =
@@ -205,8 +245,7 @@ unitsFromPlan pj sourceCacheLookup ctx = do
       -- dist-dir holds the rendered Haddock and whose dependencies
       -- describe the library.  Without this, hypha's own test-suite
       -- unit used to win and @puDistDir@ pointed at @t/<pkg>-tests@.
-  let allUnits = sortOn (\u -> CP.CompNameLib `Map.member` CP.uComps u)
-                        (Map.elems (CP.pjUnits pj))
+  let allUnits = libraryLast (Map.elems (CP.pjUnits pj))
       unitIdToPkgId = Map.fromList
         [ (CP.uId u, CP.uPId u) | u <- allUnits ]
   pairs <- mapM
@@ -242,6 +281,7 @@ toPlannedUnit unitIdToPkgId sourceCacheLookup ctx u = do
     Nothing -> pure []
   pure PlannedUnit
     { puId            = pkgId
+    , puUnitId        = unitIdOf u
     , puDeps          = deps
     , puIsLocal       = (CP.uType u == CP.UnitTypeLocal)
     , puOrigin        = originFromPkgLoc (CP.uPkgSrc u)

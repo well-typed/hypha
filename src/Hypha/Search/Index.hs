@@ -148,5 +148,12 @@ data IndexRow = IndexRow
 -- branch.  The per-component fingerprint cannot notice that — the source
 -- did not change, the macros did — so the generation is the only thing
 -- that can force those rows to be rebuilt.
+--
+-- Generation 5 goes because the tables moved: rows are keyed on the
+-- configuration that produced them (cabal's unit-id) as well as the
+-- package version, so two projects that resolve one version differently
+-- stop evicting each other.  The primary key itself changed, which
+-- SQLite cannot alter in place — the guard drops the tables rather than
+-- emptying them.
 currentIndexFormat :: Int
-currentIndexFormat = 5
+currentIndexFormat = 6
