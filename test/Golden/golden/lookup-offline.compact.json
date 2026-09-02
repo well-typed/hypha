@@ -1,1 +1,1 @@
-{"actions":{"query":"x","retry_online":"hypha lookup x","tiers_consulted":"cache,local-hoogle"},"error":{"code":"HOOGLE_OFFLINE","exit_code":4,"message":"--offline suppresses remote tier"}}
+{"actions":{"query":"x","retry_online":"hypha lookup x","tiers_consulted":"cache,local-hoogle"},"error":{"code":"HOOGLE_OFFLINE","exit_code":4,"message":"--offline: no cached answer for this query and the network is disabled"}}

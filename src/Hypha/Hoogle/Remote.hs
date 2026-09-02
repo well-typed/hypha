@@ -15,6 +15,7 @@ module Hypha.Hoogle.Remote
   , defaultRemoteOptions
   , searchRemote
   , searchRemoteWith
+  , cacheKey
   , defaultTransport
   ) where
 
@@ -55,7 +56,7 @@ data RemoteError
 -- decide how to surface them.
 renderRemoteError :: RemoteError -> Text
 renderRemoteError = \case
-  RemoteOffline    -> "offline (remote Hoogle tier suppressed)"
+  RemoteOffline    -> "offline and nothing cached for this query"
   RemoteTimeout    -> "remote Hoogle timed out"
   RemoteHttp msg   -> "remote Hoogle HTTP error: " <> msg
   RemoteDecode msg -> "remote Hoogle response decode failure: " <> msg
@@ -100,17 +101,26 @@ searchRemoteWith
   -> HyphaPackageCache
   -> HoogleQuery
   -> IO (Either RemoteError [HoogleHit])
-searchRemoteWith transport opts cache q
-  | roOffline opts = pure (Left RemoteOffline)
-  | otherwise = do
-      let kv  = hyphaGlobalCache cache
-          key = cacheKey q
-      cached <- readBlob kv key
-      case cached of
-        Just txt
-          | Right hits <- decodeHits (LBS.fromStrict (Text.encodeUtf8 txt))
-              -> pure (Right hits)
-        _ -> do
+-- The cache is consulted /before/ 'roOffline' is checked: an
+-- "offline" run must still be answered by bodies already on disk
+-- (the plane / CI / sandbox case), so 'RemoteOffline' means "offline
+-- and nothing cached" — not "pretend tier 3 does not exist".
+-- A present-but-undecodable blob is reported as 'RemoteDecode' under
+-- the offline mode too: it is cache corruption, not "nothing
+-- cached", and only the online path below can self-heal (a successful
+-- refetch overwrites the bad blob).
+searchRemoteWith transport opts cache q = do
+  let kv  = hyphaGlobalCache cache
+      key = cacheKey q
+  mCached <- readBlob kv key
+  let decoded = fmap (decodeHits . LBS.fromStrict . Text.encodeUtf8) mCached
+  case decoded of
+    Just (Right hits) -> pure (Right hits)
+    Just (Left err)
+      | roOffline opts -> pure (Left (RemoteDecode err))
+    Nothing
+      | roOffline opts -> pure (Left RemoteOffline)
+    _ -> do
           let url = endpointFor opts q
           r <- runRemote transport url
           case r of

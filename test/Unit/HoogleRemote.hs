@@ -5,6 +5,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text.Encoding
 import Network.HTTP.Client (parseUrlThrow)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -13,9 +14,10 @@ import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 
 import Hypha.Hoogle.Remote
   ( RemoteError (..), RemoteHoogleTransport (..), RemoteOptions (..)
-  , defaultRemoteOptions, searchRemoteWith )
+  , cacheKey, defaultRemoteOptions, searchRemoteWith )
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
-import Hypha.Search.PackageCache (openPackageCacheAt)
+import Hypha.Search.Cache (writeBlob)
+import Hypha.Search.PackageCache (hyphaGlobalCache, openPackageCacheAt)
 
 -- | Runs @q@ through the cascade with a transport that only records
 -- the URL it was handed, and hands that URL back.
@@ -66,6 +68,58 @@ tests = testGroup "Unit.HoogleRemote"
         case r of
           Left  RemoteOffline -> pure ()
           other               -> assertFailure ("unexpected: " <> show other)
+
+  , testCase "offline mode still answers from a warm cache -- issue 39" $
+      withSystemTempDirectory "hypha-rh" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        -- Seed the kv table as a previous online run would have:
+        -- the raw JSON body under the query's cache key.
+        let q = HoogleQuery "foo"
+        writeBlob (hyphaGlobalCache c) (cacheKey q)
+          (Text.Encoding.decodeUtf8 (LBS.toStrict stubBody))
+        let transport = RemoteHoogleTransport $ \_ ->
+              assertFailure "transport must not be called"
+                >> pure (Left RemoteOffline)
+            opts = defaultRemoteOptions { roOffline = True }
+        r <- searchRemoteWith transport opts c q
+        case r of
+          Right hits ->
+            hits @?= [HoogleHit "foo" "Foo" "bar" "a -> a" ""]
+          other -> assertFailure ("unexpected: " <> show other)
+
+  , testCase "offline + corrupt cache reports RemoteDecode, not offline" $
+      -- The blob exists; claiming "nothing cached" -- HOOGLE_OFFLINE --
+      -- would misdiagnose cache corruption.  Only the online path can
+      -- self-heal by refetching.
+      withSystemTempDirectory "hypha-rh" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        let q = HoogleQuery "foo"
+        writeBlob (hyphaGlobalCache c) (cacheKey q) "not json at all"
+        let transport = RemoteHoogleTransport $ \_ ->
+              assertFailure "transport must not be called"
+                >> pure (Left RemoteOffline)
+            opts = defaultRemoteOptions { roOffline = True }
+        r <- searchRemoteWith transport opts c q
+        case r of
+          Left (RemoteDecode _) -> pure ()
+          other -> assertFailure ("unexpected: " <> show other)
+
+  , testCase "offline + cached empty body answers (negative caching pinned)" $
+      -- writeBlob stores Right [] too and the kv cache honours no TTL,
+      -- so one fruitless online lookup turns later --offline runs into
+      -- an empty answer (which the cascade reports as NOT_FOUND) rather
+      -- than HOOGLE_OFFLINE.  Deliberate current behaviour; policy is
+      -- issue #40.
+      withSystemTempDirectory "hypha-rh" $ \tmp -> do
+        c <- openPackageCacheAt (tmp </> "g.db") Nothing
+        let q = HoogleQuery "foo"
+        writeBlob (hyphaGlobalCache c) (cacheKey q) "[]"
+        let transport = RemoteHoogleTransport $ \_ ->
+              assertFailure "transport must not be called"
+                >> pure (Left RemoteOffline)
+            opts = defaultRemoteOptions { roOffline = True }
+        r <- searchRemoteWith transport opts c q
+        r @?= Right []
 
   , testCase "malformed JSON returns RemoteDecode" $
       withSystemTempDirectory "hypha-rh" $ \tmp -> do

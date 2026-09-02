@@ -169,6 +169,14 @@ loosely follows [Semantic Versioning](https://semver.org/).
   the tier it warms. Both readers now share the ordering that decides
   which unit represents a package, and a test pins them to agreement on
   the unit-id as well as the version.
+- **`--offline` in `hypha lookup` now serves remote-tier answers that are
+  already cached.** The remote Hoogle tier's `kv` cache was only consulted
+  *after* the `--offline` check, so an offline run refused queries whose
+  answer was sitting on disk. `--offline` now means what every document
+  says — "do not use the network": a previously cached answer is still
+  served (tagged `remote-hoogle`), and `HOOGLE_OFFLINE` henceforth means
+  "offline *and* nothing cached". A corrupt cached blob is reported as
+  `HOOGLE_REMOTE_ERROR` rather than misdiagnosed as offline. (#39)
 - **The preprocessor gets GHC's own headers, and reads only the branches
   this platform builds.** `MachDeps.h` and `ghcplatform.h` ship with the
   compiler rather than with the packages that `#include` them, and cabal

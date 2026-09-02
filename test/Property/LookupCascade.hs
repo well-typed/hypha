@@ -20,7 +20,7 @@ tests = testGroup "Property.LookupCascade"
       let expected
             | t1        = [TierCache]
             | t2        = [TierCache, TierLocalHoogle]
-            | offline   = [TierCache, TierLocalHoogle]
+            | offline && not t3 = [TierCache, TierLocalHoogle]
             | otherwise = [TierCache, TierLocalHoogle, TierRemoteHoogle]
           actual = chooseTiers t1 t2 offline t3
       assert (P.eq P..$ ("expected", expected)

@@ -180,7 +180,7 @@ data HyphaError
     --   code / exit code mapping.
   | DiscoveryFailure  !DiscoveryError
   | PlanFailure       !ProjectRoot !PlanError
-    -- | @hypha lookup@: @--offline@ suppressed the remote tier.
+    -- | @hypha lookup@: @--offline@ and nothing cached for this query.
   | HoogleOffline      !HoogleQuery ![Tier]
     -- | @hypha lookup@: no providers found across every tier consulted.
   | HoogleNotFound     !HoogleQuery ![Tier]
@@ -236,7 +236,7 @@ errorMessage = \case
       <> "; run `cabal build --dry-run`"
     PlanParseFailure m -> "plan.json parse failure: " <> Text.pack m
   HoogleOffline      _ _ ->
-    "--offline suppresses remote tier"
+    "--offline: no cached answer for this query and the network is disabled"
   HoogleNotFound     _ _ ->
     "no providers found"
   HoogleRemoteError  _ _ remoteErr -> renderRemoteError remoteErr
