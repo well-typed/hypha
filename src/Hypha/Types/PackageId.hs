@@ -3,6 +3,7 @@
 module Hypha.Types.PackageId
   ( PackageName (..)
   , Version (..)
+  , UnitId (..)
   , PackageId (..)
   , PackageRef (..)
   , parsePackageName
@@ -21,6 +22,24 @@ newtype PackageName = PackageName { unPackageName :: Text }
   deriving newtype (Read)
 
 newtype Version = Version { unVersion :: Text }
+  deriving stock   (Show, Eq, Ord)
+  deriving newtype (Read)
+
+-- | cabal's identifier for one /configuration/ of one component:
+-- @attoparsec-0.14.4-88042e465d110de0…@.
+--
+-- The hash covers the compiler, the resolved dependency unit-ids and the
+-- flag assignment, which is exactly the set of inputs that decides what
+-- a module of that component exports.  Two projects that agree on all of
+-- it get the same id and can share indexed rows; two that do not, cannot.
+--
+-- Read from @plan.json@ rather than computed: cabal already did the work,
+-- and a second definition of "same configuration" would be a second
+-- answer to drift from.  A boot package arrives with a ghc-pkg-style id
+-- (@base-4.20.2.0@) carrying no configuration hash, so for those the
+-- identity degenerates to the version — acceptable because two compilers
+-- practically never ship one @base@ version, but it is an assumption.
+newtype UnitId = UnitId { unUnitId :: Text }
   deriving stock   (Show, Eq, Ord)
   deriving newtype (Read)
 

@@ -139,6 +139,36 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Two projects no longer evict each other's index rows.** The cache held
+  one row set per `(component, version)` and treated the per-component
+  fingerprint as a validity check, so a project whose plan resolved a
+  shared package differently rebuilt it — and the rebuild deleted the
+  other project's rows. Switching between a GHC 9.2.8 project and a GHC
+  9.10.3 one re-indexed the 47 `(package, version)` pairs their plans
+  share, every time, in both directions. Rows are now keyed on cabal's
+  unit-id as well, so both configurations coexist and each project sees
+  only its own. Keying on the compiler alone would not have been enough:
+  the synthesised `cabal_macros.h` defines `MIN_VERSION_<dep>` for every
+  dependency, and 18 modules of `attoparsec` alone choose their imports
+  from those gates, so the same version resolved against `text-1.2.5` and
+  against `text-2.1` is genuinely two row sets. The unit-id is cabal's own
+  hash of the compiler, the resolved dependency unit-ids and the flags,
+  read straight from `plan.json` — which keeps it free on the tier-1
+  lookup path, where the cheap plan reader is what makes `hypha lookup`
+  cost 90ms rather than 505ms. Configurations are pruned to the three most
+  recently indexed per `(component, version)`; a pruned one costs a
+  re-index, never a wrong answer. `--package-override PKG=VER` names a
+  version no plan resolved, so those reads match on the version instead.
+  The index format generation goes to `6`: the primary key itself moved,
+  which SQLite cannot alter in place, so the tables are dropped and
+  rebuilt once.
+- **The cheap plan reader picks the same unit as the full one.** For a
+  local package with an executable, `loadPlanVersions` pinned
+  `mylib-0.1.0-inplace-myexe` while the indexer wrote under
+  `mylib-0.1.0-inplace`, so every local package would have looked stale to
+  the tier it warms. Both readers now share the ordering that decides
+  which unit represents a package, and a test pins them to agreement on
+  the unit-id as well as the version.
 - **The preprocessor gets GHC's own headers, and reads only the branches
   this platform builds.** `MachDeps.h` and `ghcplatform.h` ship with the
   compiler rather than with the packages that `#include` them, and cabal

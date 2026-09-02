@@ -28,14 +28,21 @@ import Hypha.Hoogle.Remote (defaultRemoteOptions, roOffline)
 import Hypha.Hoogle.Type   (HoogleQuery (..))
 import Hypha.Search.PackageCache
   ( CacheOrigin (..), CacheScope (..), openPackageCacheAt, writeCachedIndex )
+import Data.Text (Text)
+import Hypha.Types.PackageId (UnitId (..))
 import Util.Row (row)
+
+-- | The configuration these tests write under: one per
+-- @(package, version)@, which is what a single project's plan resolves.
+cfgFor :: Text -> Text -> UnitId
+cfgFor pkg ver = UnitId (pkg <> "-" <> ver <> "-cfg")
 
 tests :: TestTree
 tests = testGroup "Unit.LookupPrepLocal"
   [ testCase "tier-1 cache hit: loPrepareLocal not invoked" $
       withSystemTempDirectory "hypha-prep" $ \tmp -> do
         cache <- openPackageCacheAt (tmp </> "g.db") Nothing
-        writeCachedIndex cache OriginGlobal "containers" "0.6.7"
+        writeCachedIndex cache OriginGlobal "containers" "0.6.7" (cfgFor "containers" "0.6.7")
           [row "containers" "Data.Map" "lookup" ""]
         hoogle <- openLocalHoogle (tmp </> "dh") (tmp </> "store") (tmp </> "dist")
         prepRef <- IORef.newIORef (0 :: Int)

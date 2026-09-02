@@ -30,6 +30,7 @@ runVersionsCommand = do
         { bpUnits = Map.fromList
             [ (PackageName "async", PlannedUnit
                 { puId = PackageId (PackageName "async") (Version "2.2.5")
+                , puUnitId  = unpinnedUnitIdFor (PackageId (PackageName "async") (Version "2.2.5"))
                 , puDeps = []
                 , puIsLocal = False
                 , puOrigin = OriginHackage
@@ -39,6 +40,7 @@ runVersionsCommand = do
                 })
             , (PackageName "base", PlannedUnit
                 { puId = PackageId (PackageName "base") (Version "4.18.3.0")
+                , puUnitId  = unpinnedUnitIdFor (PackageId (PackageName "base") (Version "4.18.3.0"))
                 , puDeps = []
                 , puIsLocal = False
                 , puOrigin = OriginHackage

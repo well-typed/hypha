@@ -13,7 +13,14 @@ import Hypha.Search.PackageCache
   ( CacheOrigin (..), haveFreshIndex, openPackageCacheAt, readCachedFingerprint
   , readCachedIndex
   , writeCachedFingerprint, writeCachedIndex )
+import Data.Text (Text)
+import Hypha.Types.PackageId (UnitId (..))
 import Util.Row (row)
+
+-- | The configuration these tests write under: one per
+-- @(package, version)@, which is what a single project's plan resolves.
+cfgFor :: Text -> Text -> UnitId
+cfgFor pkg ver = UnitId (pkg <> "-" <> ver <> "-cfg")
 
 tests :: TestTree
 tests = testGroup "Unit.PackageCache"
@@ -26,9 +33,9 @@ tests = testGroup "Unit.PackageCache"
             ver = "2.2.3.0"
             globalRow  = [row pkg "Data.Aeson" "fromJSON" "STORE"]
             projectRow = [row pkg "Data.Aeson" "toJSON"   "FORK"]
-        writeCachedIndex c OriginGlobal  pkg ver globalRow
-        writeCachedIndex c OriginProject pkg ver projectRow
-        rows <- readCachedIndex c pkg ver
+        writeCachedIndex c OriginGlobal  pkg ver (cfgFor pkg ver) globalRow
+        writeCachedIndex c OriginProject pkg ver (cfgFor pkg ver) projectRow
+        rows <- readCachedIndex c pkg ver (cfgFor pkg ver)
         sort rows @?= sort projectRow
 
   , testCase "global hit visible when project DB has no rows" $
@@ -39,11 +46,11 @@ tests = testGroup "Unit.PackageCache"
         let pkg = "containers"
             ver = "0.6.7"
             globalRow = [row pkg "Data.Map.Strict" "fromList" ""]
-        writeCachedIndex c OriginGlobal pkg ver globalRow
-        writeCachedFingerprint c OriginGlobal pkg ver "fp-1"
-        present <- haveFreshIndex c pkg ver "fp-1"
+        writeCachedIndex c OriginGlobal pkg ver (cfgFor pkg ver) globalRow
+        writeCachedFingerprint c OriginGlobal pkg ver (cfgFor pkg ver) "fp-1"
+        present <- haveFreshIndex c pkg ver (cfgFor pkg ver) "fp-1"
         present @?= True
-        rows <- readCachedIndex c pkg ver
+        rows <- readCachedIndex c pkg ver (cfgFor pkg ver)
         sort rows @?= sort globalRow
 
   , testCase "rows written under different inputs are not fresh" $
@@ -52,13 +59,13 @@ tests = testGroup "Unit.PackageCache"
         c <- openPackageCacheAt globalDb Nothing
         let pkg = "containers"
             ver = "0.6.7"
-        writeCachedIndex c OriginGlobal pkg ver
+        writeCachedIndex c OriginGlobal pkg ver (cfgFor pkg ver)
           [row pkg "Data.Map.Strict" "fromList" ""]
-        writeCachedFingerprint c OriginGlobal pkg ver "fp-before"
+        writeCachedFingerprint c OriginGlobal pkg ver (cfgFor pkg ver) "fp-before"
         -- The version has not moved -- an edited local package never
         -- changes its version -- so presence of a row must not be what
         -- decides this.
-        stale <- haveFreshIndex c pkg ver "fp-after"
+        stale <- haveFreshIndex c pkg ver (cfgFor pkg ver) "fp-after"
         stale @?= False
 
   , testCase "rows written before fingerprints existed are not fresh" $
@@ -67,9 +74,9 @@ tests = testGroup "Unit.PackageCache"
         c <- openPackageCacheAt globalDb Nothing
         let pkg = "containers"
             ver = "0.6.7"
-        writeCachedIndex c OriginGlobal pkg ver
+        writeCachedIndex c OriginGlobal pkg ver (cfgFor pkg ver)
           [row pkg "Data.Map.Strict" "fromList" ""]
-        unstamped <- haveFreshIndex c pkg ver "fp-1"
+        unstamped <- haveFreshIndex c pkg ver (cfgFor pkg ver) "fp-1"
         unstamped @?= False
 
   , testCase "the fingerprint survives the rows it was stamped for" $
@@ -81,10 +88,10 @@ tests = testGroup "Unit.PackageCache"
         -- writeIndex replaces the meta row, so the stamp has to come
         -- second; stamping first loses it and everything rebuilds on
         -- every start.
-        writeCachedIndex c OriginGlobal pkg ver
+        writeCachedIndex c OriginGlobal pkg ver (cfgFor pkg ver)
           [row pkg "Data.Map.Strict" "fromList" ""]
-        writeCachedFingerprint c OriginGlobal pkg ver "fp-1"
-        stored <- readCachedFingerprint c OriginGlobal pkg ver
+        writeCachedFingerprint c OriginGlobal pkg ver (cfgFor pkg ver) "fp-1"
+        stored <- readCachedFingerprint c OriginGlobal pkg ver (cfgFor pkg ver)
         stored @?= Just "fp-1"
 
   , testCase "OriginProject falls back to global when no project DB" $
@@ -94,7 +101,7 @@ tests = testGroup "Unit.PackageCache"
         let pkg = "text"
             ver = "2.1"
             rows0 = [row pkg "Data.Text" "pack" ""]
-        writeCachedIndex c OriginProject pkg ver rows0
-        rows <- readCachedIndex c pkg ver
+        writeCachedIndex c OriginProject pkg ver (cfgFor pkg ver) rows0
+        rows <- readCachedIndex c pkg ver (cfgFor pkg ver)
         sort rows @?= sort rows0
   ]

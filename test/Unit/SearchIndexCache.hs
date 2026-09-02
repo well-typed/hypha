@@ -26,10 +26,18 @@ import Hypha.Search.PackageCache
   ( CacheOrigin (..), openPackageCacheAt, writeCachedFingerprint
   , writeCachedIndex )
 import Hypha.Types.BuildPlan
-  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan )
-import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
+  ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan
+  , unpinnedUnitIdFor )
+import Hypha.Types.PackageId
+  ( PackageId (..), PackageName (..), UnitId (..), Version (..) )
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 import Util.Row (rowIn)
+
+-- | A configuration id for the cases that only need /a/ configuration —
+-- the round-trip and shadowing tests, which say nothing about which
+-- build produced the rows.
+cfg :: UnitId
+cfg = UnitId "cfg-under-test"
 
 -- | A wrapper's row: presented by @Data.Map.Strict@, defined in its
 -- @.Internal@ sibling.
@@ -44,8 +52,8 @@ tests = testGroup "Unit.SearchIndexCache"
   [ testCase "rows round-trip with their definition module and visibility" $
       withSystemTempDirectory "hypha-cache" $ \dir -> do
         c    <- openIndexCache (dir </> "test.db")
-        writeIndex c "containers" "0.7" [wrapperRow]
-        rows <- readIndex c "containers" "0.7"
+        writeIndex c "containers" "0.7" cfg [wrapperRow]
+        rows <- readIndex c "containers" "0.7" cfg
         rows @?= [wrapperRow]
         -- The two new columns are the point: a round-trip that lost them
         -- would still pass an equality on the original four.
@@ -58,8 +66,8 @@ tests = testGroup "Unit.SearchIndexCache"
         c <- openIndexCache (dir </> "vis.db")
         let internal = rowIn "containers" "Data.Map.Internal" "balanceL" ""
                              "Data.Map.Internal" Internal
-        writeIndex c "containers" "0.7" [internal]
-        rows <- readIndex c "containers" "0.7"
+        writeIndex c "containers" "0.7" cfg [internal]
+        rows <- readIndex c "containers" "0.7" cfg
         map rowVisibility rows @?= [Internal]
 
   , testCase "a pre-format-guard database is cleared on open" $
@@ -83,16 +91,16 @@ tests = testGroup "Unit.SearchIndexCache"
         Sql.close conn
 
         c    <- openIndexCache path
-        rows <- readIndex c "containers" "0.7"
+        rows <- readIndex c "containers" "0.7" cfg
         rows @?= []
 
   , testCase "opening twice does not clear rows the second time" $
       withSystemTempDirectory "hypha-cache" $ \dir -> do
         let path = dir </> "twice.db"
         c1 <- openIndexCache path
-        writeIndex c1 "containers" "0.7" [wrapperRow]
+        writeIndex c1 "containers" "0.7" cfg [wrapperRow]
         c2   <- openIndexCache path
-        rows <- readIndex c2 "containers" "0.7"
+        rows <- readIndex c2 "containers" "0.7" cfg
         rows @?= [wrapperRow]
 
   , testCase "hydration hands back an environment the next unit can resolve against" $
@@ -101,6 +109,8 @@ tests = testGroup "Unit.SearchIndexCache"
       withSystemTempDirectory "hypha-hyd" $ \dir -> do
         c <- openPackageCacheAt (dir </> "g.db") Nothing
         writeCachedIndex c OriginGlobal "ghc-internal" "9.1003.0"
+          (unpinnedUnitIdFor (PackageId (PackageName "ghc-internal")
+                                        (Version "9.1003.0")))
           [ rowIn "ghc-internal" "GHC.Internal.Data.Traversable" "mapAccumL"
               "mapAccumL :: Traversable t => (s -> a -> (s, b)) -> s -> t a -> (s, t b)"
               "GHC.Internal.Data.Traversable" Exposed
@@ -109,6 +119,7 @@ tests = testGroup "Unit.SearchIndexCache"
             plan = emptyBuildPlan
               { bpUnits = Map.singleton (PackageName "ghc-internal") PlannedUnit
                   { puId            = pid
+                  , puUnitId        = unpinnedUnitIdFor pid
                   , puDeps          = []
                   , puIsLocal       = False
                   , puOrigin        = OriginDistribution
@@ -121,7 +132,8 @@ tests = testGroup "Unit.SearchIndexCache"
         -- is what hydration compares against.  Rows alone are not warmth:
         -- a local package keeps its version across every edit.
         fp <- indexInputsFingerprint plan pid MainLib
-        writeCachedFingerprint c OriginGlobal "ghc-internal" "9.1003.0" fp
+        writeCachedFingerprint c OriginGlobal "ghc-internal" "9.1003.0"
+          (unpinnedUnitIdFor pid) fp
         ref <- IORef.newIORef []
         hyd <- hydrateFromCache plan c [pid] ref
         hyMissing hyd @?= []

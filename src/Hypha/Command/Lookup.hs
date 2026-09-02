@@ -205,14 +205,16 @@ chooseTiers t1 t2 offline _t3
 -- the same positional habit is what filed a doctor's @all_pass@ as its
 -- @outside_plan@.
 toProvider :: Tier -> VersionedRow -> Provider
-toProvider t (VersionedRow v r) = Provider
+toProvider t vr = Provider
   { pPkg     = unComponentKey (rowComponent r)
   , pMod     = unModulePath   (rowModule r)
   , pName    = unSymbolName   (rowName r)
   , pSig     = unSignature    (rowSignature r)
   , pTier    = t
-  , pVersion = Just v
+  , pVersion = Just (vrVersion vr)
   }
+  where
+    r = vrRow vr
 
 hitProvider :: Tier -> HoogleHit -> Provider
 hitProvider t h = Provider

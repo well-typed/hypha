@@ -19,7 +19,7 @@ import Test.Falsify.Property (assert, gen)
 
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan
-  , topologicalOrder )
+  , topologicalOrder, unpinnedUnitIdFor )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 pid :: Text -> PackageId
@@ -38,6 +38,7 @@ genUnit = do
     ( PackageName n
     , PlannedUnit
         { puId            = pid n
+        , puUnitId  = unpinnedUnitIdFor (pid n)
         , puDeps          = map pid deps
         , puIsLocal       = False
         , puOrigin        = OriginDistribution

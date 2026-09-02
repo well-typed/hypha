@@ -25,6 +25,7 @@ module Hypha.Search.Indexer
   , componentScorerRows
     -- * Component discovery
   , componentModules
+  , componentKindsOf
   , languageSettingsFor
   , indexInputsFingerprint
   , packageSources
@@ -158,28 +159,30 @@ hydrateFromCache plan cache pids ref = go Exports.emptyEnv [] pids
       }
     go env missing (pid : rest) = do
       let verT  = unVersion (pkgVersion pid)
+          unit  = unitIdFor plan pid
           kinds = NE.toList (componentKindsOf plan pid)
           keys  = [ unComponentKey (componentKeyOf (pkgName pid) k) | k <- kinds ]
-      -- The same digest the build pass stamped.  A component whose inputs
+      -- The same digest the build pass stamped, read from the same
+      -- configuration it was stamped under.  A component whose inputs
       -- moved -- a source edit, a new compiler, a cabal file we can read
       -- this time and could not last time -- reports as missing and is
       -- rebuilt, which is the whole point.
-      hits <- mapM (freshFor verT pid) kinds
+      hits <- mapM (freshFor verT unit pid) kinds
       if and hits
         then do
-          env' <- foldM (loadKey verT) env keys
+          env' <- foldM (loadKey verT unit) env keys
           -- Once per unit, not once per component key.
           publishRows ref [Fuzzy.mkPackageRow (pkgName pid) (pkgVersion pid)]
           go env' missing rest
         else go env (pid : missing) rest
 
-    freshFor verT pid kind = do
+    freshFor verT unit pid kind = do
       fp <- indexInputsFingerprint plan pid kind
       Cache.haveFreshIndex cache
-        (unComponentKey (componentKeyOf (pkgName pid) kind)) verT fp
+        (unComponentKey (componentKeyOf (pkgName pid) kind)) verT unit fp
 
-    loadKey verT env k = do
-      rows <- Cache.readCachedIndex cache k verT
+    loadKey verT unit env k = do
+      rows <- Cache.readCachedIndex cache k verT unit
       publishRows ref (componentScorerRows rows)
       pure (Exports.extendEnv rows env)
 
@@ -260,15 +263,26 @@ buildAndCacheIndex plan cache resolver oracle env0 pids ref doneRef =
       -- Persist before publishing into memory so a crash mid-stream
       -- never leaves the in-memory view ahead of the cache.
       Cache.writeCachedIndex cache (originFor pid)
-        (unComponentKey compKey) verT flatRows
+        (unComponentKey compKey) verT (unitIdFor plan pid) flatRows
       -- After the rows: 'writeIndex' replaces the meta row, so stamping
       -- the fingerprint first would lose it and the component would
       -- rebuild on every start.
       fp <- indexInputsFingerprint plan pid kind
       Cache.writeCachedFingerprint cache (originFor pid)
-        (unComponentKey compKey) verT fp
+        (unComponentKey compKey) verT (unitIdFor plan pid) fp
       publishRows ref (componentScorerRows flatRows)
       pure (Exports.extendEnv flatRows env)
+
+-- | The configuration to file a package's rows under.
+--
+-- A package the plan does not mention cannot be keyed by a configuration
+-- cabal resolved, because there is none; it is keyed by its version
+-- instead, the same way an override is, so its rows stay findable and
+-- stay out of every plan-scoped read.  Reachable only through a resolver
+-- that answered for a package outside the plan.
+unitIdFor :: BuildPlan -> PackageId -> UnitId
+unitIdFor plan pid =
+  fromMaybe (unpinnedUnitIdFor pid) (lookupUnitId (pkgName pid) plan)
 
 -- | Everything that decides what rows a component produces, as one digest.
 --

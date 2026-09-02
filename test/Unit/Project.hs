@@ -7,12 +7,14 @@ import System.Directory (createDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 
+import qualified Data.Map.Strict as Map
+
 import Hypha.Project.Discovery (DiscoveryError (..))
 
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Project.Discovery (discoverProjectRoot)
-import Hypha.Project.Plan (loadBuildPlan, loadPlanVersions)
+import Hypha.Project.Plan (PlanPin (..), loadBuildPlan, loadPlanVersions)
 import Hypha.Project.Overrides (parsePackageOverride)
 
 tests :: TestTree
@@ -84,13 +86,18 @@ testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $
 -- command resolves against.
 testLoadPlanVersionsAgrees :: TestTree
 testLoadPlanVersionsAgrees =
-  testCase "loadPlanVersions agrees with the full plan's versions" $
+  testCase "loadPlanVersions agrees with the full plan's pins" $
     withSystemTempDirectory "hypha-plan" $ \cacheDir -> do
       let fixtureDir = "test" </> "fixtures" </> "tiny-project"
       full  <- loadBuildPlan     cacheDir (ProjectRoot fixtureDir)
       light <-                   loadPlanVersions (ProjectRoot fixtureDir)
       case (full, light) of
-        (Right bp, Right vs) -> vs @?= planVersions bp
+        (Right bp, Right pins) -> do
+          Map.map ppVersion pins @?= planVersions bp
+          -- The unit-id too: it is what the index cache keys on, so the
+          -- cheap reader disagreeing would scope a lookup to
+          -- configurations the rest of hypha never writes.
+          Map.map ppUnitId  pins @?= planUnitIds bp
         _ -> error "Expected both plan readers to parse the fixture"
 
 testParseOverride :: TestTree

@@ -14,7 +14,7 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), PackageOrigin (..), PlannedUnit (..), emptyBuildPlan
-  , topologicalOrder )
+  , topologicalOrder, unpinnedUnitIdFor )
 import Hypha.Types.PackageId (PackageId (..), PackageName (..), Version (..))
 
 pid :: Text -> PackageId
@@ -25,6 +25,7 @@ unit n deps =
   ( PackageName n
   , PlannedUnit
       { puId            = pid n
+      , puUnitId  = unpinnedUnitIdFor (pid n)
       , puDeps          = map pid deps
       , puIsLocal       = False
       , puOrigin        = OriginDistribution

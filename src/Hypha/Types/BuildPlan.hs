@@ -14,7 +14,11 @@ module Hypha.Types.BuildPlan
     -- * Queries
   , lookupPackage
   , lookupUnit
+  , lookupUnitId
+  , unpinnedUnitId
+  , unpinnedUnitIdFor
   , planVersions
+  , planUnitIds
   , applyOverrides
   , forwardDepsOf
   , reverseDepsOf
@@ -32,7 +36,8 @@ import Data.Text (Text)
 
 import Hypha.Project.BuildContext (BuildContext, hostBuildContext)
 import Hypha.Project.Components (ComponentInfo)
-import Hypha.Types.PackageId (PackageName (..), PackageId (..), Version (..))
+import Hypha.Types.PackageId
+  ( PackageId (..), PackageName (..), UnitId (..), Version (..) )
 
 -- | Absolute path to the project root (directory containing @cabal.project@).
 newtype ProjectRoot = ProjectRoot FilePath
@@ -80,6 +85,11 @@ data PackageOrigin
 -- | A planned unit with its dependencies and metadata.
 data PlannedUnit = PlannedUnit
   { puId      :: !PackageId
+  , puUnitId  :: !UnitId
+    -- ^ cabal's id for this unit's configuration, straight from
+    -- @plan.json@.  What the index cache keys on, so two projects that
+    -- resolved a package differently do not share (or evict) each
+    -- other's rows.
   , puDeps    :: ![PackageId]
   , puIsLocal :: !Bool
     -- ^ Whether this is a local project package (not a dependency).
@@ -128,6 +138,17 @@ emptyBuildPlan = BuildPlan
 lookupPackage :: PackageName -> BuildPlan -> Maybe Version
 lookupPackage name bp = pkgVersion . puId <$> Map.lookup name (bpUnits bp)
 
+-- | The configuration the plan resolved for a package, when it has one.
+--
+-- Read rather than reconstructed: every caller that keys cache rows needs
+-- the same answer, and a second way to derive it would be a second answer.
+lookupUnitId :: PackageName -> BuildPlan -> Maybe UnitId
+lookupUnitId name bp = puUnitId <$> Map.lookup name (bpUnits bp)
+
+-- | The unit-id the plan pins for each package it mentions.
+planUnitIds :: BuildPlan -> Map PackageName UnitId
+planUnitIds = Map.map puUnitId . bpUnits
+
 -- | The version this plan pins for each package it mentions.
 --
 -- The whole plan reduced to what a version check needs, so callers that
@@ -151,10 +172,31 @@ applyOverrides overrides bp = bp
   where
     applyOverride (PackageOverride n v) =
       Map.insertWith (\_ old -> old { puId = (puId old) { pkgVersion = v } }) n
-        PlannedUnit { puId = PackageId n v, puDeps = [], puIsLocal = False
+        PlannedUnit { puId = PackageId n v
+                    , puUnitId = unpinnedUnitId n v
+                    , puDeps = [], puIsLocal = False
                     , puOrigin = OriginDistribution
                     , puSrcDir = Nothing, puDistDir = Nothing
                     , puLibComponents = [] }
+
+-- | The pseudo-configuration a package no plan resolved is indexed under.
+--
+-- Two ways to get here: @--package-override PKG=VER@ names a version the
+-- plan does not build, and a store-only unit (no project, so no plan at
+-- all) was never resolved by cabal either.  Neither has a unit-id to
+-- borrow, and a distinct, self-describing one beats the alternatives:
+-- reusing some real configuration's id would let these rows answer a
+-- plan-scoped lookup, and an empty id would make "no configuration" a
+-- value every reader has to remember to reject.  Reads for such a package
+-- match on version instead ('Hypha.Search.Cache.PinVersion'), so the rows
+-- stay findable by the run that asked for them.
+unpinnedUnitId :: PackageName -> Version -> UnitId
+unpinnedUnitId (PackageName n) (Version v) =
+  UnitId ("unpinned:" <> n <> "-" <> v)
+
+-- | 'unpinnedUnitId' for a whole 'PackageId'.
+unpinnedUnitIdFor :: PackageId -> UnitId
+unpinnedUnitIdFor pid = unpinnedUnitId (pkgName pid) (pkgVersion pid)
 
 -- | Get forward dependencies of a package.
 forwardDepsOf :: PackageName -> BuildPlan -> [(PackageName, Version)]

@@ -60,6 +60,7 @@ import Hypha.Project.Discovery (discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (loadBuildPlan, loadPlanVersions, planHash)
+import Hypha.Project.Plan qualified as Plan
 import Hypha.Search.PackageCache qualified as PC
 import Hypha.Source.Dependencies (dependencyReach)
 import Hypha.Source.Origins qualified as Origins
@@ -188,6 +189,10 @@ enrichPlanFromStore env plan
   where
     syntheticUnit pid = PlannedUnit
       { puId            = pid
+        -- No plan resolved this unit -- it was found by walking the
+        -- store -- so it is keyed by its version, and read back through
+        -- 'ScopeWholeCache', which is the only scope this path has.
+      , puUnitId        = unpinnedUnitId (pkgName pid) (pkgVersion pid)
       , puDeps          = []
       , puIsLocal       = False
       , puOrigin        = OriginHackage
@@ -539,9 +544,13 @@ cacheScopeFor (Just root) = do
         <> Text.unpack (errorMessage (PlanFailure root planErr))
       pure PC.ScopeWholeCache
     Right pinned ->
-      pure (PC.ScopePlan (foldr override pinned overrides))
+      pure (PC.ScopePlan (foldr override (Map.map planPin pinned) overrides))
   where
-    override (PackageOverride n v) = Map.insert n v
+    -- What the plan pins is a configuration; what an override pins is
+    -- only a version, because the user named a release the plan does not
+    -- build and cabal never resolved a unit-id for it.
+    planPin p = PC.PinUnit (Plan.ppUnitId p)
+    override (PackageOverride n v) = Map.insert n (PC.PinVersion v)
 
 -- | Materialise the project Hoogle DB: load the plan, derive a
 -- 'HoogleStamp' (plan hash + aggregate source-tree fingerprint),

@@ -15,6 +15,8 @@ module Hypha.Search.PackageCache
   ( HyphaPackageCache
   , CacheOrigin (..)
   , CacheScope (..)
+  , UnitPin (..)
+  , scopeForPlan
   , VersionedRow (..)
   , openPackageCache
   , openPackageCacheAt
@@ -38,12 +40,15 @@ import System.FilePath ((</>), takeDirectory)
 
 import Hypha.Search.Cache
   ( CacheScope (..)
+  , UnitPin (..)
+  , scopeForPlan
   , VersionedRow (..)
   , IndexCache, defaultCachePath, lookupRowsByName, lookupRowsInModule
   , openIndexCache, readBlob, readFingerprint, readIndex
   , writeBlob, writeFingerprint, writeIndex )
 import Hypha.Search.Index (IndexRow (..))
 import Hypha.Types.BuildPlan (ProjectRoot (..))
+import Hypha.Types.PackageId (UnitId)
 
 -- | Tells writers which DB to target.  Reads do not take an origin —
 -- they always consult both with project precedence.
@@ -95,15 +100,16 @@ projectCachePath (ProjectRoot r) = r </> ".hypha" </> "cache.db"
 -- depend on the compiler and the resolved language settings, so one
 -- project served another's answers.  The fingerprint closes both — a
 -- pre-fingerprint row stores @NULL@, matches nothing, and is rebuilt once.
-haveFreshIndex :: HyphaPackageCache -> Text -> Text -> Text -> IO Bool
-haveFreshIndex c pkg ver fp = case hpcProject c of
+haveFreshIndex
+  :: HyphaPackageCache -> Text -> Text -> UnitId -> Text -> IO Bool
+haveFreshIndex c pkg ver unit fp = case hpcProject c of
     Just p -> do
       here <- matches p
       if here then pure True else matches (hpcGlobal c)
     Nothing -> matches (hpcGlobal c)
   where
     matches db = do
-      stored <- readFingerprint db pkg ver
+      stored <- readFingerprint db pkg ver unit
       pure (stored == Just fp)
 
 -- | Read indexed rows for @(pkg, ver)@.  If the project DB has *any*
@@ -114,15 +120,16 @@ readCachedIndex
   :: HyphaPackageCache
   -> Text                              -- ^ package name
   -> Text                              -- ^ package version
+  -> UnitId                            -- ^ the configuration to read
   -> IO [IndexRow]
-readCachedIndex c pkg ver =
+readCachedIndex c pkg ver unit =
   case hpcProject c of
     Just p -> do
-      rows <- readIndex p pkg ver
+      rows <- readIndex p pkg ver unit
       case rows of
-        [] -> readIndex (hpcGlobal c) pkg ver
+        [] -> readIndex (hpcGlobal c) pkg ver unit
         _  -> pure rows
-    Nothing -> readIndex (hpcGlobal c) pkg ver
+    Nothing -> readIndex (hpcGlobal c) pkg ver unit
 
 -- | Find every cached row whose symbol name matches @query@.  The
 -- query may be a bare symbol (@lookup@) or fully qualified
@@ -150,14 +157,15 @@ lookupByName c scope rawQuery = do
 -- is two away from where @mapAccumL@ is declared.
 lookupInModule
   :: HyphaPackageCache
+  -> CacheScope                        -- ^ which configurations may answer
   -> Text                              -- ^ component key
   -> Text                              -- ^ module path
   -> IO [IndexRow]
-lookupInModule c pkg modT = do
+lookupInModule c scope pkg modT = do
   projectRows <- case hpcProject c of
-    Just p  -> lookupRowsInModule p pkg modT
+    Just p  -> lookupRowsInModule p scope pkg modT
     Nothing -> pure []
-  globalRows  <- lookupRowsInModule (hpcGlobal c) pkg modT
+  globalRows  <- lookupRowsInModule (hpcGlobal c) scope pkg modT
   pure (mergeShadow projectRows globalRows)
 
 -- | Split @Data.Map.lookup@ into @(Just "Data.Map", "lookup")@.
@@ -190,10 +198,11 @@ writeCachedIndex
   -> CacheOrigin
   -> Text
   -> Text
+  -> UnitId
   -> [IndexRow]
   -> IO ()
-writeCachedIndex c origin pkg ver rows =
-  writeIndex (selectWrite c origin) pkg ver rows
+writeCachedIndex c origin pkg ver unit rows =
+  writeIndex (selectWrite c origin) pkg ver unit rows
 
 -- | Accessor for the global 'IndexCache' handle.  Used by
 -- 'Hypha.Hoogle.Remote' to piggy-back on the existing @kv@ table
@@ -201,19 +210,21 @@ writeCachedIndex c origin pkg ver rows =
 hyphaGlobalCache :: HyphaPackageCache -> IndexCache
 hyphaGlobalCache = hpcGlobal
 
--- | Read the per-component fingerprint stored alongside the cache
--- rows for a @(pkg, version)@ pair.  The origin tells which DB to
--- consult.
+-- | Read the per-component fingerprint stored alongside the cache rows
+-- for one configuration of a @(pkg, version)@ pair.  The origin tells
+-- which DB to consult.
 readCachedFingerprint
-  :: HyphaPackageCache -> CacheOrigin -> Text -> Text -> IO (Maybe Text)
-readCachedFingerprint c origin pkg ver =
-  readFingerprint (selectWrite c origin) pkg ver
+  :: HyphaPackageCache -> CacheOrigin -> Text -> Text -> UnitId
+  -> IO (Maybe Text)
+readCachedFingerprint c origin pkg ver unit =
+  readFingerprint (selectWrite c origin) pkg ver unit
 
 -- | Stamp the per-component fingerprint, routed by 'CacheOrigin'.
 writeCachedFingerprint
-  :: HyphaPackageCache -> CacheOrigin -> Text -> Text -> Text -> IO ()
-writeCachedFingerprint c origin pkg ver fp =
-  writeFingerprint (selectWrite c origin) pkg ver fp
+  :: HyphaPackageCache -> CacheOrigin -> Text -> Text -> UnitId -> Text
+  -> IO ()
+writeCachedFingerprint c origin pkg ver unit fp =
+  writeFingerprint (selectWrite c origin) pkg ver unit fp
 
 -- | Generic blob get.  Blobs are global-only for now: they hold
 -- cross-project state (plan hashes, embedding fingerprints) and have
