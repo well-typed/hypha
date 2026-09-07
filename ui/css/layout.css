@@ -102,6 +102,13 @@
   margin-bottom: 1rem;
 }
 .mod-title { font-family: var(--mono); font-size: 1.45rem; }
+/* Haddock's Description field: what the module is for, in one line. */
+.mod-synopsis {
+  margin: 0.25rem 0 0;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+.mod-synopsis code { font-family: var(--mono); font-size: 0.92em; }
 .mod-actions {
   display: flex;
   align-items: center;

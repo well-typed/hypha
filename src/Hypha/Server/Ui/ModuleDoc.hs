@@ -14,6 +14,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Lucid
 
+import           Hypha.Haddock.ModuleHeader
+                   ( FieldName (..), License (..), ModuleHeader (..) )
 import qualified Hypha.Server.Ui.Haddock as Haddock
 import           Hypha.Search.Index (DefinitionRef (..))
 import           Hypha.Server.ModuleDoc
@@ -39,6 +41,9 @@ modulePage pkgT modT view = div_ [class_ "mod-doc"] $ do
 moduleHead :: Text -> Text -> ModuleDocView -> Html ()
 moduleHead pkgT modT view = header_ [class_ "mod-head"] $ do
   h1_ [class_ "mod-title"] (toHtml modT)
+  case synopsis view of
+    Nothing -> mempty
+    Just d  -> p_ [class_ "mod-synopsis"] (Haddock.renderHaddockInlineHtml d)
   p_ [class_ "meta"] $ do
     toHtml ("in package " :: Text)
     a_ [href_ (Route.hrefFrom ["pkg", pkgT])] (toHtml pkgT)
@@ -70,6 +75,16 @@ moduleHead pkgT modT view = header_ [class_ "mod-head"] $ do
       ViewFromSource sd   -> sdRawHaddock sd
       ViewExportsOnly _ _ -> Nothing
 
+    -- Haddock keeps the @Description@ field for package indexes and
+    -- never shows it on the module page.  It is the one line that says
+    -- what the module is /for/, so it belongs under the title.  The
+    -- prebuilt path has no say here: that page is Haddock's own HTML.
+    synopsis = \case
+      ViewFromSource sd   ->
+        unDocText <$> (mhDescription =<< mdiHeader (sdInfo sd))
+      ViewPrebuilt _      -> Nothing
+      ViewExportsOnly _ _ -> Nothing
+
 -- | Embedded prebuilt Haddock: description + interface fragments on
 -- the left, Haddock's own contents list feeding the rail.
 prebuiltBody :: PrebuiltDoc -> Html ()
@@ -90,14 +105,83 @@ sourceBody pkgT modT sd = div_ [class_ "doc-with-rail"] $ do
   div_ [class_ "doc-body"] $ do
     case mdiHeader info of
       Nothing -> mempty
-      Just (DocText t) ->
-        div_ [class_ "haddock module-prose"] (Haddock.renderHaddockHtml t)
+      Just header -> do
+        headerFields header
+        case mhProse header of
+          Nothing          -> mempty
+          Just (DocText t) ->
+            div_ [class_ "haddock module-prose"] (Haddock.renderHaddockHtml t)
     if null (mdiEntries info)
       then p_ [class_ "hint"] "No top-level declarations found."
       else mapM_ (entrySection pkgT modT) (mdiEntries info)
   tocRail (mdiEntries info)
   where
     info = sdInfo sd
+
+-- | The module's metadata: a one-line summary that opens into the field
+-- table Hackage shows in its module header.  Collapsed by default so the
+-- prose still starts at the top of the page.
+--
+-- Nothing is rendered when no field carries a value, so a module with a
+-- plain prose header looks exactly as it did before, and a valueless
+-- field (which upstream\'s grammar produces from a prose line that is one
+-- bare word and a colon) cannot conjure up an empty block.
+headerFields :: ModuleHeader -> Html ()
+headerFields header = case fieldRows header of
+  []   -> mempty
+  rows -> details_ [class_ "mod-about"] $ do
+    summary_ [class_ "mod-about-summary"] $ do
+      span_ [class_ "mod-about-label"] "About this module"
+      mapM_ (span_ [class_ "mod-about-chip"] . toHtml) (summaryChips header)
+    dl_ [class_ "mod-about-fields"] $
+      mapM_ (\(label, value) -> dt_ (toHtml label) <> dd_ value) rows
+
+-- | The rows, in the order Haddock lists them, with the fields upstream
+-- discards kept on the end in source order.
+fieldRows :: ModuleHeader -> [(Text, Html ())]
+fieldRows header = concat
+  [ textRow "Copyright"   (mhCopyright header)
+  , licenseRow (mhLicense header)
+  , textRow "Maintainer"  (mhMaintainer header)
+  , textRow "Stability"   (mhStability header)
+  , textRow "Portability" (mhPortability header)
+  , concat [ textRow (unFieldName k) (Just v) | (k, v) <- mhExtra header ]
+  ]
+
+-- | A row for a field that has something to say.
+textRow :: Text -> Maybe Text -> [(Text, Html ())]
+textRow label = \case
+  Just value | not (Text.null (Text.strip value)) -> [(label, toHtml value)]
+  _                                               -> []
+
+-- | The licence, linked to its definition when the module gave an SPDX
+-- identifier \x2014 which is why 'License' keeps the two apart.
+licenseRow :: Maybe License -> [(Text, Html ())]
+licenseRow = \case
+  Just (Spdx ident) | not (Text.null (Text.strip ident)) ->
+    [ ( "License"
+      , a_ [ class_ "spdx-link"
+           , href_ ("https://spdx.org/licenses/" <> Text.strip ident <> ".html")
+           ]
+           (toHtml ident)
+      )
+    ]
+  Just (LicenseText t) -> textRow "License" (Just t)
+  _                    -> []
+
+-- | What the collapsed summary shows: the two fields a reader scanning a
+-- page actually wants, licence and portability.
+summaryChips :: ModuleHeader -> [Text]
+summaryChips header =
+  [ chip
+  | Just chip <- [licenseChip (mhLicense header), mhPortability header]
+  , not (Text.null (Text.strip chip))
+  ]
+  where
+    licenseChip = \case
+      Just (Spdx ident)    -> Just ident
+      Just (LicenseText t) -> Just t
+      Nothing              -> Nothing
 
 -- | One documented declaration.
 entrySection :: Text -> Text -> DocEntry -> Html ()

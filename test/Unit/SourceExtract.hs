@@ -16,6 +16,7 @@ import           Hypha.Search.Index
                    ( DefinitionRef (..), ImportedDefinitions (..)
                    , ModuleSource (..), Visibility (..)
                    , noImportedDefinitions )
+import           Hypha.Haddock.ModuleHeader (License (..), ModuleHeader (..))
 import qualified Hypha.Source.Extract as Extract
 import           Hypha.Source.Extract
                    ( DocEntry (..), EntryOrigin (..), ModuleDocInfo (..)
@@ -40,6 +41,10 @@ depDefinitions dep = ImportedDefinitions
       [ (msDeclaredName d, (ComponentKey "reexport-dep", d)) | d <- dep ]
   }
 
+-- | The header's prose, once its structured fields have been split off.
+headerProse :: ModuleDocInfo -> Maybe Text.Text
+headerProse d = unDocText <$> (mhProse =<< mdiHeader d)
+
 tests :: TestTree
 tests = testGroup "Unit.SourceExtract"
   [ testCase "extractModuleDoc returns header and entries in source order" $ do
@@ -60,7 +65,7 @@ tests = testGroup "Unit.SourceExtract"
       case Extract.extractModuleDoc "Fixture.hs" src of
         Left e  -> assertFailure (show e)
         Right d -> do
-          fmap unDocText (mdiHeader d)
+          headerProse d
             @?= Just " Fixture module header.\n\n Second paragraph."
           -- constructors are declarations in their own right now, so the
           -- page lists them after the type that contains them
@@ -96,7 +101,27 @@ tests = testGroup "Unit.SourceExtract"
             ]
       case Extract.extractModuleDoc "Pragmatic.hs" src of
         Left e  -> assertFailure (show e)
-        Right d -> fmap unDocText (mdiHeader d) @?= Just " Real header prose."
+        Right d -> headerProse d @?= Just " Real header prose."
+
+  , testCase "a structured module header is split into fields and prose" $ do
+      let src = Text.unlines
+            [ "-- |"
+            , "-- Module      :  Fielded"
+            , "-- Copyright   :  ACME 2026"
+            , "-- License     :  BSD3"
+            , "--"
+            , "-- Header prose."
+            , "module Fielded where"
+            , "x = 1"
+            ]
+      case Extract.extractModuleDoc "Fielded.hs" src of
+        Left e  -> assertFailure (show e)
+        Right d -> case mdiHeader d of
+          Nothing -> assertFailure "expected a module header"
+          Just h  -> do
+            mhCopyright h @?= Just "ACME 2026"
+            mhLicense h   @?= Just (LicenseText "BSD3")
+            headerProse d @?= Just "Header prose."
 
   , testCase "license comment separated by a blank line is not a header" $ do
       let src = Text.unlines

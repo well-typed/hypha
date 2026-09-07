@@ -28,6 +28,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as Text
 import Data.Text (Text)
 
+import Hypha.Haddock.ModuleHeader (ModuleHeader, parseModuleHeader)
 import Hypha.Search.Index
   ( DefinitionRef (..), ImportedDefinitions (..), ModuleSource (..) )
 import Hypha.Search.Reexport qualified as Reexport
@@ -99,9 +100,12 @@ symbolInfoFromDecl numbered d = SymbolInfo
 -- | Everything the module documentation view needs, extracted from a
 -- single parse of the module source.
 data ModuleDocInfo = ModuleDocInfo
-  { mdiHeader  :: !(Maybe DocText)
+  { mdiHeader  :: !(Maybe ModuleHeader)
     -- ^ The module-level Haddock header (the @-- |@ block above the
-    -- @module@ keyword), when present.
+    -- @module@ keyword), when present, with its leading @Key : value@
+    -- block already split off from the prose.  Parsed here rather than
+    -- at render time: which half of that comment is metadata and which
+    -- is prose is a fact about the module, not a display choice.
   , mdiEntries :: ![DocEntry]
     -- ^ One entry per top-level declaration, in source order.
   , mdiSkipped :: ![(ModulePath, Parser.ParseError)]
@@ -175,7 +179,7 @@ extractModuleDoc path src = do
   (header, decls) <- Parser.parseModuleDoc path src
   let numbered = numberedLines src
   pure ModuleDocInfo
-    { mdiHeader  = DocText <$> header
+    { mdiHeader  = parseModuleHeader . DocText <$> header
     , mdiEntries = map (entryFor numbered) decls
     , mdiSkipped = []
     }
@@ -264,7 +268,7 @@ resolveModuleEntries langs compKey sources imported asking = do
         Just e  -> e
         Nothing -> missingModule asking)
     pure ModuleDocInfo
-      { mdiHeader  = DocText <$> miHeaderDoc asked
+      { mdiHeader  = parseModuleHeader . DocText <$> miHeaderDoc asked
       , mdiSkipped = skipped
       , mdiEntries =
           [ entry

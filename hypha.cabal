@@ -101,6 +101,7 @@ library
     Hypha.Command.Symbol
     Hypha.Command.Versions
     Hypha.Haddock.Interface
+    Hypha.Haddock.ModuleHeader
     Hypha.Logging
     Hypha.Server.Assets
     Hypha.Server.Slots
@@ -244,9 +245,11 @@ test-suite hypha-tests
     Unit.Project
     Unit.Haddock
     Unit.HaddockExtract
+    Unit.HaddockModuleHeader
     Unit.Server
     Unit.ServerSlots
     Property.HaddockRewrite
+    Property.HaddockModuleHeader
     Unit.Mcp
     Unit.PackageCache
     Unit.PackageCacheFingerprint

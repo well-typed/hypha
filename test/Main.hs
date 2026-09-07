@@ -16,6 +16,7 @@ import qualified Property.ComponentName
 import qualified Property.LookupCascade
 import qualified Property.LookupOutcomeShape
 import qualified Property.HackageCache
+import qualified Property.HaddockModuleHeader
 import qualified Property.HaddockRewrite
 import qualified Property.OutputJson
 import qualified Property.SearchRanking
@@ -43,6 +44,7 @@ import qualified Unit.Server
 import qualified Unit.ServerSlots
 import qualified Unit.Haddock
 import qualified Unit.HaddockExtract
+import qualified Unit.HaddockModuleHeader
 import qualified Unit.InternalError
 import qualified Unit.ImportedSources
 import qualified Unit.LookupPrepLocal
@@ -114,6 +116,8 @@ allTests = testGroup "hypha"
   , Unit.ServerSlots.tests
   , Unit.Haddock.tests
   , Unit.HaddockExtract.tests
+  , Unit.HaddockModuleHeader.tests
+  , Property.HaddockModuleHeader.tests
   , Unit.InternalError.tests
   , Unit.ImportedSources.tests
   , Unit.LookupPrepLocal.tests
