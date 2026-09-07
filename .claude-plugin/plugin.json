@@ -6,7 +6,7 @@
     "name": "Well-Typed",
     "url": "https://well-typed.com"
   },
-  "homepage": "https://gitlab.well-typed.com/well-typed/hypha",
+  "homepage": "https://github.com/well-typed/hypha",
   "license": "BSD-3-Clause",
   "keywords": ["haskell", "hackage", "hoogle", "cabal", "well-typed"],
   "mcpServers": {

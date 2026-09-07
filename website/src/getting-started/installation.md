@@ -6,7 +6,7 @@ CLI) and `hypha-mcp` (the [MCP](../mcp/index.md) stdio shim).
 ## From source (requires GHC ≥ 9.6; tested on 9.6.7, 9.10.3 and 9.12.4)
 
 ```bash
-git clone https://gitlab.well-typed.com/well-typed/hypha.git
+git clone https://github.com/well-typed/hypha.git
 cd hypha
 cabal build all
 cabal install exe:hypha
@@ -15,9 +15,15 @@ cabal install exe:hypha-mcp
 
 ## Nix (flakes)
 
+The flake provides a development shell with GHC and `cabal` ready to go:
+
 ```bash
-nix run gitlab:well-typed/hypha#hypha -- --help
+nix develop github:well-typed/hypha
+cabal build all
 ```
+
+There is no packaged `hypha` derivation yet, so `nix run` has nothing to
+run — build it from the shell above.
 
 ## Claude Code plugin
 

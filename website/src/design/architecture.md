@@ -27,12 +27,12 @@ library: hypha
 ```
 
 For full details see the design specs in the repository, under
-[`docs/superpowers/`](https://gitlab.well-typed.com/well-typed/hypha/-/tree/main/docs/superpowers).
+[`docs/superpowers/`](https://github.com/well-typed/hypha/tree/main/docs/superpowers).
 
 ## Development
 
 ```bash
-git clone https://gitlab.well-typed.com/well-typed/hypha.git
+git clone https://github.com/well-typed/hypha.git
 cd hypha
 cabal build all
 cabal test all

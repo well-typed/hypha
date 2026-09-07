@@ -9,11 +9,11 @@ types, and documentation your agent (or you) needs.
 ## Status
 
 Pre-alpha. Work is tracked in
-[GitLab issues](https://gitlab.well-typed.com/well-typed/hypha/-/issues); design
+[GitLab issues](https://github.com/well-typed/hypha/issues); design
 and implementation plans live in the repository under
 `docs/superpowers/{specs,plans}/`.
 
 ## License
 
 BSD-3-Clause. See
-[`LICENSE`](https://gitlab.well-typed.com/well-typed/hypha/-/blob/main/LICENSE).
+[`LICENSE`](https://github.com/well-typed/hypha/blob/main/LICENSE).

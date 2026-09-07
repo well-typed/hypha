@@ -33,7 +33,7 @@ the same data.
 ## Install
 
 ```bash
-git clone https://gitlab.well-typed.com/well-typed/hypha.git
+git clone https://github.com/well-typed/hypha.git
 cd hypha && cabal install exe:hypha exe:hypha-mcp
 ```
 

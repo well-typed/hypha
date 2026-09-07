@@ -38,7 +38,7 @@ hypha: <stdout>: commitBuffer: invalid argument (cannot encode character '\8212'
 
 Since then both binaries pin UTF-8 on their handles, on the filesystem
 encoding, and on every handle they open, before printing anything
-([issue #9](https://gitlab.well-typed.com/well-typed/hypha/-/issues/9)). The
+([issue #9](https://github.com/well-typed/hypha/issues/9)). The
 locale was never the right authority: Haskell sources, `.cabal` files, JSON and
 Haddock HTML are all UTF-8 by their own specs. The one thing that now fails
 loudly instead of quietly producing mojibake is a genuinely Latin-1 `.hs` or
