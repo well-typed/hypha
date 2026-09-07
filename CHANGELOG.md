@@ -6,6 +6,10 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-07
+
+Beta release candidate.
+
 ### Added
 
 - **Haddock module descriptions are parsed into their structured
@@ -648,8 +652,6 @@ loosely follows [Semantic Versioning](https://semver.org/).
   what it re-exported — which is why `Prelude` is sparse. Each is
   reported on stderr with GHC's own message.
 
-## [0.2.0] — unreleased
-
 ### Breaking
 
 - `hypha search` removed.  Use `hypha lookup`.
@@ -750,5 +752,6 @@ browser), and Plan C (MCP stdio shim).
 - Property tests via `Test.Tasty.Falsify`; golden tests via
   `Test.Tasty.Golden`; unit tests via `Test.Tasty.HUnit`.
 
-[Unreleased]: https://github.com/well-typed/hypha/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/well-typed/hypha/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/well-typed/hypha/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/well-typed/hypha/releases/tag/v0.1.0
