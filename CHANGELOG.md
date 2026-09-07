@@ -31,6 +31,34 @@ loosely follows [Semantic Versioning](https://semver.org/).
   unrecognised key such as `Reviewed-By`) are kept and shown as extra
   rows rather than silently dropped.
 
+### Fixed
+
+- **Extension resolution now applies GHC's implication table.** A module
+  whose only pragma is `{-# LANGUAGE TemplateHaskell #-}` failed to parse
+  its own top-level splices — `parse error on input '$'` — and the module
+  page fell back to a bare export list (issue #47). GHC's lexer gates
+  `$(` and `''Name` on `TemplateHaskellQuotes`, which real GHC gets from
+  the implication `TemplateHaskell => TemplateHaskellQuotes`; hypha
+  applied no implications at all, so 36 of them were missing, several
+  parse-affecting (`GADTs => GADTSyntax`, `TypeOperators =>
+  ExplicitNamespaces`, `DerivingVia => DerivingStrategies`,
+  `RecordWildCards => DisambiguateRecordFields`). Resolution now mirrors
+  GHC's `setExtensionFlag'`, driven by GHC's own `impliedXFlags`:
+  enabling an extension enables what it implies, recursively, while
+  disabling one deliberately does not un-imply — so an explicit `No…`
+  still wins over an earlier implication.
+
+  Measured over the library modules of six splice-carrying packages
+  (api-tools, Chart, jose, lsp-types, pandoc-types, patat): 561 of 612
+  modules parsed before, 612 of 612 after — 51 modules fixed, no
+  regressions.
+
+  The index format is bumped to generation 7, so existing caches are
+  rebuilt. Modules that previously yielded no rows now yield real ones,
+  and the per-component language fingerprint cannot detect that: it
+  hashes `default-language` and `default-extensions`, which are
+  unchanged. It is the resolved set that grew.
+
 ### Changed
 
 - **Default output format is now YAML** instead of JSON. YAML is

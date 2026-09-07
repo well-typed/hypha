@@ -155,5 +155,15 @@ data IndexRow = IndexRow
 -- stop evicting each other.  The primary key itself changed, which
 -- SQLite cannot alter in place — the guard drops the tables rather than
 -- emptying them.
+--
+-- Generation 6 goes for the same reason as generation 4, one layer up:
+-- extension resolution now applies GHC's implication table, so a module
+-- whose only pragma is @TemplateHaskell@ parses where it used to fail on
+-- its own splices (issue #47).  Modules that produced no rows, or only
+-- the thin ones an export list yields, now produce real ones.  The
+-- per-component language fingerprint cannot notice: it hashes the
+-- /inputs/ (@default-language@, @default-extensions@), and those are
+-- unchanged — it is the resolved set that grew.  So the generation is
+-- again the only thing that can force a rebuild.
 currentIndexFormat :: Int
-currentIndexFormat = 6
+currentIndexFormat = 7
