@@ -10,6 +10,9 @@
 module Hypha.Hoogle.Remote
   ( RemoteError (..)
   , renderRemoteError
+  , RemoteSource (..)
+  , remoteSourceLabel
+  , RemoteAnswer (..)
   , RemoteHoogleTransport (..)
   , RemoteOptions (..)
   , defaultRemoteOptions
@@ -90,17 +93,45 @@ searchRemote
   :: RemoteOptions
   -> HyphaPackageCache
   -> HoogleQuery
-  -> IO (Either RemoteError [HoogleHit])
+  -> IO (Either RemoteError RemoteAnswer)
 searchRemote opts cache q = do
   transport <- defaultTransport opts
   searchRemoteWith transport opts cache q
+
+-- | Where a remote-tier answer came from.
+--
+-- A property of the /call/, not of a row: the tier answers a query in
+-- one shot, so every hit in an answer arrived the same way.  Nothing in
+-- the envelope could distinguish a body fetched a moment ago from one
+-- read off disk, which cost a debugging session chasing a caching bug
+-- that was not there (issue #41).
+data RemoteSource
+  = FromCache
+    -- ^ Decoded from the @kv@ blob cache; the network was not touched.
+  | FromNetwork
+    -- ^ Fetched now.  Also the answer when a corrupt cached blob was
+    -- refetched over the top, since that is what actually happened.
+  deriving stock (Show, Eq)
+
+-- | Stable wire label, alongside 'Hypha.Hoogle.Tier.tierLabel'.
+remoteSourceLabel :: RemoteSource -> Text
+remoteSourceLabel = \case
+  FromCache   -> "cache"
+  FromNetwork -> "network"
+
+-- | A remote-tier answer: the hits, and how they were obtained.
+data RemoteAnswer = RemoteAnswer
+  { raResolvedFrom :: !RemoteSource
+  , raHits         :: ![HoogleHit]
+  }
+  deriving stock (Show, Eq)
 
 searchRemoteWith
   :: RemoteHoogleTransport
   -> RemoteOptions
   -> HyphaPackageCache
   -> HoogleQuery
-  -> IO (Either RemoteError [HoogleHit])
+  -> IO (Either RemoteError RemoteAnswer)
 -- The cache is consulted /before/ 'roOffline' is checked: an
 -- "offline" run must still be answered by bodies already on disk
 -- (the plane / CI / sandbox case), so 'RemoteOffline' means "offline
@@ -115,7 +146,7 @@ searchRemoteWith transport opts cache q = do
   mCached <- readBlob kv key
   let decoded = fmap (decodeHits . LBS.fromStrict . Text.encodeUtf8) mCached
   case decoded of
-    Just (Right hits) -> pure (Right hits)
+    Just (Right hits) -> pure (Right (RemoteAnswer FromCache hits))
     Just (Left err)
       | roOffline opts -> pure (Left (RemoteDecode err))
     Nothing
@@ -128,7 +159,7 @@ searchRemoteWith transport opts cache q = do
             Right body -> case decodeHits body of
               Right hits -> do
                 writeBlob kv key (Text.decodeUtf8 (LBS.toStrict body))
-                pure (Right hits)
+                pure (Right (RemoteAnswer FromNetwork hits))
               Left err -> pure (Left (RemoteDecode err))
 
 -- | Type-signature queries are full of characters that are not URL

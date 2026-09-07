@@ -1,0 +1,1 @@
+{"actions":{"containers/Data.Map/lookup":"hypha symbol containers/Data.Map/lookup"},"result":{"providers":[{"mod":"Data.Map","name":"lookup","pkg":"containers","sig":"Ord k => k -> Map k a -> Maybe a","tier":"remote-hoogle"}],"query":"lookup","resolved_from":"cache"}}

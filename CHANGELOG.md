@@ -31,6 +31,42 @@ loosely follows [Semantic Versioning](https://semver.org/).
   unrecognised key such as `Reviewed-By`) are kept and shown as extra
   rows rather than silently dropped.
 
+### Added
+
+- **`lookup` reports whether the network was touched.** `tier:
+  remote-hoogle` names which authority answered, and nothing said whether
+  the bytes came from `hoogle.haskell.org` or from the blob cache on
+  disk. The two were indistinguishable, which cost a debugging session
+  chasing a caching bug that was not there (issue #41). The envelope now
+  carries `resolved_from: cache | network` beside `query`, present only
+  when the remote tier answered:
+
+  ```yaml
+  result:
+    query: "ByteString -> Oid -> Maybe Int32 -> Maybe PgDataTypeSyntax"
+    resolved_from: cache
+    providers:
+      - tier: remote-hoogle
+        name: pgDataTypeFromAtt
+  ```
+
+  `tier` deliberately keeps its meaning. Relabelling a cached remote
+  answer as `cache` would collide with `TierCache`, which is hypha's
+  index of the project's own build plan — a different claim about the
+  answer (in your plan vs. merely on Hackage), and the wrong thing to
+  change to describe a transport.
+
+  The field is a property of the call, not of a row: the cascade is
+  first-hit-wins, so every provider in one answer arrived the same way.
+  It is in the **compact** field set, since that is what a consumer reads
+  by default — a provenance field visible only under `--select full`
+  would not have prevented the session that motivated it.
+
+  `lookup`'s field sets also move into `Hypha.Command.Lookup` as
+  `compactKeys`/`fullKeys`, where every other command keeps them, instead
+  of being spelled inline in `Hypha.Cli.Run` and copied again in the
+  golden test.
+
 ### Fixed
 
 - **`hypha source` returns the symbol's own span, not a window around

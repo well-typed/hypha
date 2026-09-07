@@ -25,15 +25,22 @@ module Hypha.Command.Lookup
     -- * JSON
   , providerToJSON
   , lookupResultToJSON
+    -- * Field sets
+  , compactKeys
+  , fullKeys
   ) where
 
 import Data.Aeson (Value, (.=), object)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..))
 import Hypha.Hoogle.Local (HyphaHoogle, searchLocal)
-import Hypha.Hoogle.Remote ( RemoteError (..), RemoteOptions, searchRemote )
+import Hypha.Hoogle.Remote
+  ( RemoteAnswer (..), RemoteError (..), RemoteOptions, RemoteSource
+  , remoteSourceLabel, searchRemote )
 import Hypha.Hoogle.Tier (Tier (..), tierLabel)
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
 import Hypha.Output.Outcome (Outcome (..))
@@ -66,6 +73,14 @@ data LookupResult = LookupResult
   { lrQuery          :: !Text
   , lrProviders      :: ![Provider]
   , lrTiersConsulted :: ![Tier]
+  , lrResolvedFrom   :: !(Maybe RemoteSource)
+    -- ^ How the remote tier's answer was obtained, when the remote tier
+    -- is the one that answered.
+    --
+    -- 'Nothing' for tiers 1 and 2: they never touch the network, and
+    -- reporting @cache@ for them would name the wrong cache — 'TierCache'
+    -- is hypha's index of the project's own build plan, not the blob
+    -- cache of Hoogle responses this field is about.
   }
   deriving stock (Show, Eq)
 
@@ -118,7 +133,7 @@ runLookup cache hoogleLocal opts q@(HoogleQuery qText) = do
   case cacheHits of
     (_:_) -> pure (buildOutcome q
                     (map (toProvider TierCache) cacheHits)
-                    [TierCache] RemoteNotConsulted)
+                    [TierCache] Nothing RemoteNotConsulted)
     [] -> do
       -- Tier 2: bring the local Hoogle DB up to date only now that we
       -- actually need it (tier 1 missed).
@@ -127,25 +142,31 @@ runLookup cache hoogleLocal opts q@(HoogleQuery qText) = do
       case localHits of
         (_:_) -> pure (buildOutcome q
                         (map (hitProvider TierLocalHoogle) localHits)
-                        [TierCache, TierLocalHoogle] RemoteNotConsulted)
+                        [TierCache, TierLocalHoogle] Nothing
+                        RemoteNotConsulted)
         [] -> do
           -- Tier 3
           remote <- searchRemote (loRemote opts) cache q
           let tiersWithRemote =
                 [TierCache, TierLocalHoogle, TierRemoteHoogle]
           case remote of
-            Right hits | not (null hits) ->
+            Right answer | not (null (raHits answer)) ->
               pure (buildOutcome q
-                     (map (hitProvider TierRemoteHoogle) hits)
-                     tiersWithRemote RemoteNotConsulted)
+                     (map (hitProvider TierRemoteHoogle) (raHits answer))
+                     tiersWithRemote (Just (raResolvedFrom answer))
+                     RemoteNotConsulted)
+            -- An empty answer is a failure the caller is told about, and
+            -- no provider carries the provenance, so it goes unreported
+            -- here rather than being attached to nothing.
             Right _ ->
-              pure (buildOutcome q [] tiersWithRemote RemoteEmpty)
+              pure (buildOutcome q [] tiersWithRemote Nothing RemoteEmpty)
             Left RemoteOffline ->
               pure (buildOutcome q []
-                     [TierCache, TierLocalHoogle]
+                     [TierCache, TierLocalHoogle] Nothing
                      RemoteSkippedOffline)
             Left e ->
-              pure (buildOutcome q [] tiersWithRemote (RemoteFailed e))
+              pure (buildOutcome q [] tiersWithRemote Nothing
+                     (RemoteFailed e))
 
 -- | Pure outcome assembly.  When providers are present we build a
 -- success 'Outcome'; otherwise the failure is surfaced as a typed
@@ -157,13 +178,15 @@ buildOutcome
   :: HoogleQuery           -- ^ query (carried as a domain type)
   -> [Provider]            -- ^ providers (may be empty on failure)
   -> [Tier]                -- ^ tiers actually consulted
+  -> Maybe RemoteSource    -- ^ how the remote tier answered, if it did
   -> RemoteTierOutcome     -- ^ what happened on the remote tier
   -> Either HyphaError (Outcome Value)
-buildOutcome q providers tiers remoteOutcome =
+buildOutcome q providers tiers resolvedFrom remoteOutcome =
   case (providers, remoteOutcome) of
     (_:_, _) -> Right $ Outcome
       { outcomeResult      = lookupResultToJSON
-                               (LookupResult (unHoogleQuery q) providers tiers)
+                               (LookupResult (unHoogleQuery q) providers
+                                             tiers resolvedFrom)
       , outcomeTag         = LookupCmd
       , outcomeOutsidePlan = False
       , outcomeOverrides   = []
@@ -243,9 +266,31 @@ providerToJSON p = object $
   -- version, and a @version: null@ would read as "no version exists".
   <> [ "version" .= unVersion v | Just v <- [pVersion p] ]
 
+-- | Compact field set: what a consumer reads by default.
+--
+-- @tiers_consulted@ is deliberately absent — it is redundant with the
+-- per-provider @tier@.  @resolved_from@ is deliberately present, for the
+-- opposite reason: it is the one thing @tier@ cannot say, since a row
+-- from the remote tier's blob cache and one fetched a moment ago carry
+-- the same tier (issue #41).  A provenance field only visible under
+-- @--select full@ would not have prevented the debugging session that
+-- motivated it.
+compactKeys :: Set Text
+compactKeys = Set.fromList ["query", "providers", "resolved_from"]
+
+-- | Full field set.
+fullKeys :: Set Text
+fullKeys =
+  Set.fromList ["query", "providers", "tiers_consulted", "resolved_from"]
+
 lookupResultToJSON :: LookupResult -> Value
-lookupResultToJSON r = object
+lookupResultToJSON r = object $
   [ "query"           .= lrQuery r
   , "providers"       .= map providerToJSON (lrProviders r)
   , "tiers_consulted" .= map tierLabel (lrTiersConsulted r)
   ]
+  -- Emitted only when the remote tier answered.  Absent is the honest
+  -- answer for the local tiers rather than a "n/a" a consumer has to
+  -- special-case.
+  <> [ "resolved_from" .= remoteSourceLabel src
+     | Just src <- [lrResolvedFrom r] ]
