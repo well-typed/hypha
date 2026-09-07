@@ -10,6 +10,7 @@
 -- the existing components stylesheet.
 module Hypha.Server.Ui.Haddock
   ( renderHaddockHtml
+  , renderHaddockInlineHtml
   ) where
 
 import Data.Text (Text)
@@ -27,6 +28,17 @@ renderHaddockHtml raw
       let meta    = HP.parseParas Nothing (Text.unpack cleaned)
           regular = HP.toRegular (HT._doc meta)
       in fromDocH regular
+  where
+    cleaned = Text.strip raw
+
+-- | Render a one-liner \x2014 a module's @Description@ field, say \x2014 with
+-- its markup honoured but no block wrapper, so it can sit inside a
+-- heading or a subtitle.  'renderHaddockHtml' would wrap it in a @p@.
+renderHaddockInlineHtml :: Text -> Html ()
+renderHaddockInlineHtml raw
+  | Text.null cleaned = mempty
+  | otherwise         =
+      fromDocH (HP.toRegular (HP.parseString (Text.unpack cleaned)))
   where
     cleaned = Text.strip raw
 

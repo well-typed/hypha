@@ -150,6 +150,66 @@ table.source td.code pre {
 /* ------------------------------------------------------------------ */
 /* Source-rendered declaration sections (module doc page)              */
 
+/* The module description's field block (Copyright, License, ...).      */
+/* Collapsed by default: provenance is worth one line, not the top of   */
+/* every page.                                                          */
+.mod-about {
+  margin: 0 0 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  background: var(--panel);
+  font-size: 0.88rem;
+}
+.mod-about-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+.mod-about-summary::-webkit-details-marker { display: none; }
+.mod-about-summary::before {
+  content: "\25B8";
+  color: var(--faint);
+  font-size: 0.8rem;
+}
+.mod-about[open] > .mod-about-summary::before { content: "\25BE"; }
+.mod-about[open] > .mod-about-summary {
+  border-bottom: 1px solid var(--border);
+}
+.mod-about-label { font-weight: 600; }
+.mod-about-chip {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  background: var(--panel-2);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+.mod-about-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 1.2rem;
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+}
+.mod-about-fields dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-top: 0.1rem;
+}
+.mod-about-fields dd {
+  margin: 0;
+  /* Multi-line values (a copyright spanning years, say) keep the line  */
+  /* breaks their author wrote; the indent that carried them collapses. */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.mod-about-fields .spdx-link { color: var(--accent-2); }
+
 .module-prose {
   margin: 0 0 1.4rem;
   line-height: 1.65;

@@ -6,6 +6,31 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Haddock module descriptions are parsed into their structured
+  fields.** The leading `Module :`/`Copyright :`/`License :`/
+  `Maintainer :`/`Stability :`/`Portability :` block of a module comment
+  used to be handed to the markup renderer whole, which glued it into
+  one paragraph of prose (issue #46). The server's module page now shows
+  it as a collapsible "About this module" block holding the same field
+  table Hackage renders, with an SPDX identifier linked to its
+  definition, and puts the `Description` field under the module title as
+  a synopsis — the role Haddock gives it and never shows on the page
+  itself. A module whose comment has no fields renders exactly as
+  before.
+
+  `Hypha.Haddock.ModuleHeader` is a port of upstream's
+  `Haddock.Interface.ParseModuleHeader` ((c) Simon Marlow 2006, Isaac
+  Dupree 2009, BSD-like), semantics kept faithful so the prose hypha
+  renders matches the prose Hackage renders. No library on Hackage
+  offers this: `haddock-library` does not expose it, `haddock-api` pins
+  the `ghc` library to one exact compiler, and `Cabal-syntax`'s
+  `readFields` grammar rejects a braced code block in the prose. The one
+  deliberate departure: fields upstream parses and then discards (an
+  unrecognised key such as `Reviewed-By`) are kept and shown as extra
+  rows rather than silently dropped.
+
 ### Changed
 
 - **Default output format is now YAML** instead of JSON. YAML is
