@@ -82,7 +82,7 @@ at startup, whatever the locale.
 
 The full guide — installation, subcommands, the doc-browser server, MCP
 integration, caching, troubleshooting, and design — lives on the
-**[hypha docs site](https://well-typed.pages.well-typed.com/hypha/)**.
+**[hypha docs site](https://well-typed.github.io/hypha/)**.
 
 ## License
 
