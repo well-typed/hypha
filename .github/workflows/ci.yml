@@ -6,17 +6,26 @@ on:
 
 jobs:
   build:
+    # One job per supported compiler.  `include:` entries define the
+    # combinations here because there is no other matrix dimension — an
+    # `os:` list alongside them would make `os` the only dimension, and
+    # each include entry would merge into that single combination rather
+    # than adding one, overwriting `ghc` in turn until only the last
+    # compiler was ever built.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - ghc: "9.6.7"
+          - os: ubuntu-latest
+            ghc: "9.6.7"
             project: "cabal.ghc-9.6.7.project"
-          - ghc: "9.10.3"
+          - os: ubuntu-latest
+            ghc: "9.10.3"
             project: "cabal.ghc-9.10.3.project"
-          - ghc: "9.12.4"
+          - os: ubuntu-latest
+            ghc: "9.12.4"
             project: "cabal.ghc-9.12.4.project"
-        os: [ubuntu-latest]
+    name: build (ghc ${{ matrix.ghc }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
