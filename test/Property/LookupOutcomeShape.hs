@@ -34,13 +34,14 @@ tests = testGroup "Property.LookupOutcomeShape"
   [ testCase "non-empty providers => Right Outcome with action hints" $
       expectSuccess
         (buildOutcome (HoogleQuery "lookup") [mkProvider]
-                      [TierCache] RemoteNotConsulted) $ \oc ->
+                      [TierCache] Nothing RemoteNotConsulted) $ \oc ->
           assertBool "has actions" (not (Map.null (outcomeActions oc)))
 
   , testCase "empty providers + offline => HOOGLE_OFFLINE failure" $
       expectFailure
         (buildOutcome (HoogleQuery "x") []
-                      [TierCache, TierLocalHoogle] RemoteSkippedOffline) $ \err -> do
+                      [TierCache, TierLocalHoogle] Nothing
+                      RemoteSkippedOffline) $ \err -> do
           errorCode err @?= "HOOGLE_OFFLINE"
           assertBool "has actions" (not (Map.null (errorActions err)))
 
@@ -48,7 +49,7 @@ tests = testGroup "Property.LookupOutcomeShape"
       expectFailure
         (buildOutcome (HoogleQuery "x") []
                       [TierCache, TierLocalHoogle, TierRemoteHoogle]
-                      (RemoteFailed (RemoteHttp "boom"))) $ \err -> do
+                      Nothing (RemoteFailed (RemoteHttp "boom"))) $ \err -> do
           errorCode err @?= "HOOGLE_REMOTE_ERROR"
           assertBool "carries retry_offline"
             (Map.member "retry_offline" (errorActions err))
@@ -57,7 +58,7 @@ tests = testGroup "Property.LookupOutcomeShape"
       expectFailure
         (buildOutcome (HoogleQuery "Ord b => (a -> b) -> [a] -> [a]") []
                       [TierCache, TierLocalHoogle, TierRemoteHoogle]
-                      (RemoteFailed (RemoteHttp "boom"))) $ \err -> do
+                      Nothing (RemoteFailed (RemoteHttp "boom"))) $ \err -> do
           -- Unquoted, "=>" makes the shell truncate the file the
           -- suggestion tells the user to run.
           Map.lookup "retry_offline" (errorActions err)
@@ -73,7 +74,7 @@ tests = testGroup "Property.LookupOutcomeShape"
       expectFailure
         (buildOutcome (HoogleQuery "sortOn") []
                       [TierCache, TierLocalHoogle, TierRemoteHoogle]
-                      RemoteEmpty) $ \err ->
+                      Nothing RemoteEmpty) $ \err ->
           Map.lookup "retry_with_prefix" (errorActions err)
             @?= Just "hypha lookup 'sortOn*'"
 
@@ -81,6 +82,6 @@ tests = testGroup "Property.LookupOutcomeShape"
       expectFailure
         (buildOutcome (HoogleQuery "x") []
                       [TierCache, TierLocalHoogle, TierRemoteHoogle]
-                      RemoteEmpty) $ \err ->
+                      Nothing RemoteEmpty) $ \err ->
           errorCode err @?= "NOT_FOUND"
   ]

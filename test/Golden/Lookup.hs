@@ -14,7 +14,8 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 
 import Hypha.Command.Lookup
-  ( Provider (..), RemoteTierOutcome (..), buildOutcome )
+  ( Provider (..), RemoteTierOutcome (..), buildOutcome, compactKeys )
+import Hypha.Hoogle.Remote (RemoteSource (..))
 import Hypha.Error (HyphaError)
 import Hypha.Hoogle.Remote (RemoteError (..))
 import Hypha.Hoogle.Tier (Tier (..))
@@ -30,6 +31,7 @@ tests = testGroup "Golden.Lookup"
   [ goldenCase "lookup-cache-hit"         cacheHitOutcome
   , goldenCase "lookup-local-hoogle-hit"  localHitOutcome
   , goldenCase "lookup-remote-hit"        remoteHitOutcome
+  , goldenCase "lookup-remote-cached"     remoteCachedOutcome
   , goldenCase "lookup-all-miss"          missOutcome
   , goldenCase "lookup-remote-error"      remoteErrorOutcome
   , goldenCase "lookup-offline"           offlineOutcome
@@ -40,8 +42,10 @@ tests = testGroup "Golden.Lookup"
     goldPath n = "test" </> "Golden" </> "golden" </> (n <> ".compact.json")
     encode = either
       (encodeEnvelopeValue envOpts . encodeErrorEnvelope)
-      (encodeOutcomeBytes envOpts
-        (Set.fromList ["query", "providers"])
+      -- The command's own compact set, not a copy of it: a golden that
+      -- pinned its own key list would keep passing while the CLI stopped
+      -- emitting the field.
+      (encodeOutcomeBytes envOpts compactKeys
         (Set.fromList ["query", "providers", "tiers_consulted"]))
     envOpts = EnvelopeOpts False [] False
 
@@ -57,29 +61,41 @@ mkProvider t = Provider "containers" "Data.Map" "lookup"
 cacheHitOutcome :: Either HyphaError (Outcome Value)
 cacheHitOutcome =
   buildOutcome (HoogleQuery "lookup") [mkProvider TierCache]
-               [TierCache] RemoteNotConsulted
+               [TierCache] Nothing RemoteNotConsulted
 
 localHitOutcome :: Either HyphaError (Outcome Value)
 localHitOutcome =
   buildOutcome (HoogleQuery "lookup")
     [mkProvider TierLocalHoogle]
-    [TierCache, TierLocalHoogle] RemoteNotConsulted
+    [TierCache, TierLocalHoogle] Nothing RemoteNotConsulted
 
 remoteHitOutcome :: Either HyphaError (Outcome Value)
 remoteHitOutcome =
   buildOutcome (HoogleQuery "lookup")
     [mkProvider TierRemoteHoogle]
-    [TierCache, TierLocalHoogle, TierRemoteHoogle] RemoteNotConsulted
+    [TierCache, TierLocalHoogle, TierRemoteHoogle] (Just FromNetwork)
+    RemoteNotConsulted
+
+-- | The shape issue #41 was about: the remote tier answered, but from
+-- its blob cache.  Indistinguishable from 'remoteHitOutcome' before
+-- @resolved_from@ existed -- both printed @tier: remote-hoogle@ and
+-- nothing else.
+remoteCachedOutcome :: Either HyphaError (Outcome Value)
+remoteCachedOutcome =
+  buildOutcome (HoogleQuery "lookup")
+    [mkProvider TierRemoteHoogle]
+    [TierCache, TierLocalHoogle, TierRemoteHoogle] (Just FromCache)
+    RemoteNotConsulted
 
 missOutcome :: Either HyphaError (Outcome Value)
 missOutcome = buildOutcome (HoogleQuery "doesNotExist") []
-  [TierCache, TierLocalHoogle, TierRemoteHoogle] RemoteEmpty
+  [TierCache, TierLocalHoogle, TierRemoteHoogle] Nothing RemoteEmpty
 
 remoteErrorOutcome :: Either HyphaError (Outcome Value)
 remoteErrorOutcome = buildOutcome (HoogleQuery "x") []
-  [TierCache, TierLocalHoogle, TierRemoteHoogle]
+  [TierCache, TierLocalHoogle, TierRemoteHoogle] Nothing
   (RemoteFailed (RemoteHttp "timeout after 10s"))
 
 offlineOutcome :: Either HyphaError (Outcome Value)
 offlineOutcome = buildOutcome (HoogleQuery "x") []
-  [TierCache, TierLocalHoogle] RemoteSkippedOffline
+  [TierCache, TierLocalHoogle] Nothing RemoteSkippedOffline

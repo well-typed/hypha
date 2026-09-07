@@ -928,8 +928,7 @@ reportError err =
 -- distinction yet (alpha).
 compactKeysFor, fullKeysFor :: ClientCommandTag -> Set Text
 compactKeysFor = \case
-  -- tiers_consulted dropped from compact: redundant with per-provider 'tier'.
-  LookupCmd   -> Set.fromList ["query", "providers"]
+  LookupCmd   -> Lookup.compactKeys
   PackageCmd  -> Package.compactKeys
   VersionsCmd -> Versions.compactKeys
   ModuleCmd   -> Module.compactKeys
@@ -938,7 +937,7 @@ compactKeysFor = \case
   DepsCmd     -> Deps.compactKeys
   SymbolCmd   -> Symbol.compactKeys
 fullKeysFor = \case
-  LookupCmd   -> Set.fromList ["query", "providers", "tiers_consulted"]
+  LookupCmd   -> Lookup.fullKeys
   PackageCmd  -> Package.fullKeys
   VersionsCmd -> Versions.fullKeys
   ModuleCmd   -> Module.fullKeys

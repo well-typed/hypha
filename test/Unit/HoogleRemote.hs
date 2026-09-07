@@ -13,8 +13,9 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 
 import Hypha.Hoogle.Remote
-  ( RemoteError (..), RemoteHoogleTransport (..), RemoteOptions (..)
-  , cacheKey, defaultRemoteOptions, searchRemoteWith )
+  ( RemoteAnswer (..), RemoteError (..), RemoteHoogleTransport (..)
+  , RemoteOptions (..), RemoteSource (..), cacheKey, defaultRemoteOptions
+  , searchRemoteWith )
 import Hypha.Hoogle.Type (HoogleHit (..), HoogleQuery (..))
 import Hypha.Search.Cache (writeBlob)
 import Hypha.Search.PackageCache (hyphaGlobalCache, openPackageCacheAt)
@@ -52,9 +53,14 @@ tests = testGroup "Unit.HoogleRemote"
         seen <- readIORef counter
         seen @?= 1
         case (r1, r2) of
-          (Right hs1, Right hs2) -> do
-            hs1 @?= [HoogleHit "foo" "Foo" "bar" "a -> a" ""]
-            hs2 @?= hs1
+          (Right a1, Right a2) -> do
+            raHits a1 @?= [HoogleHit "foo" "Foo" "bar" "a -> a" ""]
+            raHits a2 @?= raHits a1
+            -- The point of the pair: same rows, different provenance.
+            -- Only the second call could be answered from disk, and the
+            -- envelope had no way to say so (issue #41).
+            raResolvedFrom a1 @?= FromNetwork
+            raResolvedFrom a2 @?= FromCache
           _ -> assertFailure ("unexpected: " <> show (r1, r2))
 
   , testCase "offline mode short-circuits" $
@@ -83,8 +89,11 @@ tests = testGroup "Unit.HoogleRemote"
             opts = defaultRemoteOptions { roOffline = True }
         r <- searchRemoteWith transport opts c q
         case r of
-          Right hits ->
-            hits @?= [HoogleHit "foo" "Foo" "bar" "a -> a" ""]
+          Right answer -> do
+            raHits answer @?= [HoogleHit "foo" "Foo" "bar" "a -> a" ""]
+            -- The transport would have failed the test if called, so this
+            -- came off disk -- and now says so.
+            raResolvedFrom answer @?= FromCache
           other -> assertFailure ("unexpected: " <> show other)
 
   , testCase "offline + corrupt cache reports RemoteDecode, not offline" $
@@ -119,7 +128,7 @@ tests = testGroup "Unit.HoogleRemote"
                 >> pure (Left RemoteOffline)
             opts = defaultRemoteOptions { roOffline = True }
         r <- searchRemoteWith transport opts c q
-        r @?= Right []
+        r @?= Right (RemoteAnswer FromCache [])
 
   , testCase "malformed JSON returns RemoteDecode" $
       withSystemTempDirectory "hypha-rh" $ \tmp -> do
