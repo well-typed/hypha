@@ -33,7 +33,7 @@ the same data.
 ## Install
 
 ```bash
-git clone https://gitlab.well-typed.com/well-typed/hypha.git
+git clone https://github.com/well-typed/hypha.git
 cd hypha && cabal install exe:hypha exe:hypha-mcp
 ```
 
@@ -82,7 +82,7 @@ at startup, whatever the locale.
 
 The full guide — installation, subcommands, the doc-browser server, MCP
 integration, caching, troubleshooting, and design — lives on the
-**[hypha docs site](https://well-typed.pages.well-typed.com/hypha/)**.
+**[hypha docs site](https://well-typed.github.io/hypha/)**.
 
 ## License
 

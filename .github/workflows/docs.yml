@@ -1,0 +1,68 @@
+name: docs
+
+# The mdBook site: built on every push and pull request so a broken
+# SUMMARY, a missing chapter or a bad book.toml fails visibly, and deployed
+# to GitHub Pages from main only.
+#
+# Deployment is a separate job that needs the build, so a red Haskell CI run
+# cannot hold the docs back — the same decoupling the GitLab pipeline got
+# from its `needs: [docs-build]` DAG edge.
+#
+# mdBook comes from its GitHub release rather than a Rust toolchain: one
+# download, no cargo build.  Bump the version deliberately.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A superseded deploy is worth cancelling; a superseded build is not, since
+# pull-request builds are the check.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: "0.4.40"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mdBook
+        run: |
+          curl -fsSL \
+            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            -o mdbook.tar.gz
+          tar -xzf mdbook.tar.gz
+
+      - name: Check the book
+        run: python3 website/check-book.py
+
+      - name: Build the book
+        run: ./mdbook build website
+
+      - name: Upload the Pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/book
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

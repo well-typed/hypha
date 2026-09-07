@@ -17,7 +17,7 @@ vendor the binaries themselves.
 Inside a Claude Code session:
 
 ```
-/plugin marketplace add https://gitlab.well-typed.com/well-typed/hypha.git
+/plugin marketplace add https://github.com/well-typed/hypha.git
 /plugin install hypha@well-typed
 ```
 

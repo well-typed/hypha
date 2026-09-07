@@ -4,7 +4,7 @@
 - **Status:** Draft (design)
 - **Author:** Alfredo Di Napoli (with Claude Code)
 - **Branch:** `adinapoli/more-server-improvements`
-- **Issue:** [#11](https://gitlab.well-typed.com/well-typed/hypha/-/issues/11)
+- **Issue:** [#11](https://github.com/well-typed/hypha/issues/11)
   — "`hypha server` gets confused about the internal exports when searching"
 
 ## Problem

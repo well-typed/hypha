@@ -61,7 +61,7 @@ When assigned an issue:
 ```
 1. cd .worktrees/agent-N/                            # your worktree
 2. git fetch origin && git merge origin/main         # stay current
-3. glab issue view XXX                               # read the full issue
+3. gh issue view XXX                                 # read the full issue
 4. git checkout -b agent-N/issue-XXX-<short-desc>    # feature branch
 5. Implement exactly what the issue says
 6. Run: cabal build all && cabal test all
@@ -76,24 +76,27 @@ When assigned an issue:
 ### Blocked?
 
 If you cannot proceed (missing dependency, unclear spec, failing test you can't fix):
-1. Comment on the GitLab issue explaining the blocker (`glab issue note XXX -m "..."`)
+1. Comment on the issue explaining the blocker (`gh issue comment XXX -b "..."`)
 2. Unassign yourself from it
 3. Tell the human what's blocking you
 
 ## Issue Tracker
 
-Work is tracked in **GitLab issues** on
-<https://gitlab.well-typed.com/well-typed/hypha/-/issues>. There is no
+Work is tracked in **GitHub issues** on
+<https://github.com/well-typed/hypha/issues>. There is no
 file-based board in this repo — never create one.
 
-Use the `glab` CLI (needs `GITLAB_HOST=gitlab.well-typed.com`):
+Use the `gh` CLI:
 
 ```bash
-glab issue list                  # open issues
-glab issue view XXX              # read one
-glab issue note XXX -m "..."     # comment (progress, blockers, findings)
-glab issue create -t "..." -d "..."   # file new work you discover
+gh issue list                    # open issues
+gh issue view XXX                # read one
+gh issue comment XXX -b "..."    # comment (progress, blockers, findings)
+gh issue create -t "..." -b "..."     # file new work you discover
 ```
+
+Issue numbers carried over from the GitLab project one-for-one, so a
+`Closes #XXX` trailer in the history still names the issue it closed.
 
 - **To start work:** assign the issue to yourself, so concurrent agents see it is taken.
 - **To finish work:** reference it from the commit (`Closes #XXX`) — the merge closes it.
@@ -104,7 +107,7 @@ Never work on an issue without assigning it to yourself first.
 ## How to Pick Up Work (if human doesn't assign)
 
 1. Read the master spec (`docs/superpowers/specs/2026-05-18-hypha-design.md`) for context.
-2. `glab issue list` and pick the next unblocked unassigned issue.
+2. `gh issue list` and pick the next unblocked unassigned issue.
 3. Assign it to yourself.
 4. Implement exactly what the issue says.
 5. Run `cabal build all && cabal test all` before declaring done.

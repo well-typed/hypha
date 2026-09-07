@@ -9,11 +9,11 @@ language = "en"
 additional-css = ["hypha.css"]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-git-repository-url = "https://gitlab.well-typed.com/well-typed/hypha"
-edit-url-template = "https://gitlab.well-typed.com/well-typed/hypha/-/edit/main/website/{path}"
-# site-url is intentionally unset until the GitLab Pages URL is known.
-# Relative links work regardless; set this to the path prefix (e.g. "/hypha/")
-# once Pages is enabled so absolute asset links resolve.
+git-repository-url = "https://github.com/well-typed/hypha"
+edit-url-template = "https://github.com/well-typed/hypha/edit/main/website/{path}"
+# GitHub Pages serves a project site under /<repo>/, so the prefix is known
+# up front — unlike GitLab Pages, whose URL the instance assigned.
+site-url = "/hypha/"
 
 [output.html.fold]
 enable = true
