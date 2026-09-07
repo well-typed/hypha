@@ -33,6 +33,36 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`hypha source` returns the symbol's own span, not a window around
+  it.** The snippet was a flat 30 lines centred on the definition line,
+  so it swept in whichever declarations happened to follow and truncated
+  mid-comment at the far edge (issue #55). `hypha source
+  base/Data.List/sortOn` answered with `sortOn`, then `singleton`, then
+  half of `unfoldr`'s Haddock.
+
+  The snippet is now cut from the declaration's own lines — doc comment,
+  signature and body — computed from the parse tree by
+  `Parser.declSourceSpan`. Not clamped: the point of `source` is to hand
+  over the whole of something.
+
+  A request naming no symbol (`hypha source base/Data.List`) returns the
+  module header — its `-- |` block, `module M` clause and export list —
+  instead of the first 16 lines of the file, which was an arbitrary cut
+  at both ends.
+
+  Output carries a `span` object (`kind`, `start`, `end`) saying which
+  lines came back and what determined them: `declaration`,
+  `module_header`, or `window` when a package scan found a line number
+  and nothing more. A caller can now tell an exact answer from a
+  fallback, which the old uniform window made impossible. `line` keeps
+  its meaning — the definition's line — so existing consumers are
+  unaffected.
+
+  The resolved path also stops re-reading the module: a located
+  definition already carries the declaration and the module text from
+  the parse that found it, which is the duplicate read `SymbolSite` was
+  split to prevent.
+
 - **Extension resolution now applies GHC's implication table.** A module
   whose only pragma is `{-# LANGUAGE TemplateHaskell #-}` failed to parse
   its own top-level splices — `parse error on input '$'` — and the module
