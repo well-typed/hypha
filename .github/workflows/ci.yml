@@ -33,6 +33,33 @@ jobs:
         with:
           ghc-version: ${{ matrix.ghc }}
           cabal-version: '3.12'
+
+      # Dependencies are the whole cost of a run: 25 minutes from cold, of
+      # which the package itself is a couple.  The cache is keyed on the
+      # compiler plus the committed freeze file, which between them pin every
+      # dependency version — so the key changes exactly when the built
+      # artifacts would have to be rebuilt anyway, and never otherwise.
+      #
+      # Only ~/.cabal/store is cached: it holds the built dependencies, which
+      # is the expensive part.  ~/.cabal/packages is deliberately left out —
+      # it carries the Hackage index, hundreds of megabytes whose restore
+      # would eat much of what the cache saves.
+      - name: Cache the cabal store
+        uses: actions/cache@v4
+        with:
+          path: ~/.cabal/store
+          key: cabal-store-${{ runner.os }}-ghc${{ matrix.ghc }}-${{ hashFiles(format('{0}.freeze', matrix.project)) }}
+          # A miss on the exact key still starts from the last store built
+          # for this compiler, so a single bumped pin does not cost a full
+          # rebuild.
+          restore-keys: cabal-store-${{ runner.os }}-ghc${{ matrix.ghc }}-
+
       - run: cabal update
+
+      # Split out from the build below so the log says plainly how much of a
+      # run was dependencies — which is what makes a cache hit visible.
+      - name: Build dependencies
+        run: cabal build all --enable-tests --only-dependencies --project-file=${{ matrix.project }}
+
       - run: cabal build all --enable-tests --project-file=${{ matrix.project }}
       - run: cabal test all --project-file=${{ matrix.project }}
