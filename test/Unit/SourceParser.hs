@@ -307,6 +307,33 @@ tests = testGroup "Unit.SourceParser"
           assertBool "insertBag found" ("insertBag" `elem` names)
           assertBool "sizeBag found"   ("sizeBag"   `elem` names)
 
+  , testCase "a top-level TH splice parses on the pragma alone (issue #47)" $ do
+      -- The module states TemplateHaskell and nothing else, exactly as
+      -- api-tools' Data.API.Error does.  GHC parses it because
+      -- TemplateHaskell implies TemplateHaskellQuotes, and the lexer gates
+      -- @$(@ and @\'\'Name@ on the implied flag rather than the named one.
+      -- hypha applied no implications, so this failed with
+      -- @parse error on input `$\'@ and the module page fell back to an
+      -- export list.
+      let src = Text.unlines
+            [ "{-# LANGUAGE TemplateHaskell #-}"
+            , "module M where"
+            , ""
+            , "import Data.Aeson.TH (deriveJSON, defaultOptions)"
+            , ""
+            , "data Expected = Expected"
+            , ""
+            , "$(deriveJSON defaultOptions \'\'Expected)"
+            ]
+      case parseModuleDoc "M.hs" src of
+        Left e   -> fail ("splice module did not parse: "
+                            <> Text.unpack (parseErrorMessage e))
+        Right (_, ds) ->
+          -- The splice itself declares nothing we can name, but the
+          -- declarations around it must survive it.
+          assertBool "the type beside the splice is still found"
+            ("Expected" `elem` map declName ds)
+
   , testCase "parse failure carries GHC's message and a line" $ do
       let src = Text.unlines
             [ "module M where"

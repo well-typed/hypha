@@ -52,7 +52,7 @@ import GHC.Data.Bag qualified as Bag
 import GHC.Data.EnumSet qualified as EnumSet
 import GHC.Data.StringBuffer qualified as SB
 import GHC.Driver.Session
-  ( Language (..), flagSpecFlag, flagSpecName, languageExtensions
+  ( Language (..), flagSpecFlag, flagSpecName, impliedXFlags, languageExtensions
   , supportedLanguagesAndExtensions, xFlags )
 import GHC.LanguageExtensions.Type (Extension)
 import GHC.Platform.ArchOS (Arch (..), ArchOS (..), OS (..))
@@ -166,6 +166,13 @@ extensionFromFlagName raw
 -- @Arrows@, @LinearTypes@, @TransformListComp@, @OverloadedRecordDot@ —
 -- so those still require an explicit pragma, exactly as they do for the
 -- compiler.
+--
+-- Setting an extension applies everything GHC says it implies, which is
+-- not a nicety: the lexer gates @$(@ on @TemplateHaskellQuotes@, and a
+-- module whose only pragma is @TemplateHaskell@ relies on the
+-- implication to get it.  Without that, such a module failed to parse
+-- with @parse error on input `$'@ (issue #47) — and 35 other
+-- implications were missing with it.  See 'setExtension'.
 resolveExtensions
   :: LanguageSettings
   -> [Text]                    -- ^ pragma names, source order
@@ -179,12 +186,39 @@ resolveExtensions ls names =
       applied   = Foldable.foldl' apply EnumSet.empty (base ++ fromPragmas)
   in (applied, unknown)
   where
-    apply acc (x, True)  = EnumSet.insert x acc
+    apply acc (x, True)  = setExtension x acc
+    -- Turning one off does /not/ turn off what it implied, matching
+    -- GHC's @unSetExtensionFlag'@ — which is why a later @No…@ pragma
+    -- wins over an earlier implication rather than cascading.
     apply acc (x, False) = EnumSet.delete x acc
 
     partitionResolved ns =
       let (bad, good) = partitionEithers (map extensionFromFlagName ns)
       in (bad, concat good)
+
+-- | Enable an extension the way GHC's @setExtensionFlag'@ does: the
+-- extension itself, then, recursively, everything it implies.
+--
+-- The table is GHC's own 'impliedXFlags' rather than a list of our own —
+-- there are 36 entries, two of which turn a flag /off/
+-- (@RebindableSyntax@ implies @NoImplicitPrelude@) and five of which
+-- chain (@UnliftedDatatypes@ implies @StandaloneKindSignatures@, which
+-- implies @NoCUSKs@), so a hand-kept copy would be wrong within one
+-- compiler release.
+--
+-- The membership guard is GHC's own "setting a set flag is a no-op" and,
+-- at the same time, what makes this terminate: every recursive step
+-- inserts an extension that was absent, so the recursion is bounded by
+-- the number of extensions however a future GHC rearranges the table.
+setExtension :: Extension -> EnumSet.EnumSet Extension -> EnumSet.EnumSet Extension
+setExtension x acc
+  | EnumSet.member x acc = acc
+  | otherwise            = Foldable.foldl' step (EnumSet.insert x acc) implied
+  where
+    implied = [ (turnOn, y) | (x', turnOn, y) <- impliedXFlags, x' == x ]
+
+    step acc' (True,  y) = setExtension y acc'
+    step acc' (False, y) = EnumSet.delete y acc'
 
 -- | What one pass over a module's pragma block found.
 --

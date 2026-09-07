@@ -7,6 +7,11 @@ module Unit.SourceExtensions (tests) where
 
 import qualified Data.Text as Text
 
+import Data.List (sort)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (mapMaybe)
+
+import GHC.Driver.Session (impliedXFlags)
 import qualified GHC.Data.EnumSet as EnumSet
 import qualified GHC.LanguageExtensions as LangExt
 
@@ -16,7 +21,7 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import Hypha.Source.Extensions
   ( LanguageSettings (..), PragmaScan (..), UnknownExtension (..)
   , defaultLanguageSettings, extensionFromFlagName
-  , resolveExtensions, scanPragmas )
+  , resolveExtensions, scanPragmas, supportedExtensionNames )
 
 tests :: TestTree
 tests = testGroup "Unit.SourceExtensions"
@@ -125,4 +130,66 @@ tests = testGroup "Unit.SourceExtensions"
         ])
       psExtensionNames scan @?= ["RoleAnnotations"]
       assertBool "and the failure is reported" (not (null (psDiagnostics scan)))
+
+  , testCase "every extension GHC implies is implied here too" $ do
+      -- GHC does not apply an extension in isolation: setting one applies
+      -- everything it implies, recursively (@setExtensionFlag\'@).  Skipping
+      -- that is what made a module whose only pragma is @TemplateHaskell@
+      -- fail to parse its own splices, since the lexer gates @$(@ on the
+      -- implied @TemplateHaskellQuotes@ (issue #47).
+      --
+      -- Checked against GHC\'s own table, exhaustively rather than by
+      -- sampling: it has 36 entries today and this tracks whatever a
+      -- compiler bump makes of it.
+      let failures = mapMaybe checkImplication impliedXFlags
+      assertBool (unlines ("implications GHC applies and we do not:" : failures))
+                 (null failures)
+
+  , testCase "an explicit No- wins over an implication, as it does for GHC" $ do
+      -- Un-setting deliberately does not un-imply, so order is what
+      -- decides: the pragma naming NoTemplateHaskellQuotes comes second.
+      let (exts, _) = resolveExtensions defaultLanguageSettings
+                        ["TemplateHaskell", "NoTemplateHaskellQuotes"]
+      assertBool "TemplateHaskell still on"
+        (EnumSet.member LangExt.TemplateHaskell exts)
+      assertBool "the explicit No- won"
+        (not (EnumSet.member LangExt.TemplateHaskellQuotes exts))
+
+  , testCase "implications chain to a fixpoint" $ do
+      -- UnliftedDatatypes implies StandaloneKindSignatures, which in turn
+      -- implies NoCUSKs: one pass over the table would miss the second hop.
+      let (exts, _) = resolveExtensions defaultLanguageSettings
+                        ["UnliftedDatatypes"]
+      assertBool "StandaloneKindSignatures implied"
+        (EnumSet.member LangExt.StandaloneKindSignatures exts)
+      assertBool "and CUSKs turned off through it"
+        (not (EnumSet.member LangExt.CUSKs exts))
   ]
+  where
+    -- | The @-X@ name for an extension, inverted from the names hypha
+    -- already accepts.  Only names that resolve to exactly one
+    -- positively-set extension are usable as a probe.
+    extensionNames :: Map.Map LangExt.Extension Text.Text
+    extensionNames = Map.fromList
+      [ (x, Text.pack n)
+      | n <- sort supportedExtensionNames
+      , Right [(x, True)] <- [extensionFromFlagName (Text.pack n)]
+      ]
+
+    -- | 'Nothing' when GHC\'s implication holds here as well.
+    checkImplication (implier, turnOn, implied) =
+      case Map.lookup implier extensionNames of
+        -- No @-X@ name means no pragma can name it, so there is nothing
+        -- for us to resolve; say so rather than passing quietly.
+        Nothing -> Just ("  " <> show implier <> ": no -X name to probe with")
+        Just name ->
+          let (exts, unknown) =
+                resolveExtensions defaultLanguageSettings [name]
+              got = EnumSet.member implied exts
+          in if not (null unknown)
+               then Just ("  " <> Text.unpack name <> ": reported unknown")
+               else if got == turnOn
+                 then Nothing
+                 else Just ("  " <> Text.unpack name <> " should "
+                              <> (if turnOn then "imply " else "disable ")
+                              <> show implied)
