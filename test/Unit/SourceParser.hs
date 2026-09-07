@@ -16,9 +16,10 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import Hypha.Source.Extensions
   ( PragmaScan (..), UnknownExtension (..), defaultLanguageSettings
   , resolveExtensions, scanPragmas )
+import Hypha.Source.Parser (moduleHeaderSpan, parseModuleWith)
 import Hypha.Source.Parser
   ( Decl (..), DeclKind (..), ParseError (..), parseDecls, parseErrorMessage
-  , parseModuleDoc, findDecl, declSigText )
+  , parseModuleDoc, findDecl, declSigText, declSourceSpan )
 
 tests :: TestTree
 tests = testGroup "Unit.SourceParser"
@@ -306,6 +307,103 @@ tests = testGroup "Unit.SourceParser"
           let names = map declName ds
           assertBool "insertBag found" ("insertBag" `elem` names)
           assertBool "sizeBag found"   ("sizeBag"   `elem` names)
+
+  , testCase "moduleHeaderSpan covers the header doc and the export list" $ do
+      -- What `hypha source PKG/MOD` answers with when no symbol is named.
+      -- It used to emit the first 16 lines of the file, which is an
+      -- arbitrary cut that neither ends at the export list nor starts at
+      -- anything meaningful.
+      let src = Text.unlines
+            [ "{-# LANGUAGE Haskell2010 #-}"   -- 1
+            , "-- | Lists, and things."        -- 2
+            , "--"                             -- 3
+            , "-- Second paragraph."           -- 4
+            , "module M"                       -- 5
+            , "  ( foo"                        -- 6
+            , "  , bar"                        -- 7
+            , "  ) where"                      -- 8
+            , ""                               -- 9
+            , "foo :: Int"                     -- 10
+            , "foo = 1"                        -- 11
+            , ""
+            , "bar :: Int"
+            , "bar = 2"
+            ]
+      case parseModuleWith defaultLanguageSettings "M.hs" src of
+        Left e            -> fail ("unexpected parse error: "
+                                     <> Text.unpack (parseErrorMessage e))
+        Right (hsMod, _, _) -> moduleHeaderSpan hsMod @?= Just (2, 8)
+
+  , testCase "declSourceSpan spans the doc, signature and body (issue #55)" $ do
+      -- The span a source snippet is cut from.  It has to stop before the
+      -- next declaration: `hypha source` used to answer with a flat
+      -- 30-line window, which trailed off into whatever followed.
+      let src = Text.unlines
+            [ "module M where"            --  1
+            , ""                          --  2
+            , "-- | Sort a list."         --  3
+            , "-- more prose."            --  4
+            , "--"                        --  5
+            , "-- @since 4.8.0.0"         --  6
+            , "sortOn :: Int -> Int"      --  7
+            , "sortOn x ="                --  8
+            , "  x + 1"                   --  9
+            , ""                          -- 10
+            , "-- | Another symbol."      -- 11
+            , "singleton :: Int"          -- 12
+            , "singleton = 1"             -- 13
+            ]
+      case parseDecls "M.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> Text.unpack (parseErrorMessage e))
+        Right ds -> case findDecl "sortOn" ds of
+          Nothing -> fail "sortOn not found"
+          Just d  -> declSourceSpan d @?= Just (3, 9)
+
+  , testCase "declSourceSpan takes in a trailing -- ^ block" $ do
+      let src = Text.unlines
+            [ "module M where"        -- 1
+            , ""                      -- 2
+            , "answer :: Int"         -- 3
+            , "answer = 42"           -- 4
+            , "-- ^ The answer."      -- 5
+            ]
+      case parseDecls "M.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> Text.unpack (parseErrorMessage e))
+        Right ds -> case findDecl "answer" ds of
+          Nothing -> fail "answer not found"
+          Just d  -> declSourceSpan d @?= Just (3, 5)
+
+  , testCase "declSourceSpan of an undocumented binding is just its own lines" $ do
+      let src = Text.unlines
+            [ "module M where"     -- 1
+            , ""                   -- 2
+            , "bare :: Int"        -- 3
+            , "bare = 1"           -- 4
+            ]
+      case parseDecls "M.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> Text.unpack (parseErrorMessage e))
+        Right ds -> case findDecl "bare" ds of
+          Nothing -> fail "bare not found"
+          Just d  -> declSourceSpan d @?= Just (3, 4)
+
+  , testCase "declSourceSpan of a data declaration covers the whole body" $ do
+      let src = Text.unlines
+            [ "module M where"          -- 1
+            , ""                        -- 2
+            , "-- | A colour."          -- 3
+            , "data Colour"             -- 4
+            , "  = Red"                 -- 5
+            , "  | Green"               -- 6
+            , "  deriving Show"         -- 7
+            , ""                        -- 8
+            , "other :: Int"            -- 9
+            , "other = 1"               -- 10
+            ]
+      case parseDecls "M.hs" src of
+        Left e   -> fail ("unexpected parse error: " <> Text.unpack (parseErrorMessage e))
+        Right ds -> case findDecl "Colour" ds of
+          Nothing -> fail "Colour not found"
+          Just d  -> declSourceSpan d @?= Just (3, 7)
 
   , testCase "a top-level TH splice parses on the pragma alone (issue #47)" $ do
       -- The module states TemplateHaskell and nothing else, exactly as

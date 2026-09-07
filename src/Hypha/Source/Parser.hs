@@ -26,6 +26,8 @@ module Hypha.Source.Parser
   , declSigText
   , declSigTextIn
   , declSigOrSliceIn
+  , declSourceSpan
+  , moduleHeaderSpan
   , numberedLines
   , renderRdrName
   ) where
@@ -96,6 +98,16 @@ data Decl = Decl
     -- the parse tree's 'DocD' nodes, not by line scanning, so blank
     -- lines / stray comments / CPP between the doc and the declaration
     -- are handled exactly as Haddock handles them.
+  , declDocSpan    :: !(Maybe (Int, Int))
+    -- ^ The lines the attached doc block(s) occupy in the original
+    -- source, 1-based and inclusive.
+    --
+    -- One span rather than two, even though a @-- |@ block sits before
+    -- the declaration and a @-- ^@ block after it: the only consumer is
+    -- 'declSourceSpan', which wants one contiguous slice, and unioning
+    -- the two with the declaration's own lines yields exactly that.  It
+    -- is therefore not a reliable answer to \"where are the docs\" on a
+    -- declaration carrying both.
   }
   deriving stock (Show, Eq)
 
@@ -267,6 +279,55 @@ parseModuleIO ls path source = do
        L.PFailed st' ->
          Left (parseFailure unknown (Extensions.psDiagnostics scan) st')
 
+-- | The lines a declaration occupies in the original source, doc
+-- comment included: the union of its doc block, its signature span and
+-- its definition span.
+--
+-- This is what a source snippet is cut from.  It ends where the
+-- declaration ends, which a fixed window around the definition line
+-- cannot do — that window trailed off into whichever declarations
+-- happened to follow (issue #55).
+--
+-- 'Nothing' when the parse anchored none of the three, which is the
+-- honest answer for a declaration we could not place.
+declSourceSpan :: Decl -> Maybe (Int, Int)
+declSourceSpan d =
+  Foldable.foldl' unionSpan Nothing
+    [ declDocSpan d
+    , pairSpan (declSigLine d) (declSigEndLine d)
+    , pairSpan (declDefLine d) (declDefEndLine d)
+    ]
+  where
+    -- A start with no end is a one-line span, not an absent one.
+    pairSpan (Just start) (Just end) = Just (start, end)
+    pairSpan (Just start) Nothing    = Just (start, start)
+    pairSpan Nothing      _          = Nothing
+
+-- | The lines the module header occupies: its @-- |@ block, the
+-- @module M@ clause and the export list.
+--
+-- What @hypha source PKG\/MOD@ answers with when no symbol is named.
+-- 'Nothing' for a module with no header at all — a bare @where@-less
+-- module, or one whose header the parse could not place.
+moduleHeaderSpan :: HsModule GhcPs -> Maybe (Int, Int)
+moduleHeaderSpan m =
+  Foldable.foldl' unionSpan Nothing [docSpan, nameSpan, exportSpan]
+  where
+    docSpan    = spanOf . getLoc =<< hsmodHaddockModHeader (hsmodExt m)
+    nameSpan   = spanOf . locA . getLoc =<< hsmodName m
+    exportSpan = spanOf . locA . getLoc =<< hsmodExports m
+
+    spanOf s = case spanLines s of
+      (Just start, Just end) -> Just (start, end)
+      _                      -> Nothing
+
+-- | The smallest span covering both, when either exists.
+unionSpan :: Maybe (Int, Int) -> Maybe (Int, Int) -> Maybe (Int, Int)
+unionSpan Nothing              y                    = y
+unionSpan x                    Nothing              = x
+unionSpan (Just (aS, aE))      (Just (bS, bE))      =
+  Just (min aS bS, max aE bE)
+
 -- | Turn a failed parser state into our typed error, keeping GHC's own
 -- diagnostic and the line it points at.
 parseFailure
@@ -426,8 +487,10 @@ associateDocs = go Nothing []
   where
     go _       acc []          = reverse acc
     go pending acc (ld : rest) = case unLoc ld of
-      DocD _ (DocCommentNext d) -> go (pending `appendDoc` Just (docTextOf d)) acc rest
-      DocD _ (DocCommentPrev d) -> go pending (attachPrev (docTextOf d) acc) rest
+      DocD _ (DocCommentNext d) ->
+        go (pending `appendPending` pendingAt ld (docTextOf d)) acc rest
+      DocD _ (DocCommentPrev d) ->
+        go pending (attachPrev (pendingAt ld (docTextOf d)) acc) rest
       -- Named chunks and section headers are not a declaration's doc.
       DocD _ _                  -> go pending acc rest
       -- Any real top-level node consumes the pending @-- |@ block: a
@@ -437,6 +500,12 @@ associateDocs = go Nothing []
       _ -> let ds = nodeDecls pending ld
            in go Nothing (reverse ds ++ acc) rest
 
+    -- The doc block's own lines come from the node GHC located it at, so
+    -- no comment scanning is needed to find where a snippet should start.
+    pendingAt ld txt = PendingDoc txt (case spanLines (locA (getLoc ld)) of
+      (Just start, Just end) -> Just (start, end)
+      _                      -> Nothing)
+
     -- A @-- ^@ block names the declaration it follows, which is the
     -- preceding /node/ — the type, class or function — not the last
     -- constructor or method that node's body happened to contribute.
@@ -445,10 +514,12 @@ associateDocs = go Nothing []
     -- @-- ^ A colour.@ documents @Colour@, and used to document @Green@.
     -- (A body member's own @-- ^@ never reaches here: it lives inside the
     -- body and is associated by 'classMethods'.)
-    attachPrev txt acc = case break isTopLevel acc of
+    attachPrev p acc = case break isTopLevel acc of
       (_,    [])       -> acc
       (subs, d : rest) ->
-        subs ++ (d { declDoc = declDoc d `appendDoc` Just txt } : rest)
+        subs ++ (d { declDoc     = declDoc d `appendDoc` Just (pdText p)
+                   , declDocSpan = declDocSpan d `unionSpan` pdSpan p
+                   } : rest)
 
     isTopLevel d = declParent d == Nothing
 
@@ -459,12 +530,34 @@ associateDocs = go Nothing []
 -- the type's prose to its members.  Everything else (a multi-name
 -- signature, a function) belongs to one declaration, so its doc goes to
 -- each sibling.
-nodeDecls :: Maybe Text -> LHsDecl GhcPs -> [Decl]
+nodeDecls :: Maybe PendingDoc -> LHsDecl GhcPs -> [Decl]
 nodeDecls pending ld = case unLoc ld of
   TyClD{} -> case declsFromTop ld of
     []         -> []
-    (d : rest) -> d { declDoc = pending } : rest
-  _ -> [ dcl { declDoc = pending } | dcl <- declsFromTop ld ]
+    (d : rest) -> withPending d : rest
+  _ -> [ withPending dcl | dcl <- declsFromTop ld ]
+  where
+    withPending d = d { declDoc     = pdText <$> pending
+                      , declDocSpan = pdSpan =<< pending
+                      }
+
+-- | A doc block waiting to be attached to the declaration it names: its
+-- text, and the lines it occupies.  The span travels with the text so a
+-- caller slicing source can include the comment, which is why the doc
+-- association pass carries this rather than a bare 'Text'.
+data PendingDoc = PendingDoc
+  { pdText :: !Text
+  , pdSpan :: !(Maybe (Int, Int))
+  }
+
+-- | Merge a newly seen doc block into the pending one, text and span
+-- together.  Contiguous blocks read as two paragraphs, as in 'appendDoc'.
+appendPending :: Maybe PendingDoc -> PendingDoc -> Maybe PendingDoc
+appendPending Nothing     new = Just new
+appendPending (Just prev) new = Just PendingDoc
+  { pdText = pdText prev <> "\n\n" <> pdText new
+  , pdSpan = pdSpan prev `unionSpan` pdSpan new
+  }
 
 -- | Combine two optional doc blocks, joining with a blank line so a
 -- @-- |@ / @-- ^@ pair on the same binding reads as two paragraphs.
@@ -531,6 +624,7 @@ mergeByName = go []
         -- render; the definition half never does.
       , declSignature  = declSignature a  `orFirst` declSignature b
       , declDoc        = declDoc a        `appendDoc` declDoc b
+      , declDocSpan    = declDocSpan a    `unionSpan` declDocSpan b
       }
 
     -- A merged type and its same-named constructor is the type: parent
@@ -602,6 +696,7 @@ sigDecl nm names mS mE k parent = Decl
   , declDefEndLine = Nothing
   , declSignature  = Nothing
   , declDoc        = Nothing
+  , declDocSpan    = Nothing
   }
 
 -- | @name[, name...] :: type@, rendered from the parse tree.
@@ -727,6 +822,7 @@ defDecl nm mS mE k parent = Decl
   , declDefEndLine = mE
   , declSignature  = Nothing
   , declDoc        = Nothing
+  , declDocSpan    = Nothing
   }
 
 -- | The class body's methods as declarations in their own right: every
