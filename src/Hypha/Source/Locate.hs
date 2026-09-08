@@ -30,10 +30,10 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
-import qualified Data.Text.IO as TIO
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 
+import Hypha.Encoding (readSourceFile)
 import Hypha.BuildEnv.Type     (BuildEnv (..))
 import Hypha.Search.Index      (DefinitionRef (..), ModuleSource (..))
 import Hypha.Search.Reexport   (DefinitionSite (..))
@@ -73,7 +73,7 @@ listExportedSymbols env pid modPath = do
       if not ok
         then pure []
         else exportedNamesOf Extensions.defaultLanguageSettings f
-               =<< TIO.readFile f
+               =<< readSourceFile f
 
 -- | 'Interface.exportedNamesIO' with the failure reported rather than
 -- rendered as "this module exports nothing", which is what an empty list
@@ -615,7 +615,7 @@ enumerateHs dir depth = do
 -- report @Data\/Set\/Internal.hs@.
 scanFileE :: Text -> FilePath -> IO (Either Parser.ParseError (Maybe SourceLocation))
 scanFileE sym f = do
-  src <- TIO.readFile f
+  src <- readSourceFile f
   pure $ case Parser.parseDecls f src of
     Left e      -> Left e
     Right decls -> Right $ do

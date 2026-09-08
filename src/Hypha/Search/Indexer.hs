@@ -47,11 +47,11 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.IO qualified as TIO
 import System.Directory qualified as Dir
 import System.FilePath qualified as FP
 import System.IO (hPutStrLn, stderr)
 
+import Hypha.Encoding (readSourceFile)
 import Hypha.Error (errorMessage)
 import Hypha.Package.Resolver (PackageResolver (..))
 import Hypha.Project.BuildContext (BuildContext)
@@ -228,15 +228,27 @@ buildAndCacheIndex plan cache resolver oracle env0 pids ref doneRef =
     -- the progress bar continues to read in package units.
     bump = IORef.atomicModifyIORef' doneRef (\n -> (n + 1, ()))
 
+    -- One unit, fenced: whatever goes wrong inside it — a source the
+    -- resolver cannot produce, a file that will not read, a parser
+    -- blowing up — is that unit's problem.  Reported and skipped, so the
+    -- packages after it in the build order still get indexed rather than
+    -- silently missing while the server reports itself ready.
     indexUnit env pid = do
+      r <- Exception.try (indexUnitUnfenced env pid)
+      case r of
+        Right env' -> pure env'
+        -- The wrapped exception, not the 'SomeException': displaying the
+        -- wrapper appends GHC's backtrace, which is noise on a line the
+        -- user reads to learn which package went missing and why.
+        Left (Exception.SomeException e) -> do
+          skip pid (Text.pack (Exception.displayException e))
+          pure env
+
+    indexUnitUnfenced env pid = do
       eDir <- resolveSrc resolver pid
       case eDir of
         Left err -> do
-          hPutStrLn stderr $
-            "hypha index: no source for "
-              <> Text.unpack (unPackageName (pkgName pid)) <> ": "
-              <> Text.unpack (errorMessage err)
-          bump
+          skip pid ("no source: " <> errorMessage err)
           pure env
         Right d -> do
           comps <- componentsForUnit plan pid d
@@ -244,6 +256,12 @@ buildAndCacheIndex plan cache resolver oracle env0 pids ref doneRef =
           publishRows ref [Fuzzy.mkPackageRow (pkgName pid) (pkgVersion pid)]
           bump
           pure env'
+
+    skip pid why = do
+      hPutStrLn stderr $
+        "hypha index: skipping " <> Text.unpack (unPackageName (pkgName pid))
+          <> ": " <> Text.unpack why
+      bump
 
     indexComponent pid env (kind, srcDirs) = do
       let pkgT    = unPackageName (pkgName    pid)
@@ -800,7 +818,7 @@ loadModuleSources srcDirs = fmap catMaybes . mapM loadOne
       case mFile of
         Nothing -> pure Nothing
         Just f  -> do
-          content <- TIO.readFile f
+          content <- readSourceFile f
           pure (Just ModuleSource
             { msDeclaredName = ModulePath modPath
             , msPath         = f

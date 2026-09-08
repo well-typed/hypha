@@ -7,8 +7,13 @@
 -- HTML are UTF-8 by their own specs.
 module Hypha.Encoding
   ( setUtf8Encoding
+  , readSourceFile
   ) where
 
+import qualified Data.ByteString as BS
+import Data.Text (Text)
+import qualified Data.Text.Encoding as Text
+import Data.Text.Encoding.Error (lenientDecode)
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import GHC.IO.Encoding.Failure (CodingFailureMode (RoundtripFailure))
 import GHC.IO.Encoding.UTF8 (mkUTF8)
@@ -40,3 +45,13 @@ setUtf8Encoding = do
 
   hSetEncoding stdout utf8
   hSetEncoding stderr utf8
+
+-- | Read a Haskell source file the way GHC does: as UTF-8, with every
+-- undecodable byte replaced by U+FFFD rather than refused.
+--
+-- Hackage still carries Latin-1 sources (@c2hs-0.28.8@'s @Text.Lexers@
+-- has an @ä@ in a comment), and GHC compiles them.  A strict decode
+-- turns each of those into an exception at read time, which is the
+-- wrong outcome for a module whose declarations are all ASCII.
+readSourceFile :: FilePath -> IO Text
+readSourceFile = fmap (Text.decodeUtf8With lenientDecode) . BS.readFile

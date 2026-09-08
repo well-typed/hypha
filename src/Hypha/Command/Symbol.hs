@@ -17,8 +17,8 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
-import qualified Data.Text.IO as TIO
 
+import Hypha.Encoding (readSourceFile)
 import Hypha.BuildEnv.Type (BuildEnv)
 import Hypha.Command.Source qualified as Source
 import Hypha.Error (HyphaError (..), UserErrorReason (..))
@@ -154,7 +154,7 @@ cardFor sym site = case site of
     }
   Source.SweptSite loc -> do
     let f = Locate.slPath loc
-    src  <- TIO.readFile f
+    src  <- readSourceFile f
     info <- symbolInfoOf f src (unSymbolName sym)
     pure (CardSource info f Nothing)
 
