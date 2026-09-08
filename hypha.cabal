@@ -278,6 +278,7 @@ test-suite hypha-tests
     Unit.SourceLocate
     Unit.SourceOrigins
     Unit.SourceParser
+    Unit.SourceRead
   build-depends:
     , aeson
     , async

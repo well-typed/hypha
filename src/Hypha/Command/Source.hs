@@ -24,9 +24,9 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson (Value (..), (.=))
 import Data.Set qualified as Set
 import Data.Set (Set)
-import Data.Text.IO qualified as TIO
 import Data.Text qualified as Text
 import Data.Text (Text)
+import Hypha.Encoding (readSourceFile)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Cli.Types
 import Hypha.Error (HyphaError (..), NotFoundReason (..))
@@ -229,7 +229,7 @@ declarationSnippet = \case
   -- A package scan yields a line number and nothing more: no
   -- declaration, so no span to cut.
   SweptSite loc -> do
-    content <- TIO.readFile (slPath loc)
+    content <- readSourceFile (slPath loc)
     pure (windowAround (slLine loc) content)
 
 -- | The module header, for a request that named no symbol: its doc
@@ -261,7 +261,7 @@ moduleHeaderSnippet ctx srcDir modPath = do
       filePath <- liftMaybe
         (NotFound (NotFoundModuleFileUnder srcDir modPath))
         =<< liftIO (findModuleFile srcDir modPath)
-      content <- liftIO (TIO.readFile filePath)
+      content <- liftIO (readSourceFile filePath)
       pure (Extensions.defaultLanguageSettings, filePath, content)
 
   spanned <- case Parser.parseModuleWith langs path content of

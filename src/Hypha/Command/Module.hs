@@ -11,8 +11,8 @@ import Data.Aeson (Value, object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Set (Set)
-import Data.Text.IO qualified as TIO
 import Data.Text (Text)
+import Hypha.Encoding (readSourceFile)
 import Hypha.BuildEnv.Type   (BuildEnv)
 import Hypha.Cli.Types
 import Hypha.Output.Outcome  (Outcome (..))
@@ -40,7 +40,7 @@ runModuleFromDir srcDir pid modPath = do
   mFile <- findModuleFile srcDir modPath
   exps <- case mFile of
     Nothing -> pure []
-    Just f  -> exportedNamesOf defaultLanguageSettings f =<< TIO.readFile f
+    Just f  -> exportedNamesOf defaultLanguageSettings f =<< readSourceFile f
   pure (toOutcome pid modPath exps)
 
 toOutcome :: PackageId -> Text -> [Text] -> Outcome Value

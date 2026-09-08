@@ -38,6 +38,7 @@ import Data.Text.IO qualified as TIO
 import Data.Text qualified as Text
 import Data.Text (Text)
 import GHC.Natural (Natural)
+import Hypha.Encoding (readSourceFile)
 import Hypha.BuildEnv.Type (BuildEnv (..))
 import Hypha.Haddock.Generate (ensureHaddockFor)
 import Hypha.Package.Resolver ( PackageResolver (..), ResolvedPackage (..) )
@@ -327,7 +328,7 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
             mFile <- Locate.findModuleFileIn dirs modT
             case mFile of
               Nothing -> pure Nothing
-              Just f  -> Just <$> TIO.readFile f
+              Just f  -> Just <$> readSourceFile f
     , App.scPackageInfo  = \pkgT -> do
         let cn   = parseComponentName pkgT
         ePid <- resolvePkg resolver (cnPackage cn)
@@ -424,7 +425,7 @@ moduleDocFor cacheRoot plan env resolver cache pkgT modT = do
             f <- liftMaybeReason
                    ("module " <> modT <> " has no source file in the package")
                    (Locate.findModuleFileIn dirs modT)
-            src   <- lift (TIO.readFile f)
+            src   <- lift (readSourceFile f)
             -- Through the parse tree, like every other view: the header
             -- scraper this replaced could not tell @Map(..)@ from @Map@,
             -- and it was the degraded page -- the one a reader reaches
@@ -645,7 +646,7 @@ importedSourcesFor cache scope resolver pkgT asking = do
                   report comp m "no source file under its package root"
                   pure Nothing
                 Just f -> do
-                  content <- TIO.readFile f
+                  content <- readSourceFile f
                   pure (Just (m, (comp, Index.ModuleSource
                     { Index.msDeclaredName = m
                     , Index.msPath         = f

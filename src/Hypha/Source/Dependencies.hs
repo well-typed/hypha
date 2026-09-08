@@ -56,9 +56,9 @@ import Data.Maybe (catMaybes, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as Text
-import Data.Text.IO qualified as TIO
 import System.IO (hPutStrLn, stderr)
 
+import Hypha.Encoding (readSourceFile)
 import Hypha.Error (errorMessage)
 import Hypha.Package.Resolver (PackageResolver (..))
 import Hypha.Project.Components qualified as Comp
@@ -258,7 +258,7 @@ lookupModule plan resolver mkOracle ref m = go
       }
 
     readEntry entry = do
-      content <- TIO.readFile (oeFile entry)
+      content <- readSourceFile (oeFile entry)
       pure OutsideModule
         { omComponent = oeComponent entry
         , omLanguage  = oeLanguage entry

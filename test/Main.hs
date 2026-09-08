@@ -62,6 +62,7 @@ import qualified Unit.SourceDependencies
 import qualified Unit.SourceLocate
 import qualified Unit.SourceOrigins
 import qualified Unit.SourceParser
+import qualified Unit.SourceRead
 
 import Hypha.Encoding (setUtf8Encoding)
 
@@ -135,4 +136,5 @@ allTests = testGroup "hypha"
   , Unit.SourceLocate.tests
   , Unit.SourceOrigins.tests
   , Unit.SourceParser.tests
+  , Unit.SourceRead.tests
   ]
