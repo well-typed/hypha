@@ -9,7 +9,7 @@ import System.IO.Temp (withSystemTempDirectory)
 
 import qualified Data.Map.Strict as Map
 
-import Hypha.Project.Discovery (DiscoveryError (..))
+import Hypha.Project.Discovery (DiscoveryError (..), cabalStoreBase)
 
 import Hypha.Types.BuildPlan
 import Hypha.Types.PackageId (PackageName (..), Version (..))
@@ -21,6 +21,7 @@ tests :: TestTree
 tests = testGroup "Unit.Project"
   [ testDiscovery
   , testDiscoveryIgnoresDotCabalDir
+  , testStoreDirFromProjectFiles
   , testLoadBuildPlan
   , testLoadPlanVersionsAgrees
   , testParseOverride
@@ -57,6 +58,30 @@ testDiscoveryIgnoresDotCabalDir =
         Right (ProjectRoot r) ->
           error ("Expected NoProjectFound, found " <> r)
         Left NoProjectFound{} -> pure ()
+
+-- | @store-dir@ is read the way cabal reads it: @cabal.project.local@
+-- over @cabal.project@, a relative path against the project root.
+-- A project built into a non-default store is otherwise served from
+-- whatever @~/.cabal/store@ happens to hold, silently.
+testStoreDirFromProjectFiles :: TestTree
+testStoreDirFromProjectFiles =
+  testCase "cabalStoreBase honours store-dir from the project files" $
+    withSystemTempDirectory "hypha-store" $ \root -> do
+      writeFile (root </> "cabal.project") $ unlines
+        [ "packages: .", "store-dir: /stores/from-project" ]
+      fromProject <- cabalStoreBase (Just (ProjectRoot root))
+      fromProject @?= "/stores/from-project"
+
+      writeFile (root </> "cabal.project.local") $ unlines
+        [ "tests: true", "-- the store this checkout builds into"
+        , "store-dir: /stores/from-local", "", "package foo"
+        , "  ghc-options: -Wall", "  store-dir: /stores/not-a-thing-here" ]
+      fromLocal <- cabalStoreBase (Just (ProjectRoot root))
+      fromLocal @?= "/stores/from-local"
+
+      writeFile (root </> "cabal.project.local") "store-dir: .store\n"
+      relative <- cabalStoreBase (Just (ProjectRoot root))
+      relative @?= root </> ".store"
 
 testLoadBuildPlan :: TestTree
 testLoadBuildPlan = testCase "loadBuildPlan parses fixture plan.json" $

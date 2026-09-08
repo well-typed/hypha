@@ -56,7 +56,7 @@ import Hypha.Output.Outcome
 import Hypha.Package.Resolver
 import Hypha.Prelude (warnOnLeft)
 import Hypha.Project.Components qualified as Comp
-import Hypha.Project.Discovery (discoverProjectRoot)
+import Hypha.Project.Discovery (cabalStoreBase, discoverProjectRoot)
 import Hypha.Project.Fingerprint qualified as Fingerprint
 import Hypha.Project.Overrides (parsePackageOverride)
 import Hypha.Project.Plan (loadBuildPlan, loadPlanVersions, planHash)
@@ -239,8 +239,7 @@ loadResolverAndPlan = do
 -- 'offlineNullBuildEnv' rather than a real store-backed one.
 mkBasicBuildEnv :: IO (BuildEnv IO)
 mkBasicBuildEnv = do
-  home <- getHomeDirectory
-  let storeBase = home </> ".cabal" </> "store"
+  storeBase  <- cabalStoreBase Nothing
   candidates <- candidateStoreDirs storeBase
   tryStores candidates []
   where
@@ -484,7 +483,7 @@ runLookupCommand q = do
       let d = x </> "no-project"
       createDirectoryIfMissing True d
       pure d
-  storeRoot <- liftIO defaultStoreRoot
+  storeRoot <- liftIO (defaultStoreRoot mRoot)
   distRoot  <- liftIO defaultDistDocRoot
   hoogleLocal <- liftIO $ HogLocal.openLocalHoogle dotHypha storeRoot distRoot
 
@@ -660,14 +659,13 @@ planHashFromText t =
   Text.decodeUtf8
     (Base16.encode (SHA256.hash (Text.encodeUtf8 t)))
 
--- | Best-effort lookup of the active GHC's cabal store.  When the
--- environment is non-standard we return @\"\"@; 'scavengeStoreTxt'
--- treats that as \"no scavenging available\" and falls back to
--- 'defaultHaddockRunner'.
-defaultStoreRoot :: IO FilePath
-defaultStoreRoot = do
-  home <- getHomeDirectory
-  let base = home </> ".cabal" </> "store"
+-- | Best-effort lookup of the active GHC's cabal store for a project.
+-- When the environment is non-standard we return @\"\"@;
+-- 'scavengeStoreTxt' treats that as \"no scavenging available\" and
+-- falls back to 'defaultHaddockRunner'.
+defaultStoreRoot :: Maybe ProjectRoot -> IO FilePath
+defaultStoreRoot mRoot = do
+  base <- cabalStoreBase mRoot
   ok <- doesDirectoryExist base
   if not ok
     then pure ""
@@ -722,9 +720,9 @@ defaultDistDocRoot = do
 -- be opened, announcing the underlying 'CabalStoreError' on @stderr@
 -- so the degraded state is never silent.
 mkBuildEnv :: ProjectRoot -> BuildPlan -> IO (BuildEnv IO)
-mkBuildEnv (ProjectRoot _) plan = do
-  home <- getHomeDirectory
-  ghcVer <- sniffGhcOrUnknown
+mkBuildEnv root plan = do
+  storeBase <- cabalStoreBase (Just root)
+  ghcVer    <- sniffGhcOrUnknown
   let CompilerId cid = bpCompiler plan
       planVer        = Text.takeWhileEnd (/= '-') cid
       -- The plan may carry a sentinel ("unknown") or be empty when
@@ -739,7 +737,7 @@ mkBuildEnv (ProjectRoot _) plan = do
     then pure (offlineNullBuildEnv ghcVer)
     else do
       let ghcDir   = "ghc-" <> Text.unpack verForStore
-          storeDir = home </> ".cabal" </> "store" </> ghcDir
+          storeDir = storeBase </> ghcDir
       warnOnLeft renderCabalStoreError (offlineNullBuildEnv ghcVer)
                  (mkCabalBuildEnv storeDir)
 
