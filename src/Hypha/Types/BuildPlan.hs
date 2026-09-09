@@ -97,8 +97,9 @@ data PlannedUnit = PlannedUnit
     -- ^ Provenance of the package source (Hackage, SRP overlay, local
     -- directory, etc.), derived from @plan.json@.
   , puSrcDir  :: !(Maybe FilePath)
-    -- ^ Source root from plan.json (pkg-src.path).
-    -- 'Just p' for inplace/local packages, 'Nothing' otherwise.
+    -- ^ Where the unit's source is on disk: @pkg-src.path@ for a local
+    -- package, cabal's @dist-newstyle/src@ checkout for a
+    -- @source-repository-package@, 'Nothing' for a store package.
   , puDistDir :: !(Maybe FilePath)
     -- ^ Build directory from plan.json (dist-dir).
     -- Used to locate pre-built Haddock HTML for local packages.

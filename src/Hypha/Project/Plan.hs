@@ -1,6 +1,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 module Hypha.Project.Plan
   ( -- * Types
     PlanError (..)
@@ -12,16 +13,22 @@ module Hypha.Project.Plan
   , planHash
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Exception.Safe (IOException, try)
+import Control.Monad (filterM)
+import Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
 import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString.Base16 as Base16
 import Data.List (sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
+import qualified Data.Text.IO as TIO
 
 import qualified Cabal.Plan as CP
 
@@ -34,12 +41,16 @@ import Hypha.Project.BuildContext (BuildContext (..))
 import qualified Hypha.Project.Components as Comp
 import qualified Hypha.Project.GhcIncludes as Inc
 import qualified Hypha.Source.CppMacros as Cpp
-import System.IO (hPutStrLn, stderr)
 import Hypha.Types.BuildPlan
   ( BuildPlan (..), CompilerId (..), PackageOrigin (..), PlannedUnit (..)
   , ProjectRoot (..) )
 import Hypha.Types.PackageId
   ( PackageId (..), PackageName (..), UnitId (..), Version (..) )
+import System.Directory
+  ( doesDirectoryExist, doesFileExist, getModificationTime, listDirectory )
+import System.FilePath
+  ( (</>), dropTrailingPathSeparator, normalise, takeDirectory )
+import System.IO (hPutStrLn, stderr)
 
 -- | What a plan pins for one package: the version, and the configuration
 -- cabal resolved it in.
@@ -65,20 +76,24 @@ data PlanError
 -- | Load the build plan from @dist-newstyle\/cache\/plan.json@
 --   relative to the project root.
 --
---   Uses @cabal-plan@'s @findAndDecodePlanJson@ for robust discovery.
---   For every unit whose source directory is known (either inplace via
---   @pkg-src.path@, or — see 'Hypha.Project.Plan' Task 5 — resolved
---   through the source cache) we read its @.cabal@ file and stash the
---   list of library components on the 'PlannedUnit'.  This drives
---   sub-library indexing in @hypha server@.
+--   Uses @cabal-plan@'s @findPlanJson@ for robust discovery.  For every
+--   unit whose source directory is known (inplace via @pkg-src.path@, a
+--   @source-repository-package@ checkout under @dist-newstyle/src@, or
+--   resolved through the source cache) we read its @.cabal@ file and
+--   stash the list of library components on the 'PlannedUnit'.  This
+--   drives sub-library indexing in @hypha server@.
 loadBuildPlan :: FilePath -> ProjectRoot -> IO (Either PlanError BuildPlan)
 loadBuildPlan cacheRoot (ProjectRoot root) = do
-  result <- try @IO @IOException
-              (CP.findAndDecodePlanJson (CP.ProjectRelativeToDir root))
+  result <- try @IO @IOException $ do
+    planPath <- CP.findPlanJson (CP.ProjectRelativeToDir root)
+    (planPath,) <$> CP.decodePlanJson planPath
   case result of
     Left e   -> pure (Left (PlanNotFound (show e)))
-    Right pj -> do
+    Right (planPath, pj) -> do
       cache <- Src.enumerateSourceCache (sourceCacheRoot cacheRoot)
+      -- @<builddir>/cache/plan.json@, so the checkouts are two levels up.
+      checkouts <- sourceRepoCheckouts
+                     (takeDirectory (takeDirectory planPath) </> "src")
       -- How every module in this plan is to be read: the macros it is
       -- preprocessed against, the compiler headers it may include, and
       -- the platform its stanzas resolve for.  Derived here because this
@@ -86,7 +101,7 @@ loadBuildPlan cacheRoot (ProjectRoot root) = do
       -- every package version at once, and derived once rather than per
       -- module.
       ctx   <- buildContextFor cacheRoot pj
-      units <- unitsFromPlan pj cache ctx
+      units <- unitsFromPlan pj cache checkouts ctx
       pure (Right (BuildPlan
         { bpCompiler     = compilerFromPlan pj
         , bpUnits        = units
@@ -232,12 +247,15 @@ compilerFromPlan pj =
 unitsFromPlan
   :: CP.PlanJson
   -> Map FilePath FilePath
-     -- ^ @\"pkg-ver\" -> sourceDir@ for dependency packages.  Empty in
-     -- this task; Task 5 populates it from the source cache.
+     -- ^ @\"pkg-ver\" -> sourceDir@ for dependency packages, from the
+     -- source cache.
+  -> [FilePath]
+     -- ^ Every @source-repository-package@ checkout directory cabal has
+     -- made for this project; see 'sourceRepoCheckouts'.
   -> BuildContext
      -- ^ How this plan's sources are read: CPP environment + platform.
   -> IO (Map PackageName PlannedUnit)
-unitsFromPlan pj sourceCacheLookup ctx = do
+unitsFromPlan pj sourceCacheLookup checkouts ctx = do
       -- A package contributes one unit per component (lib, exes, test
       -- suites).  The map below is keyed by package *name* and
       -- 'Map.fromList' retains the last duplicate, so order units
@@ -250,7 +268,7 @@ unitsFromPlan pj sourceCacheLookup ctx = do
         [ (CP.uId u, CP.uPId u) | u <- allUnits ]
   pairs <- mapM
     (\u -> do
-       pu <- toPlannedUnit unitIdToPkgId sourceCacheLookup ctx u
+       pu <- toPlannedUnit unitIdToPkgId sourceCacheLookup checkouts ctx u
        let CP.PkgId (CP.PkgName pkgText) _ = CP.uPId u
        pure (PackageName pkgText, pu))
     allUnits
@@ -260,10 +278,11 @@ unitsFromPlan pj sourceCacheLookup ctx = do
 toPlannedUnit
   :: Map CP.UnitId CP.PkgId
   -> Map FilePath FilePath
+  -> [FilePath]
   -> BuildContext
   -> CP.Unit
   -> IO PlannedUnit
-toPlannedUnit unitIdToPkgId sourceCacheLookup ctx u = do
+toPlannedUnit unitIdToPkgId sourceCacheLookup checkouts ctx u = do
   let CP.PkgId (CP.PkgName name) ver = CP.uPId u
       pkgId   = PackageId (PackageName name) (Version (CP.dispVer ver))
       libDeps = concatMap (Set.toList . CP.ciLibDeps) (Map.elems (CP.uComps u))
@@ -271,8 +290,18 @@ toPlannedUnit unitIdToPkgId sourceCacheLookup ctx u = do
                 | uid <- libDeps
                 , Just pid <- [Map.lookup uid unitIdToPkgId]
                 ]
-      srcDir  = extractSrcDir (CP.uPkgSrc u)
       depKey  = Text.unpack name <> "-" <> Text.unpack (CP.dispVer ver)
+  -- Where the unit's source is, when it is on disk somewhere we know.
+  -- Tarballs of every kind are not: they go through the source cache.
+  srcDir <- case CP.uPkgSrc u of
+    Nothing                               -> pure Nothing
+    Just (CP.LocalUnpackedPackage p)      -> pure (Just p)
+    Just (CP.LocalTarballPackage _)       -> pure Nothing
+    Just (CP.RemoteTarballPackage _)      -> pure Nothing
+    Just (CP.RepoTarballPackage _)        -> pure Nothing
+    Just (CP.RemoteSourceRepoPackage sr)  ->
+      locateSourceRepoCheckout checkouts (Text.unpack name) sr
+  let
       sourceDir = case srcDir of
         Just d  -> Just d
         Nothing -> Map.lookup depKey sourceCacheLookup
@@ -299,12 +328,97 @@ componentsFor d ctx = do
     Just c  -> Comp.parseLibComponents c d ctx
     Nothing -> pure []
 
--- | Extract the source directory from a @PkgLoc@ value.
--- Returns 'Just p' for 'LocalUnpackedPackage' (inplace/local packages),
--- 'Nothing' for all other package source types.
-extractSrcDir :: Maybe CP.PkgLoc -> Maybe FilePath
-extractSrcDir (Just (CP.LocalUnpackedPackage p)) = Just p
-extractSrcDir _                                   = Nothing
+-- | Every directory cabal has checked a @source-repository-package@ out
+-- into: the subdirectories of @<builddir>/src@.  Listed once per plan
+-- load and shared by every unit, since a real project has hundreds of
+-- entries there.  The directory is named after the /repository/ plus a
+-- hash, so a unit cannot be found by name; see
+-- 'locateSourceRepoCheckout'.
+sourceRepoCheckouts :: FilePath -> IO [FilePath]
+sourceRepoCheckouts srcRoot = do
+  -- A project without SRPs has no such directory; that is not a failure.
+  exists <- doesDirectoryExist srcRoot
+  if not exists
+    then pure []
+    else do
+      r <- try @IO @IOException (listDirectory srcRoot)
+      case r of
+        Right entries -> filterM doesDirectoryExist (map (srcRoot </>) entries)
+        Left e        -> do
+          hPutStrLn stderr $
+            "warning: cannot list source-repository checkouts under "
+              <> srcRoot <> ": " <> show e
+              <> "; their packages will resolve as if never checked out"
+          pure []
+
+-- | The checkout a @source-repository-package@ unit builds from.
+--
+-- A checkout qualifies when its package root — the repository's
+-- @subdir@, if the stanza names one — holds @<pkg>.cabal@.  cabal
+-- re-checks a repository out every time the stanza's tag moves and never
+-- removes the old copies, so several may qualify: the one whose git
+-- @HEAD@ resolves to the plan's commit wins, and among those (or when
+-- none does) the most recently modified repository root.
+locateSourceRepoCheckout
+  :: [FilePath] -> String -> CP.SourceRepo -> IO (Maybe FilePath)
+locateSourceRepoCheckout checkouts name sr = do
+  -- Normalised so a @subdir@ of @haskell-bee/@ or @./pkgs/x@ yields the
+  -- same path the plain form does.
+  let pkgDir repo = dropTrailingPathSeparator
+                      (normalise (repo </> fromMaybe "" (CP.srSubdir sr)))
+      roots = [ (repo, pkgDir repo) | repo <- checkouts ]
+  matching <- filterM (\(_, d) -> doesFileExist (d </> name <> ".cabal")) roots
+  ranked   <- mapM rank matching
+  pure (fst <$> listToMaybe (sortOn snd ranked))
+  where
+    -- Sort key: pinned-commit matches first, then newest first.  The
+    -- repository root's mtime, not the package dir's: git only bumps a
+    -- directory when an entry is added or removed under it.
+    rank (repo, d) = do
+      atPin <- case CP.srTag sr of
+        Nothing  -> pure False
+        Just tag -> (== Just (Text.strip tag)) <$> gitHeadCommit repo
+      mtime <- getModificationTime repo
+      pure (d, (Down atPin, Down mtime))
+
+-- | The commit a git checkout is at, or 'Nothing' when the directory is
+-- not one (a tarball unpack, another VCS).
+--
+-- cabal's sync leaves @HEAD@ as a symbolic ref, so the commit is in the
+-- named ref, loose under @.git/refs@ or in @.git/packed-refs@ after a gc.
+-- A bare hash in @HEAD@ is a detached checkout.
+gitHeadCommit :: FilePath -> IO (Maybe Text)
+gitHeadCommit repo = runMaybeT $ do
+  headTxt <- MaybeT (gitFile "HEAD")
+  case Text.stripPrefix "ref: " headTxt of
+    Nothing  -> pure headTxt
+    Just ref -> MaybeT (gitFile (Text.unpack ref)) <|> MaybeT (packedRef ref)
+  where
+    gitFile rel = readIfExists (repo </> ".git" </> rel)
+    packedRef ref = do
+      packed <- readIfExists (repo </> ".git" </> "packed-refs")
+      pure $ listToMaybe
+        [ commit
+        | line <- maybe [] Text.lines packed
+        , [commit, r] <- [Text.words line]
+        , r == ref
+        ]
+
+-- | A file's stripped text, 'Nothing' when there is no such file.  A file
+-- that exists but will not read is reported, since the caller cannot
+-- tell that apart from absence and would pick another checkout on it.
+readIfExists :: FilePath -> IO (Maybe Text)
+readIfExists f = do
+  exists <- doesFileExist f
+  if not exists
+    then pure Nothing
+    else do
+      r <- try @IO @IOException (TIO.readFile f)
+      case r of
+        Right t -> pure (Just (Text.strip t))
+        Left e  -> do
+          hPutStrLn stderr ("warning: cannot read " <> f <> ": " <> show e)
+          pure Nothing
 
 -- | Map a @cabal-plan@ source location to our coarser 'PackageOrigin'.
 -- We do not surface 'OriginSourceRepo' metadata that the plan omits;
@@ -322,20 +436,13 @@ originFromPkgLoc = \case
       -- Prefer explicit tag, fall back to branch — cabal stores the
       -- resolved commit hash in @tag@ for @source-repository-package@
       -- pinned via @tag:@ but in @branch@ when only a branch is given.
-      (firstJust (CP.srTag sr) (CP.srBranch sr))
+      (CP.srTag sr <|> CP.srBranch sr)
       (CP.srSubdir sr)
 
 -- | Convert a cabal-plan PkgId to our PackageId type.
 toPackageId :: CP.PkgId -> PackageId
 toPackageId (CP.PkgId (CP.PkgName name) ver) =
   PackageId (PackageName name) (Version (CP.dispVer ver))
-
--- | Like @<|>@ on 'Maybe', spelt out to keep the dependency surface
--- small; @Control.Applicative@ would do but we already avoid importing
--- it here.
-firstJust :: Maybe a -> Maybe a -> Maybe a
-firstJust (Just x) _ = Just x
-firstJust Nothing  y = y
 
 -- | SHA-256 (hex) over the in-memory plan.  Used as the staleness
 -- stamp for the local Hoogle DB: when the set of pinned
