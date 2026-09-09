@@ -238,6 +238,7 @@ test-suite hypha-tests
     Unit.BuildPlanOrder
     Unit.CliParser
     Unit.Components
+    Unit.ComponentModules
     Unit.CppMacros
     Unit.Doctor
     Unit.EmbeddedAssets

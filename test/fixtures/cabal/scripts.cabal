@@ -1,0 +1,29 @@
+cabal-version: 3.0
+name:          scripts
+version:       0.1.0
+synopsis:      Fixture package whose executables live beside unbuilt scripts
+build-type:    Simple
+
+library
+  default-language: Haskell2010
+  hs-source-dirs:   lib
+  exposed-modules:  Scripts.Lib
+  build-depends:    base
+
+-- main-is beside an other-modules list: the stanza list is non-empty, so
+-- it is trusted, and the main module has to be in it.
+executable alpha-tool
+  default-language: Haskell2010
+  hs-source-dirs:   scripts
+  main-is:          alpha-tool.hs
+  other-modules:    Shared.Helper
+  build-depends:    base
+
+-- main-is and nothing else: the stanza list is empty unless main-is is
+-- read, and an empty one sends the indexer to its filesystem walk, which
+-- picks up every unbuilt script in the same directory.
+executable beta-tool
+  default-language: Haskell2010
+  hs-source-dirs:   scripts
+  main-is:          beta-tool.hs
+  build-depends:    base
