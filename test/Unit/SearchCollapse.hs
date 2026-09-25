@@ -182,13 +182,13 @@ tests = testGroup "Unit.SearchCollapse"
                      "mapAccumL" "sig" def Exposed
                  ]
           scopedTo s = collapseRows (scopeRows s (map mkSymbolRow rows))
-      case scopedTo (Just "base") of
+      case scopedTo (Just (ComponentKey "base")) of
         [ResultSymbol s] -> do
           srComponent s @?= ComponentKey "base"
           map presentationLabel (srAlternates s) @?= ["base:Data.Traversable"]
         other -> fail ("base scope: expected one result, got " <> show (length other))
       -- And the other side of the same coin.
-      case scopedTo (Just "ghc-internal") of
+      case scopedTo (Just (ComponentKey "ghc-internal")) of
         [ResultSymbol s] -> do
           srComponent s @?= ComponentKey "ghc-internal"
           srAlternates s @?= []
@@ -196,14 +196,8 @@ tests = testGroup "Unit.SearchCollapse"
       -- No scope still folds all three into one.
       length (scopedTo Nothing) @?= 1
 
-  , testCase "an empty scope is no scope" $ do
-      let rows = map mkSymbolRow
-            [ mapRow "Data.Map.Strict" "Data.Map.Strict.Internal" Exposed ]
-      length (collapseRows (scopeRows (Just "") rows)) @?= 1
-      length (collapseRows (scopeRows Nothing rows))   @?= 1
-
   , testCase "scoping to a package with no rows yields nothing" $
-      collapseRows (scopeRows (Just "nope")
+      collapseRows (scopeRows (Just (ComponentKey "nope"))
         (map mkSymbolRow [mapRow "Data.Map" "Data.Map.Internal" Exposed]))
         @?= []
 

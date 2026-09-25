@@ -6,6 +6,18 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Package-scoped search no longer hijacks `Tab`** (issue #69). Tab in
+  the search box used to add a package-scope chip, which swallowed the
+  first Tab of every package page and was invisible until you knew about
+  it. Every page inside a package now shows an "in `<pkg>`" toggle next
+  to the search box (a button: click, Enter or Space; off by default),
+  and a `pkg:<name>` token typed anywhere in the query scopes from any
+  page, overriding the toggle. A bare `pkg:`, two different scopes, or a
+  package outside the build plan answer with a row saying so instead of
+  an empty result list.
+
 ## [0.2.0] — 2026-09-07
 
 Beta release candidate.

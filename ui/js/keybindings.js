@@ -2,17 +2,15 @@
   'use strict';
 
   // The search bar is sticky at the top of every page, so global
-  // focus/navigation keybindings are unnecessary. We keep three tiny
-  // affordances, all scoped to when the search input has focus:
-  //   - Esc blurs it.
-  //   - Tab adds a "search scope" chip restricting fuzzy search to the
-  //     package whose docs are on screen right now (read from the URL,
-  //     no server round-trip) — unless there's no package to scope to,
-  //     or a chip is already showing, in which case Tab falls through
-  //     to normal focus navigation.
-  //   - Backspace, when the query is empty, removes an existing chip.
-  // Clicking a chip's × also removes it (separate click listener,
-  // since it targets the button, not the search input).
+  // focus/navigation keybindings are unnecessary. What remains:
+  //   - Esc in the search box blurs it.
+  //   - The scope toggle, a button the server renders on pages inside a
+  //     package, restricts search to that package. Clicking it (or
+  //     Enter/Space while it has focus, which browsers turn into a
+  //     click) flips it. Tab is never intercepted: it moves focus.
+  //   - Backspace on an empty query switches an active scope off.
+  // Typing a pkg:<name> token into the query scopes from any page; that
+  // is parsed server-side and needs nothing here.
   document.addEventListener('keydown', function (ev) {
     var el = document.activeElement;
     var inSearch = !!(el && el.classList && el.classList.contains('search-input'));
@@ -23,72 +21,37 @@
       return;
     }
 
-    if (ev.key === 'Tab' && !currentScopeChip()) {
-      var pkg = packageFromPath();
-      if (pkg) {
-        ev.preventDefault();
-        addScopeChip(pkg);
-      }
-      return;
-    }
-
-    if (ev.key === 'Backspace' && el.value === '' && currentScopeChip()) {
-      removeScopeChip();
+    if (ev.key === 'Backspace' && el.value === '' && scopeOn()) {
+      setScope(false);
     }
   });
 
   document.addEventListener('click', function (ev) {
-    var btn = ev.target.closest && ev.target.closest('.search-scope .remove');
-    if (btn) removeScopeChip();
+    var btn = ev.target.closest && ev.target.closest('.search-scope');
+    if (btn) setScope(!scopeOn());
   });
 
-  function packageFromPath() {
-    var m = /^\/(?:pkg|source)\/([^/]+)/.exec(window.location.pathname);
-    return m ? decodeURIComponent(m[1]) : null;
-  }
-
-  function currentScopeChip() {
+  function scopeToggle() {
     return document.querySelector('.search-scope');
   }
 
-  function scopeValueInput() {
-    return document.querySelector('.search-scope-value');
+  function scopeOn() {
+    var toggle = scopeToggle();
+    return !!toggle && toggle.getAttribute('aria-pressed') === 'true';
   }
 
-  function addScopeChip(pkg) {
-    var wrap  = document.querySelector('.search-wrap');
-    var input = document.querySelector('.search-input');
-    if (!wrap || !input) return;
+  // Mirror the toggle into the hidden input htmx sends as ?pkg=, then
+  // tell the search input to re-run its query (its hx-trigger listens
+  // for scope-changed) so the results follow the toggle immediately.
+  function setScope(on) {
+    var toggle = scopeToggle();
+    var value  = document.querySelector('.search-scope-value');
+    var input  = document.querySelector('.search-input');
+    if (!toggle || !value || !input) return;
 
-    var chip = document.createElement('span');
-    chip.className = 'search-scope';
-
-    var name = document.createElement('span');
-    name.textContent = pkg;
-
-    var remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'remove';
-    remove.setAttribute('aria-label', 'Clear package scope');
-    remove.textContent = '×';
-
-    chip.appendChild(name);
-    chip.appendChild(remove);
-    wrap.insertBefore(chip, input);
-
-    var valueInput = scopeValueInput();
-    if (valueInput) valueInput.value = pkg;
+    toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+    value.value = on ? toggle.getAttribute('data-scope') : '';
     input.focus();
-  }
-
-  function removeScopeChip() {
-    var chip = currentScopeChip();
-    if (chip && chip.parentNode) chip.parentNode.removeChild(chip);
-
-    var valueInput = scopeValueInput();
-    if (valueInput) valueInput.value = '';
-
-    var input = document.querySelector('.search-input');
-    if (input) input.focus();
+    input.dispatchEvent(new Event('scope-changed'));
   }
 })();

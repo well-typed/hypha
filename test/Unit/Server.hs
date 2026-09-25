@@ -11,7 +11,7 @@ import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
 import Text.RawString.QQ (r)
 
 import Data.Text.Lazy qualified as LText
-import Lucid (renderText)
+import Lucid (Html, renderText)
 
 import Hypha.Command.Server
   ( BindAddr (..), BindError (..), briefException, parseBind )
@@ -31,7 +31,9 @@ import Hypha.Types.SymbolPath (ModulePath (..))
 import Util.Row (rowIn)
 import Hypha.Server.App (mimeFor, sanitizeSegments)
 import Hypha.Server.Ui.ModuleDoc (modulePage)
-import Hypha.Server.Ui.Search (highlightTokens, resultsFragment)
+import Hypha.Search.Query (QueryError (..))
+import Hypha.Server.Ui.Search
+  ( highlightTokens, queryErrorFragment, resultsFragment, searchInput )
 import Hypha.Server.Ui.Tree (hackageLink, splitByOrigin)
 import Hypha.Types.BuildPlan (PackageOrigin (..))
 
@@ -52,6 +54,8 @@ tests = testGroup "Unit.Server"
   , testGroup "Doc.symbolCard" symbolCardTests
   , testGroup "Search.highlightTokens" highlightTokensTests
   , testGroup "Search.resultsFragment" resultsFragmentTests
+  , testGroup "Search.searchInput" searchInputTests
+  , testGroup "Search.queryErrorFragment" queryErrorTests
   , testGroup "ModuleDoc.modulePage" modulePageTests
   ]
 
@@ -187,6 +191,53 @@ modulePageTests =
     renderPage e = LText.toStrict . renderText $
       modulePage "base" "Prelude"
         (ViewFromSource (SourceDoc (ModuleDocInfo Nothing [e] []) Nothing))
+
+searchInputTests :: [TestTree]
+searchInputTests =
+  [ testCase "inside a package the toggle is a real button, off by default" $ do
+      let html = render (searchInput (Just (ComponentKey "aeson")))
+      mapM_ (html `includes`)
+        [ "<button type=\"button\" class=\"search-scope\""
+        , "aria-pressed=\"false\""
+        , "data-scope=\"aeson\""
+        ]
+      -- Off by default: the hidden input the request carries is empty.
+      html `includes` "<input type=\"hidden\" name=\"pkg\" class=\"search-scope-value\">"
+
+  , testCase "outside a package there is nothing to toggle" $ do
+      let html = render (searchInput Nothing)
+      assertBool "no toggle expected" (not ("search-scope\"" `Text.isInfixOf` html))
+
+  , testCase "flipping the toggle re-runs the query" $
+      render (searchInput Nothing) `includes` "scope-changed"
+
+  , testCase "the placeholder advertises the pkg: prefix" $
+      render (searchInput Nothing) `includes` "pkg:name"
+  ]
+
+queryErrorTests :: [TestTree]
+queryErrorTests =
+  [ testCase "an unknown scope names the package" $
+      render (queryErrorFragment (UnknownScope (ComponentKey "nope")))
+        `includes` "No package <code>nope</code> in this build plan."
+  , testCase "conflicting scopes name both tokens" $ do
+      let html = render (queryErrorFragment
+                   (ConflictingScopes (ComponentKey "aeson") (ComponentKey "text")))
+      html `includes` "<code>pkg:aeson</code>"
+      html `includes` "<code>pkg:text</code>"
+  , testCase "a bare pkg: says what is missing" $
+      render (queryErrorFragment ScopeMissingName) `includes` "a package name"
+  , testCase "the row replaces the results list htmx targets" $
+      render (queryErrorFragment ScopeMissingName)
+        `includes` "<ul class=\"results\" id=\"results\">"
+  ]
+
+render :: Html () -> Text.Text
+render = LText.toStrict . renderText
+
+includes :: Text.Text -> Text.Text -> IO ()
+includes hay needle =
+  assertBool (show needle <> " not in " <> show hay) (needle `Text.isInfixOf` hay)
 
 resultsFragmentTests :: [TestTree]
 resultsFragmentTests =

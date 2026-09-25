@@ -201,30 +201,38 @@
   padding: 0;
 }
 
-/* Package-scope chip: Tab (in the search box) adds it, click its ×
- * or Backspace-on-empty-query removes it. Styled like .origin-pill's
- * chip language (tree.css) rather than introducing a new visual idiom. */
+/* Package-scope toggle: rendered on every page inside a package, off by
+ * default.  Off it is a quiet outlined chip that says what it would do;
+ * on it takes the accent fill of .origin-pill's chip language (tree.css).
+ * A real <button>, so it gets focus, Enter and Space for free. */
 .search-scope {
   display: inline-flex;
   align-items: center;
-  gap: 0.3em;
+  gap: 0.25em;
   padding: 0.2em 0.5em;
   border-radius: 0.3em;
+  border: 1px dashed var(--border-strong);
+  background: none;
+  color: var(--muted);
   font-size: 0.8em;
   font-family: var(--mono);
-  background: var(--accent-soft);
-  color: var(--accent);
   margin-right: 0.4rem;
   flex-shrink: 0;
-}
-.search-scope .remove {
-  border: none;
-  background: none;
-  padding: 0;
-  margin: 0;
-  color: inherit;
-  font-size: 1em;
-  line-height: 1;
   cursor: pointer;
 }
-.search-scope .remove:hover { opacity: 0.7; }
+.search-scope:hover { color: var(--fg); border-color: var(--muted); }
+.search-scope[aria-pressed="true"] {
+  border: 1px solid transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.search-scope:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.search-scope .scope-in { font-family: var(--sans); }
+
+.results li.query-error code {
+  font-family: var(--mono);
+  color: var(--fg);
+}

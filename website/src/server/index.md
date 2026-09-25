@@ -32,9 +32,11 @@ hypha server listening on http://127.0.0.1:4287
   opens a list naming every package and module that was folded in, each a
   link, with the defining one tagged. `Data.Map.Strict.insertWith` and
   `Data.Map.Lazy.insertWith` stay two results, because they have different
-  definitions. Press `Tab` to scope to one package; the scope applies
-  before the fold, so a definition two packages present still appears
-  under either.
+  definitions. To search one package, type `pkg:<name>` anywhere in the
+  query (`pkg:aeson decode`), or, on any page inside a package, click the
+  "in `<pkg>`" toggle next to the search box. The scope applies before
+  the fold, so a definition two packages present still appears under
+  either.
 - **Packages and modules are results too**, ranked above the symbols
   beneath them: typing `containers` lands the package page, typing
   `Data.Map.Strict` lands the module page.

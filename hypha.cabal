@@ -131,6 +131,7 @@ library
     Hypha.Search.Indexer
     Hypha.Search.PackageCache
     Hypha.Search.Fuzzy
+    Hypha.Search.Query
     Hypha.Search.Reexport
     Hypha.Source.Dependencies
     Hypha.Source.CppMacros
@@ -266,6 +267,7 @@ test-suite hypha-tests
     Unit.Route
     Unit.SourceExtensions
     Unit.SearchCollapse
+    Unit.SearchQuery
     Unit.SearchExports
     Unit.SearchIndexBuild
     Unit.SearchIndexCache

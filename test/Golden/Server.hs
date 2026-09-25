@@ -112,7 +112,7 @@ tests = testGroup "Golden.Server"
 
 renderHome :: IO LBS.ByteString
 renderHome =
-  let page = shellPage "fixture-project" []
+  let page = shellPage "fixture-project" [] Nothing
                [("async", OriginHackage), ("containers", OriginHackage)] body
       body = p_ $ do
         toHtml ("Welcome to hypha. Press " :: Text.Text)

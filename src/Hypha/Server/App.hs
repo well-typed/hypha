@@ -24,10 +24,13 @@ import qualified Hypha.Server.Ui.Search  as UISearch
 import qualified Hypha.Server.Ui.Doc     as UIDoc
 import qualified Hypha.Server.Ui.Source  as UISrc
 import qualified Hypha.Server.Ui.Tree    as UITree
+import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.Route qualified as Route
 import qualified Hypha.Search.Collapse   as Collapse
 import qualified Hypha.Search.Fuzzy      as Fuzzy
+import           Hypha.Search.Query
+  ( SearchQuery (..), resolveSearchQuery, scopeParam )
 import           Hypha.Server.Api       (HyphaApi, api)
 import           Hypha.Server.ModuleDoc (ModuleDocView, SymbolCardData (..))
 import           Hypha.Server.Slots     (BuildSlots)
@@ -50,7 +53,7 @@ data ServerConfig = ServerConfig
       -- ^ @(indexed, total)@ snapshot of the background indexer.  Drives
       -- the topbar progress bar.  Both are @0@ when nothing needed
       -- building (warm cache hit on every package).
-  , scHumanSearch  :: !(Text -> Maybe Text -> IO [Collapse.SearchResult])
+  , scHumanSearch  :: !(Text -> Maybe ComponentKey -> IO [Collapse.SearchResult])
       -- ^ Query string plus an optional component to restrict to, returning
       -- the ranked, collapsed results.
       --
@@ -111,7 +114,7 @@ server cfg =
 
 -- | Home page — landing with project headline + prominent search.
 homePage :: ServerConfig -> Handler (Html ())
-homePage cfg = pure $ UI.shellPage (scProjectName cfg) [] (scPackages cfg) $
+homePage cfg = pure $ UI.shellPage (scProjectName cfg) [] Nothing (scPackages cfg) $
   section_ [class_ "hero"] $ do
     h1_ (toHtml (scProjectName cfg))
     p_  [class_ "lede"]
@@ -138,18 +141,29 @@ progressPage cfg = do
   pure (UI.progressFragment ready done total)
 
 -- | Search results fragment (HTMX target).
+--
+-- @pkg@ is the scope toggle's hidden input; a @pkg:@ token typed into
+-- @q@ overrides it.  A query that cannot run -- a bare @pkg:@, two
+-- different scopes, a scope outside the plan -- answers with a row
+-- saying so rather than with an empty list.
 searchPage :: ServerConfig -> Maybe String -> Maybe String -> Handler (Html ())
-searchPage cfg mq mpkg = do
-  let q = Text.strip (maybe "" Text.pack mq)
-  if Text.null q
-    then pure UISearch.emptyResults
-    else do
-      ready <- liftIO (scIndexReady cfg)
-      if not ready
-        then pure UISearch.buildingFragment
-        else do
-          rows <- liftIO (scHumanSearch cfg q (Text.pack <$> mpkg))
-          pure (UISearch.resultsFragment (Fuzzy.tokenize q) rows)
+searchPage cfg mq mpkg
+  | Text.null raw = pure UISearch.emptyResults
+  | otherwise     = case resolveSearchQuery known toggle raw of
+      Left err -> pure (UISearch.queryErrorFragment err)
+      Right sq
+        | Text.null (sqText sq) -> pure UISearch.emptyResults
+        | otherwise             -> do
+            ready <- liftIO (scIndexReady cfg)
+            if not ready
+              then pure UISearch.buildingFragment
+              else do
+                rows <- liftIO (scHumanSearch cfg (sqText sq) (sqScope sq))
+                pure (UISearch.resultsFragment (Fuzzy.tokenize (sqText sq)) rows)
+  where
+    raw    = Text.strip (maybe "" Text.pack mq)
+    toggle = scopeParam (Text.pack <$> mpkg)
+    known  = map (ComponentKey . fst) (scPackages cfg)
 
 -- | Package overview page — show pinned version + linked module index.
 pkgPage :: ServerConfig -> String -> Handler (Html ())
@@ -157,7 +171,9 @@ pkgPage cfg pkg = do
   let pkgT = Text.pack pkg
   m <- liftIO (scPackageInfo cfg pkgT)
   let crumbs = [(pkgT, Route.hrefFrom ["pkg", pkgT])]
-  pure $ UI.shellPage pkgT crumbs (scPackages cfg) $ case m of
+  -- A package the plan does not have offers nothing to scope to.
+  let scope = ComponentKey pkgT <$ m
+  pure $ UI.shellPage pkgT crumbs scope (scPackages cfg) $ case m of
     Nothing -> p_ [class_ "warn"] (toHtml ("Package " <> pkgT <> " not found."))
     Just (ver, mods, origin) -> div_ [class_ "pkg"] $ do
       div_ [class_ "pkg-head"] $ do
@@ -173,6 +189,12 @@ pkgPage cfg pkg = do
         else ul_ [class_ "module-list"] $
           mapM_ (\mp -> li_ $ a_ [href_ (Route.hrefFrom ["pkg", pkgT, mp])] (toHtml mp)) mods
 
+-- | The shell for a page inside a package: its search box offers to
+-- scope the search to that package.
+inPackage :: ServerConfig -> Text -> Text -> [(Text, Text)] -> Html () -> Html ()
+inPackage cfg pkgT title crumbs =
+  UI.shellPage title crumbs (Just (ComponentKey pkgT)) (scPackages cfg)
+
 -- | Module documentation view: prebuilt Haddock when available,
 -- source-rendered docs otherwise, bare exports as the last resort.
 modPage :: ServerConfig -> String -> String -> Handler (Html ())
@@ -184,7 +206,7 @@ modPage cfg pkg modPath = do
         [ (pkgT, Route.hrefFrom ["pkg", pkgT])
         , (modT, Route.hrefFrom ["pkg", pkgT, modT])
         ]
-  pure $ UI.shellPage modT crumbs (scPackages cfg)
+  pure $ inPackage cfg pkgT modT crumbs
            (UIMod.modulePage pkgT modT view)
 
 -- | Symbol documentation card.
@@ -202,10 +224,10 @@ symPage cfg pkg modPath sym = do
         ]
   m <- liftIO (scSymbolLookup cfg pkgT modT symT)
   case m of
-    Nothing -> pure $ UI.shellPage symT crumbs (scPackages cfg) $
+    Nothing -> pure $ inPackage cfg pkgT symT crumbs $
       p_ [class_ "warn"] "Symbol not found."
     Just card ->
-      pure $ UI.shellPage symT crumbs (scPackages cfg)
+      pure $ inPackage cfg pkgT symT crumbs
                 (UIDoc.symbolCard symT pkgT card)
 
 -- | Serve raw Haddock files.  HTML pages arrive from 'scHaddockFile'
@@ -272,7 +294,7 @@ sourcePage cfg pkg modPath mLine = do
         ]
   m <- liftIO (scSourceText cfg pkgT modT)
   case m of
-    Nothing -> pure $ UI.shellPage modT crumbs (scPackages cfg) $
+    Nothing -> pure $ inPackage cfg pkgT modT crumbs $
       p_ [class_ "warn"] "Source not available for this module."
-    Just t  -> pure $ UI.shellPage modT crumbs (scPackages cfg)
+    Just t  -> pure $ inPackage cfg pkgT modT crumbs
                        (UISrc.sourceView pkgT modT mLine t)

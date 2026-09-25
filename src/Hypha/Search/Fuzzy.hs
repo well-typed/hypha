@@ -147,22 +147,16 @@ entityComponent = \case
 
 -- | Restrict rows to one component.
 --
--- Both 'Nothing' and an explicitly empty name mean "no scope".  The empty
--- case is not defensive padding: it arrives once the scope chip has just
--- been cleared, because the hidden input's now-empty value is still included
--- in the htmx request.
---
 -- Applied to /rows/, deliberately, and never to collapsed results.  A
 -- definition presented by both @base@ and @ghc-internal@ folds into a single
 -- result carrying the winning presentation's component, so filtering
 -- afterwards dropped it from the other package's view entirely — restricting
 -- search to @base@ found no @mapAccumL@ at all.  Filtering first means each
 -- scope collapses its own package's presentations and always sees them.
-scopeRows :: Maybe Text -> [IndexedRow] -> [IndexedRow]
-scopeRows mScope rows = case mScope of
-  Just s | not (Text.null s) ->
-    filter ((== s) . entityComponent . irEntity) rows
-  _ -> rows
+scopeRows :: Maybe ComponentKey -> [IndexedRow] -> [IndexedRow]
+scopeRows Nothing                  rows = rows
+scopeRows (Just (ComponentKey s)) rows =
+  filter ((== s) . entityComponent . irEntity) rows
 
 -- | Lower-case and split a query into tokens.  Empty input yields @[]@.
 tokenize :: Text -> [Text]
