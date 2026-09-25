@@ -204,9 +204,14 @@ searchInputTests =
       -- Off by default: the hidden input the request carries is empty.
       html `includes` "<input type=\"hidden\" name=\"pkg\" class=\"search-scope-value\">"
 
-  , testCase "outside a package there is nothing to toggle" $ do
+  , testCase "inside a package the toggle remembers the page's package" $
+      render (searchInput (Just (ComponentKey "aeson")))
+        `includes` "data-page-scope=\"aeson\""
+
+  , testCase "outside a package the toggle waits, hidden, for a pkg: token" $ do
       let html = render (searchInput Nothing)
-      assertBool "no toggle expected" (not ("search-scope\"" `Text.isInfixOf` html))
+      html `includes` "<button type=\"button\" class=\"search-scope\" aria-pressed=\"false\" hidden=\"\">"
+      assertBool "no page scope expected" (not ("data-page-scope" `Text.isInfixOf` html))
 
   , testCase "flipping the toggle re-runs the query" $
       render (searchInput Nothing) `includes` "scope-changed"

@@ -220,6 +220,8 @@
   flex-shrink: 0;
   cursor: pointer;
 }
+/* display above would otherwise beat the UA's [hidden] rule. */
+.search-scope[hidden] { display: none; }
 .search-scope:hover { color: var(--fg); border-color: var(--muted); }
 .search-scope[aria-pressed="true"] {
   border: 1px solid transparent;

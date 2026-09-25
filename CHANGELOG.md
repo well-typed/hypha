@@ -12,11 +12,13 @@ loosely follows [Semantic Versioning](https://semver.org/).
   the search box used to add a package-scope chip, which swallowed the
   first Tab of every package page and was invisible until you knew about
   it. Every page inside a package now shows an "in `<pkg>`" toggle next
-  to the search box (a button: click, Enter or Space; off by default),
-  and a `pkg:<name>` token typed anywhere in the query scopes from any
-  page, overriding the toggle. A bare `pkg:`, two different scopes, or a
-  package outside the build plan answer with a row saying so instead of
-  an empty result list.
+  to the search box (a button: click, Enter or Space; off by default,
+  and only ever changed by the user). Typing `pkg:<name>` followed by a
+  space, on any page, moves the token out of the query and into the
+  toggle, switched on. The server understands a `pkg:` token left in the
+  query too, overriding the toggle; a bare `pkg:`, two different scopes,
+  or a package outside the build plan answer with a row saying so
+  instead of an empty result list.
 
 ## [0.2.0] — 2026-09-07
 

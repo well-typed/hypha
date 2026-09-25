@@ -27,11 +27,13 @@ import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 -- | Search input bar with HTMX live-search attributes and an inline
 -- progress spinner controlled by the @htmx-request@ class.
 --
--- Inside a package the bar also carries a scope toggle for it: a real
--- button, off by default, so it is visible, reachable with Tab, and
--- operable with Enter or Space.  keybindings.js flips it and mirrors
--- its state into the hidden @pkg@ input that htmx sends along.  A
--- @pkg:@ token typed into the query does the same from any page.
+-- The bar also carries the scope toggle: a real button, so it is
+-- reachable with Tab and operable with Enter or Space, and it only ever
+-- changes when the user flips it.  Inside a package it offers that
+-- package, off by default; elsewhere it starts hidden.  Typing a
+-- @pkg:\<name\>@ token followed by a space moves the token into the
+-- toggle, on any page.  keybindings.js drives both and mirrors the
+-- toggle into the hidden @pkg@ input htmx sends along.
 searchInput :: Maybe ComponentKey -> Html ()
 searchInput scope = do
   div_ [class_ "search-wrap"] $ do
@@ -39,7 +41,7 @@ searchInput scope = do
       span_ [class_ "spinner"]     (pure ())
       span_ [class_ "indicator-label"] "Searching\x2026"
     input_ [ type_ "hidden", name_ "pkg", class_ "search-scope-value" ]
-    mapM_ scopeToggle scope
+    scopeToggle scope
     input_
       [ class_       "search-input"
       , type_        "search"
@@ -68,17 +70,25 @@ searchInput scope = do
     -- source views where the main pane is already filled with content.
     ul_ [class_ "results", id_ "results"] (pure ())
 
--- | The scope toggle for the package a page is inside.
-scopeToggle :: ComponentKey -> Html ()
-scopeToggle (ComponentKey key) =
-  button_ [ type_ "button"
-          , class_ "search-scope"
-          , makeAttributes "aria-pressed" "false"
-          , data_ "scope" key
-          , title_ ("Search only in " <> key)
-          ] $ do
+-- | The scope toggle.  @data-page-scope@ remembers the package the page
+-- is inside, so switching off a scope captured from a @pkg:@ token can
+-- fall back to offering it; without one the toggle hides again.
+scopeToggle :: Maybe ComponentKey -> Html ()
+scopeToggle scope =
+  button_ ([ type_ "button"
+           , class_ "search-scope"
+           , makeAttributes "aria-pressed" "false"
+           ] <> offer) $ do
     span_ [class_ "scope-in"] "in "
-    span_ [class_ "scope-name"] (toHtml key)
+    span_ [class_ "scope-name"] (foldMap (toHtml . unComponentKey) scope)
+  where
+    offer = case scope of
+      Just (ComponentKey key) ->
+        [ data_ "scope" key
+        , data_ "page-scope" key
+        , title_ ("Search only in " <> key)
+        ]
+      Nothing -> [hidden_ ""]
 
 -- | A query that cannot run, said as a row of the results dropdown.
 queryErrorFragment :: QueryError -> Html ()
