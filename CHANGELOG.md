@@ -6,6 +6,10 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-09-25
+
+Beta release candidate, superseding 0.2.0.
+
 ### Changed
 
 - **Package-scoped search no longer hijacks `Tab`** (issue #69). Tab in
@@ -19,6 +23,36 @@ loosely follows [Semantic Versioning](https://semver.org/).
   query too, overriding the toggle; a bare `pkg:`, two different scopes,
   or a package outside the build plan answer with a row saying so
   instead of an empty result list.
+
+### Fixed
+
+- **Sources that are not valid UTF-8 no longer abort the index.**
+  Hackage still carries Latin-1 sources (c2hs-0.28.8's `Text.Lexers` has
+  an "ä" in a comment), and reading one threw `hGetContents: invalid
+  argument (cannot decode byte sequence …)` (issue #60). Every module
+  read now decodes as UTF-8 with undecodable bytes replaced by U+FFFD,
+  the way GHC reads the same file. The exception also escaped the
+  background build, so one bad file stopped the whole index while the
+  server reported itself ready; each unit is now fenced, reported as
+  `hypha index: skipping <pkg>: <why>`, and the build moves on.
+
+- **`store-dir` from the project files is honoured.** The cabal store
+  was hardcoded to `~/.cabal/store`, so a project building into another
+  store (a `store-dir` in `cabal.project.local`, as nix setups tend to
+  do) was silently served whatever `~/.cabal/store` held for that
+  compiler (issue #61). The store is now resolved the way cabal does it:
+  `cabal.project.local` over `cabal.project`, then `$CABAL_DIR/store`,
+  then `~/.cabal/store`. The project files are read with Cabal-syntax's
+  own field lexer, and a file cabal would refuse is reported rather than
+  read as having no `store-dir`.
+
+- **`source-repository-package` units resolve to their checkout.** Their
+  sources live where cabal checked the repository out, under
+  `dist-newstyle/src`, but only local packages recorded a source
+  directory, so the resolver fell through to Hackage and reported `no
+  source for <pkg>: Hackage HTTP 404` (issue #59). A unit is now located
+  by the checkout whose package root holds its `.cabal` file; among
+  several, the one whose git HEAD resolves to the pinned commit wins.
 
 ## [0.2.0] — 2026-09-07
 
@@ -766,6 +800,7 @@ browser), and Plan C (MCP stdio shim).
 - Property tests via `Test.Tasty.Falsify`; golden tests via
   `Test.Tasty.Golden`; unit tests via `Test.Tasty.HUnit`.
 
-[Unreleased]: https://github.com/well-typed/hypha/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/well-typed/hypha/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/well-typed/hypha/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/well-typed/hypha/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/well-typed/hypha/releases/tag/v0.1.0
