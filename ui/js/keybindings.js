@@ -8,11 +8,13 @@
   //     changes it: clicking it (or Enter/Space while it has focus,
   //     which browsers turn into a click) flips it; clearing the query
   //     leaves it alone. Tab is never intercepted: it moves focus.
-  //   - A "pkg:<name>" token followed by whitespace is captured as soon
-  //     as it is typed or pasted: it leaves the query and becomes the
-  //     toggle, switched on. The server still understands a pkg: token
-  //     left in the query (one at the very end, a URL, a non-JS client).
-  var CAPTURE = /(^|\s)pkg:(\S+)\s/;
+  //   - A "pkg:<name>" token is captured the moment the whitespace
+  //     closing it is typed (or pasted) at the caret: it leaves the
+  //     query and becomes the toggle, switched on. Only a token ending
+  //     at the caret counts, so typing "pkg:" in front of an existing
+  //     word does not swallow that word as a package name. The server
+  //     still understands a pkg: token left in the query.
+  var CAPTURE = /(^|\s)pkg:(\S+)\s$/;
 
   document.addEventListener('keydown', function (ev) {
     var el = document.activeElement;
@@ -20,33 +22,30 @@
     if (inSearch && ev.key === 'Escape') el.blur();
   });
 
+  // A pointer click hands focus to the search box, ready for typing. A
+  // keyboard activation (detail === 0) leaves focus on the toggle, so
+  // its new aria-pressed state is announced and can be flipped back.
   document.addEventListener('click', function (ev) {
     var btn = ev.target.closest && ev.target.closest('.search-scope');
     if (!btn) return;
-    if (scopeOn()) switchOff();
-    else setScope(btn.getAttribute('data-scope'));
+    var refocus = ev.detail > 0;
+    if (scopeOn()) switchOff(refocus);
+    else setScope(btn.getAttribute('data-scope'), refocus);
   });
 
   document.addEventListener('input', function (ev) {
     var el = ev.target;
     if (!(el.classList && el.classList.contains('search-input'))) return;
 
-    var value = el.value;
-    var caret = -1;
-    var name  = null;
-    var m;
-    // A paste can carry several tokens; the last one wins, as it would
-    // had they been typed one after the other.
-    while ((m = CAPTURE.exec(value)) !== null) {
-      caret = m.index + m[1].length;
-      name  = m[2];
-      value = value.slice(0, caret) + value.slice(m.index + m[0].length);
-    }
-    if (name === null) return;
+    var caret  = el.selectionStart;
+    var before = el.value.slice(0, caret);
+    var m = CAPTURE.exec(before);
+    if (m === null) return;
 
-    el.value = value;
-    el.setSelectionRange(caret, caret);
-    setScope(name);
+    var start = m.index + m[1].length;
+    el.value = before.slice(0, start) + el.value.slice(caret);
+    el.setSelectionRange(start, start);
+    setScope(m[2], true);
   });
 
   function scopeToggle() {
@@ -68,16 +67,16 @@
     toggle.hidden = false;
   }
 
-  function setScope(name) {
+  function setScope(name, refocus) {
     var toggle = scopeToggle();
     if (!toggle) return;
     showToggle(toggle, name, true);
-    scopeChanged(name);
+    scopeChanged(name, refocus);
   }
 
   // Back to what the page offered: its own package, switched off, or
   // nothing at all on a page that is not inside a package.
-  function switchOff() {
+  function switchOff(refocus) {
     var toggle = scopeToggle();
     if (!toggle) return;
     var pageScope = toggle.getAttribute('data-page-scope');
@@ -86,19 +85,21 @@
     } else {
       toggle.setAttribute('aria-pressed', 'false');
       toggle.hidden = true;
+      // A hidden button cannot keep focus; the search box takes it.
+      refocus = true;
     }
-    scopeChanged('');
+    scopeChanged('', refocus);
   }
 
   // Mirror the scope into the hidden input htmx sends as ?pkg=, then
   // tell the search input to re-run its query (its hx-trigger listens
   // for scope-changed) so the results follow immediately.
-  function scopeChanged(name) {
+  function scopeChanged(name, refocus) {
     var value = document.querySelector('.search-scope-value');
     var input = document.querySelector('.search-input');
     if (!value || !input) return;
     value.value = name;
-    input.focus();
+    if (refocus) input.focus();
     input.dispatchEvent(new Event('scope-changed'));
   }
 })();

@@ -10,6 +10,7 @@ module Hypha.Server.App
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as BL
+import Data.List (find)
 import qualified Data.Text as Text
 import Data.Text (Text)
 import Lucid
@@ -171,9 +172,7 @@ pkgPage cfg pkg = do
   let pkgT = Text.pack pkg
   m <- liftIO (scPackageInfo cfg pkgT)
   let crumbs = [(pkgT, Route.hrefFrom ["pkg", pkgT])]
-  -- A package the plan does not have offers nothing to scope to.
-  let scope = ComponentKey pkgT <$ m
-  pure $ UI.shellPage pkgT crumbs scope (scPackages cfg) $ case m of
+  pure $ inPackage cfg pkgT pkgT crumbs $ case m of
     Nothing -> p_ [class_ "warn"] (toHtml ("Package " <> pkgT <> " not found."))
     Just (ver, mods, origin) -> div_ [class_ "pkg"] $ do
       div_ [class_ "pkg-head"] $ do
@@ -190,10 +189,13 @@ pkgPage cfg pkg = do
           mapM_ (\mp -> li_ $ a_ [href_ (Route.hrefFrom ["pkg", pkgT, mp])] (toHtml mp)) mods
 
 -- | The shell for a page inside a package: its search box offers to
--- scope the search to that package.
+-- scope the search to that package -- if the plan has it, since a
+-- component the plan lacks has nothing to search.
 inPackage :: ServerConfig -> Text -> Text -> [(Text, Text)] -> Html () -> Html ()
 inPackage cfg pkgT title crumbs =
-  UI.shellPage title crumbs (Just (ComponentKey pkgT)) (scPackages cfg)
+  UI.shellPage title crumbs scope (scPackages cfg)
+  where
+    scope = ComponentKey pkgT <$ find ((== pkgT) . fst) (scPackages cfg)
 
 -- | Module documentation view: prebuilt Haddock when available,
 -- source-rendered docs otherwise, bare exports as the last resort.

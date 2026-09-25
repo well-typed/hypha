@@ -75,7 +75,7 @@ scopeToken (ComponentKey k) = scopePrefix <> k
 -- arrives as an empty string rather than as an absent parameter.
 scopeParam :: Maybe Text -> Maybe ComponentKey
 scopeParam (Just t) | not (Text.null t) = Just (ComponentKey t)
-scopeParam _                                 = Nothing
+scopeParam _                            = Nothing
 
 -- | Parse a query, fall back to the toggle's scope when the query names
 -- none, and check the resulting scope against the plan's components.

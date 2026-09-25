@@ -201,8 +201,9 @@
   padding: 0;
 }
 
-/* Package-scope toggle: rendered on every page inside a package, off by
- * default.  Off it is a quiet outlined chip that says what it would do;
+/* Package-scope toggle: offered on every page inside a package, off by
+ * default; hidden elsewhere until a typed pkg: token switches it on.
+ * Off it is a quiet outlined chip that says what it would do;
  * on it takes the accent fill of .origin-pill's chip language (tree.css).
  * A real <button>, so it gets focus, Enter and Space for free. */
 .search-scope {
