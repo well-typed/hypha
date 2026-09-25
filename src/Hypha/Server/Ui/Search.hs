@@ -5,6 +5,7 @@ module Hypha.Server.Ui.Search
   , resultsFragment
   , emptyResults
   , buildingFragment
+  , queryErrorFragment
   , highlightTokens
   ) where
 
@@ -18,31 +19,40 @@ import Hypha.Search.Collapse
   ( Presentation (..), SearchResult (..), SymbolResult (..)
   , definitionPresentation, presentationHref, presentationLabel
   , resultHref )
+import Hypha.Search.Query (QueryError (..), scopeToken)
 import Hypha.Types.ComponentName (ComponentKey (..))
 import Hypha.Types.PackageId (PackageName (..), Version (..))
 import Hypha.Types.SymbolPath (ModulePath (..), Signature (..), SymbolName (..))
 
 -- | Search input bar with HTMX live-search attributes and an inline
 -- progress spinner controlled by the @htmx-request@ class.
-searchInput :: Html ()
-searchInput = do
+--
+-- The bar also carries the scope toggle: a real button, so it is
+-- reachable with Tab and operable with Enter or Space, and it only ever
+-- changes when the user flips it.  Inside a package it offers that
+-- package, off by default; elsewhere it starts hidden.  Typing a
+-- @pkg:\<name\>@ token followed by a space moves the token into the
+-- toggle, on any page.  keybindings.js drives both and mirrors the
+-- toggle into the hidden @pkg@ input htmx sends along.
+searchInput :: Maybe ComponentKey -> Html ()
+searchInput scope = do
   div_ [class_ "search-wrap"] $ do
     span_ [class_ "search-indicator", title_ "Searching\x2026"] $ do
       span_ [class_ "spinner"]     (pure ())
       span_ [class_ "indicator-label"] "Searching\x2026"
-    -- Empty by default; keybindings.js sets this when the Tab-triggered
-    -- scope chip is added, and clears it when the chip is removed. htmx
-    -- includes it on every request via hx-include below.
     input_ [ type_ "hidden", name_ "pkg", class_ "search-scope-value" ]
+    scopeToggle scope
     input_
       [ class_       "search-input"
       , type_        "search"
       , name_        "q"
-      , placeholder_ "Search packages, modules, symbols\x2026"
+      , placeholder_ "Search packages, modules, symbols\x2026 (pkg:name to scope)"
       , autocomplete_ "off"
       , autofocus_
       , makeAttributes "hx-get"       "/search"
-      , makeAttributes "hx-trigger"   "keyup changed delay:120ms"
+        -- scope-changed is dispatched by keybindings.js when the toggle
+        -- flips, so the results follow it without another keystroke.
+      , makeAttributes "hx-trigger"   "keyup changed delay:120ms, scope-changed"
       , makeAttributes "hx-target"    "#results"
       , makeAttributes "hx-swap"      "outerHTML"
         -- Server returns a full <ul id="results"> fragment, so we must
@@ -59,6 +69,40 @@ searchInput = do
     -- search works the same on every page — including the symbol and
     -- source views where the main pane is already filled with content.
     ul_ [class_ "results", id_ "results"] (pure ())
+
+-- | The scope toggle.  @data-page-scope@ remembers the package the page
+-- is inside, so switching off a scope captured from a @pkg:@ token can
+-- fall back to offering it; without one the toggle hides again.
+scopeToggle :: Maybe ComponentKey -> Html ()
+scopeToggle scope =
+  button_ ([ type_ "button"
+           , class_ "search-scope"
+           , makeAttributes "aria-pressed" "false"
+           ] <> offer) $ do
+    span_ [class_ "scope-in"] "in "
+    span_ [class_ "scope-name"] (foldMap (toHtml . unComponentKey) scope)
+  where
+    offer = case scope of
+      Just (ComponentKey key) ->
+        [ data_ "scope" key
+        , data_ "page-scope" key
+        , title_ ("Search only in " <> key)
+        ]
+      Nothing -> [hidden_ ""]
+
+-- | A query that cannot run, said as a row of the results dropdown.
+queryErrorFragment :: QueryError -> Html ()
+queryErrorFragment err =
+  ul_ [class_ "results", id_ "results"] $
+    li_ [class_ "empty query-error"] $ case err of
+      ScopeMissingName -> do
+        "Give "; code_ "pkg:"; " a package name, e.g. "
+        code_ (toHtml (scopeToken (ComponentKey "aeson"))); "."
+      ConflictingScopes a b -> do
+        "Pick one scope: "; code_ (toHtml (scopeToken a)); " or "
+        code_ (toHtml (scopeToken b)); "."
+      UnknownScope (ComponentKey k) -> do
+        "No package "; code_ (toHtml k); " in this build plan."
 
 -- | Render search results as an unordered list.
 --

@@ -14,6 +14,7 @@ import Lucid.Base (makeAttributes)
 import qualified Hypha.Server.Ui.Search as UISearch
 import qualified Hypha.Server.Ui.Tree   as UITree
 import Hypha.Types.BuildPlan (PackageOrigin)
+import Hypha.Types.ComponentName (ComponentKey)
 
 -- | Shell HTML wrapping every view: sticky search bar, sidebar tree,
 -- breadcrumbs, and the main pane body.  Carries a thin progress strip
@@ -21,10 +22,11 @@ import Hypha.Types.BuildPlan (PackageOrigin)
 -- background indexer reports done.
 shellPage :: Text                          -- ^ page title
           -> [(Text, Text)]                -- ^ breadcrumbs (label, href)
+          -> Maybe ComponentKey            -- ^ package the page is inside, if any
           -> [(Text, PackageOrigin)]       -- ^ package list for sidebar tree
           -> Html ()                       -- ^ main pane body
           -> Html ()
-shellPage title crumbs pkgs body = doctypehtml_ $ do
+shellPage title crumbs scope pkgs body = doctypehtml_ $ do
   head_ $ do
     meta_ [charset_ "utf-8"]
     meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1"]
@@ -48,7 +50,7 @@ shellPage title crumbs pkgs body = doctypehtml_ $ do
     div_ [class_ "app"] $ do
       div_ [class_ "topbar"] $ do
         a_ [href_ "/", class_ "brand"] "hypha"
-        UISearch.searchInput
+        UISearch.searchInput scope
         button_ [ id_ "theme-toggle"
                 , class_ "theme-toggle"
                 , type_ "button"

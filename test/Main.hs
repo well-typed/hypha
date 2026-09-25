@@ -52,6 +52,7 @@ import qualified Unit.RepoCache
 import qualified Unit.Route
 import qualified Unit.SourceExtensions
 import qualified Unit.SearchCollapse
+import qualified Unit.SearchQuery
 import qualified Unit.SearchExports
 import qualified Unit.SearchIndexBuild
 import qualified Unit.SearchIndexCache
@@ -126,6 +127,7 @@ allTests = testGroup "hypha"
   , Unit.Route.tests
   , Unit.SourceExtensions.tests
   , Unit.SearchCollapse.tests
+  , Unit.SearchQuery.tests
   , Unit.SearchExports.tests
   , Unit.SearchIndexBuild.tests
   , Unit.SearchIndexCache.tests
