@@ -21,8 +21,10 @@ import Distribution.Types.VersionRange (anyVersion)
 
 import Hypha.Project.BuildContext (BuildContext (..), hostBuildContext)
 import Hypha.Project.Components
-  ( ComponentInfo (..), ComponentKind (..), evalCondition, parseLibComponents )
+  ( ComponentInfo (..), ComponentKind (..), ModuleRef (..), evalCondition
+  , expectedModuleName, parseLibComponents )
 import Hypha.Source.Extensions (LanguageSettings (..))
+import Hypha.Types.SymbolPath (ModulePath (..))
 
 -- | A context that pins the platform, so a fixture's @os()@ and
 -- @arch()@ branches resolve the same way on every developer's machine.
@@ -51,6 +53,28 @@ tests = testGroup "Unit.Components"
         , ( "sublib:bench",     [root </> "bench-src"] )
         , ( "sublib:internal",  [root </> "internal-src"] )
         ]
+  , testCase "an executable carries its main-is, a library carries none" $ do
+      -- main-is lives on Executable.modulePath, not on BuildInfo, and
+      -- building the component from an empty library dropped it -- which
+      -- left every executable's main module out of the component and made
+      -- its page answer "module Main is not part of this component".
+      let root = "test" </> "fixtures" </> "cabal"
+      comps <- parseLibComponents (root </> "scripts.cabal") root linux
+      let mainIsOf k = [ ciMainIs c | c <- comps, ciKind c == k ]
+      mainIsOf (Exe "alpha-tool") @?= [Just "alpha-tool.hs"]
+      mainIsOf (Exe "beta-tool")  @?= [Just "beta-tool.hs"]
+      mainIsOf MainLib            @?= [Nothing]
+
+  , testCase "main-is is a file path, not a module name" $ do
+      -- @main-is: alpha-tool.hs@ is legal and @alpha-tool@ is not a module
+      -- name, so the two cannot share one Text.  A path ref is expected to
+      -- declare Main -- GHC's default, and what a header-less script parses
+      -- as -- while a dotted ref is expected to declare itself.
+      expectedModuleName (ByPath "alpha-tool.hs")
+        @?= ModulePath "Main"
+      expectedModuleName (ByName (ModulePath "Shared.Helper"))
+        @?= ModulePath "Shared.Helper"
+
   , testCase "missing cabal file returns []" $ do
       res <- parseLibComponents "/does/not/exist.cabal" "/does/not" linux
       res @?= []

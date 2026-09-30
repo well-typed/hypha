@@ -25,6 +25,9 @@ module Hypha.Search.Indexer
   , componentScorerRows
     -- * Component discovery
   , componentModules
+  , componentModuleNames
+  , componentModuleRefs
+  , locateModuleRefs
   , componentKindsOf
   , languageSettingsFor
   , indexInputsFingerprint
@@ -793,52 +796,112 @@ componentModules
   -> [FilePath]
   -> IO [ModuleSource]
 componentModules plan pid kind srcDirs =
+  componentModuleRefs plan pid kind srcDirs >>= loadModuleSources srcDirs
+
+-- | The refs one component's modules are named by, stanza first.
+--
+-- One derivation for every caller that needs to know what a component
+-- has: the index pass, the module page, and the package page's module
+-- list.  They used to disagree -- the page walked the source dirs while
+-- the page it linked to resolved from the stanza -- so the package page
+-- offered links no module page could answer.
+componentModuleRefs
+  :: BuildPlan
+  -> PackageId
+  -> Comp.ComponentKind
+  -> [FilePath]
+  -> IO [(Comp.ModuleRef, Visibility)]
+componentModuleRefs plan pid kind srcDirs =
   case componentInfoFor plan (pkgName pid) kind of
     Just ci
-      | not (null (stanzaModules ci)) -> load (stanzaModules ci)
+      | refs@(_ : _) <- stanzaModules ci -> pure refs
     _ -> do
       hPutStrLn stderr $
         "hypha index: " <> Text.unpack (unPackageName (pkgName pid))
           <> " has no cabal module list; falling back to a source-dir walk"
       walked <- enumModulesIn srcDirs
-      load [ (m, Exposed) | m <- walked ]
-  where
-    load = loadModuleSources srcDirs
+      pure [ (Comp.ByName (ModulePath m), Exposed) | m <- walked ]
+
+-- | The module names a component offers for browsing.
+--
+-- Only the ones whose file we can find: a stanza also names modules that
+-- are generated rather than shipped (@Paths_pkg@) or written in a syntax
+-- we do not preprocess, and a link to a page that cannot be built is
+-- worse than no link.
+--
+-- The names are the ones the resolution keys on, which is why this goes
+-- through 'Comp.expectedModuleName' rather than through the file path: a
+-- source with no @module … where@ header is an implicit @Main@, and a
+-- path-derived name for it matches nothing.
+componentModuleNames
+  :: BuildPlan
+  -> PackageId
+  -> Comp.ComponentKind
+  -> [FilePath]
+  -> IO [ModulePath]
+componentModuleNames plan pid kind srcDirs = do
+  refs  <- componentModuleRefs plan pid kind srcDirs
+  found <- locateModuleRefs srcDirs refs
+  pure [ Comp.expectedModuleName ref | (ref, _, _) <- found ]
 
 -- | Read each named module from the first source dir that has it.
 --
 -- Modules the stanza names but whose file we cannot find are dropped: a
 -- @.hsc@ or @.chs@ source we do not preprocess is a real case, and it is
 -- the module's rows we lose, not the component's.
-loadModuleSources :: [FilePath] -> [(Text, Visibility)] -> IO [ModuleSource]
-loadModuleSources srcDirs = fmap catMaybes . mapM loadOne
+loadModuleSources
+  :: [FilePath] -> [(Comp.ModuleRef, Visibility)] -> IO [ModuleSource]
+loadModuleSources srcDirs refs = do
+  found <- locateModuleRefs srcDirs refs
+  mapM readOne found
   where
-    loadOne (modPath, vis) = do
-      mFile <- firstExistingModule srcDirs modPath
-      case mFile of
-        Nothing -> pure Nothing
-        Just f  -> do
-          content <- readSourceFile f
-          pure (Just ModuleSource
-            { msDeclaredName = ModulePath modPath
-            , msPath         = f
-            , msVisibility   = vis
-            , msContent      = content
-            })
+    readOne (ref, vis, f) = do
+      content <- readSourceFile f
+      pure ModuleSource
+        { msDeclaredName = Comp.expectedModuleName ref
+        , msPath         = f
+        , msVisibility   = vis
+        , msContent      = content
+        }
 
-    firstExistingModule [] _ = pure Nothing
-    firstExistingModule (r : rs) modPath = do
-      let candidate =
-            r FP.</> FP.joinPath (map Text.unpack (Text.splitOn "." modPath))
-              FP.<.> "hs"
+-- | Pair each ref with the file that answers it, dropping the ones no
+-- source dir has.
+--
+-- Split out of 'loadModuleSources' because the package page needs the same
+-- \"does this module exist\" answer without reading every file to get it.
+locateModuleRefs
+  :: [FilePath]
+  -> [(Comp.ModuleRef, Visibility)]
+  -> IO [(Comp.ModuleRef, Visibility, FilePath)]
+locateModuleRefs srcDirs = fmap catMaybes . mapM locateOne
+  where
+    locateOne (ref, vis) = fmap (fmap (\f -> (ref, vis, f)))
+                                (firstExisting srcDirs ref)
+
+    firstExisting [] _ = pure Nothing
+    firstExisting (r : rs) ref = do
+      let candidate = r FP.</> relativePathOf ref
       ok <- Dir.doesFileExist candidate
-      if ok then pure (Just candidate) else firstExistingModule rs modPath
+      if ok then pure (Just candidate) else firstExisting rs ref
+
+    -- A dotted name is a directory path with a @.hs@ on the end; a
+    -- @main-is@ already is a path, extension included.
+    relativePathOf ref = case ref of
+      Comp.ByName m ->
+        FP.joinPath (map Text.unpack (Text.splitOn "." (unModulePath m)))
+          FP.<.> "hs"
+      Comp.ByPath p -> p
 
 -- | The modules a cabal stanza names, with the visibility it gives them.
-stanzaModules :: Comp.ComponentInfo -> [(Text, Visibility)]
+--
+-- @main-is@ is one of them.  It is 'Internal' because an executable has no
+-- public surface for search to rank against, and it comes last so a
+-- component's own modules keep the order the stanza listed them in.
+stanzaModules :: Comp.ComponentInfo -> [(Comp.ModuleRef, Visibility)]
 stanzaModules ci =
-  [ (m, Exposed)  | m <- Comp.ciExposedModules ci ]
-    ++ [ (m, Internal) | m <- Comp.ciOtherModules ci ]
+  [ (Comp.ByName (ModulePath m), Exposed)  | m <- Comp.ciExposedModules ci ]
+    ++ [ (Comp.ByName (ModulePath m), Internal) | m <- Comp.ciOtherModules ci ]
+    ++ [ (Comp.ByPath p, Internal) | Just p <- [Comp.ciMainIs ci] ]
 
 -- | Every library component of a package, read straight from its cabal
 -- file without a build plan.
