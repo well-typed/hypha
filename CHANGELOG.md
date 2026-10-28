@@ -6,6 +6,14 @@ loosely follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- **`hypha package` no longer reports `deps_count`** (issue #74). The
+  count was only ever computed for packages in the build plan; a package
+  resolved from the cabal store, from Hackage, or by an explicit version
+  (`hypha package thread-supervisor-0.2.0.0`) always said `0`, whatever
+  it depended on. Use `hypha deps <pkg>` for a package's dependencies.
+
 ## [0.2.1] — 2026-09-25
 
 Beta release candidate, superseding 0.2.0.

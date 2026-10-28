@@ -31,7 +31,6 @@ data PackageResult = PackageResult
   { prName           :: !Text
   , prVersion        :: !Text
   , prIsLocal        :: !Bool
-  , prDepsCount      :: !Int
   , prExposedModules :: ![Text]
     -- ^ Exposed modules parsed from the package's .cabal file, or empty if
     -- not yet resolved / source unavailable.
@@ -43,8 +42,7 @@ data PackageResult = PackageResult
 
 compactKeys, fullKeys :: Set Text
 compactKeys = Set.fromList
-  [ "name", "version", "is_local", "deps_count"
-  , "exposed_modules", "origin" ]
+  [ "name", "version", "is_local", "exposed_modules", "origin" ]
 fullKeys    = compactKeys
 
 -- | Plan-only variant of the @package@ command, used by golden tests for the
@@ -57,8 +55,7 @@ runPackage plan rawArg =
       nameT            = unPackageName pkg
   in case lookupUnit pkg plan of
        Just pu -> Right (mkSuccessOutcome nameT
-         (pkgVersion (puId pu)) (puIsLocal pu) (length (puDeps pu))
-         (puOrigin pu) [])
+         (pkgVersion (puId pu)) (puIsLocal pu) (puOrigin pu) [])
        Nothing -> Left (NotFound (NotFoundPackageInPlan pkg))
 
 -- | Build a success outcome from package metadata and a (possibly empty)
@@ -68,16 +65,14 @@ mkSuccessOutcome
   :: Text
   -> Version
   -> Bool
-  -> Int
   -> PackageOrigin
   -> [Text]
   -> Outcome Value
-mkSuccessOutcome rawName ver isLocal depsCount origin modules =
+mkSuccessOutcome rawName ver isLocal origin modules =
   let result = PackageResult
         { prName           = rawName
         , prVersion        = unVersion ver
         , prIsLocal        = isLocal
-        , prDepsCount      = depsCount
         , prExposedModules = modules
         , prOrigin         = origin
         }
@@ -98,7 +93,6 @@ packageResultToJSON r = Aeson.object
   [ "name"           .= prName r
   , "version"        .= prVersion r
   , "is_local"       .= prIsLocal r
-  , "deps_count"     .= prDepsCount r
   , "exposed_modules" .= prExposedModules r
   , "origin"         .= packageOriginToJSON (prOrigin r)
   ]

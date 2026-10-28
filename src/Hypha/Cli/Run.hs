@@ -314,7 +314,6 @@ runClientCommand = \case
       (unPackageName (refName ref))
       (pkgVersion (rpPkgId rp))
       (rpIsLocal rp)
-      (rpDepsCount rp)
       (rpOrigin rp)
       modules0
 

@@ -57,8 +57,6 @@ data ResolvedPackage = ResolvedPackage
     -- ^ Whether this result came from outside the build plan.
   , rpIsLocal         :: !Bool
     -- ^ Whether this is a local project package.
-  , rpDepsCount       :: !Int
-    -- ^ Number of library-level dependencies (from plan or store).
   , rpOrigin          :: !PackageOrigin
     -- ^ Provenance of the package source.  Out-of-plan resolutions
     -- (store hit, Hackage fallback) report 'OriginHackage'.
@@ -101,7 +99,6 @@ resolveRef _  (PackageRef name (Just v)) = pure $ Right ResolvedPackage
   { rpPkgId         = PackageId name v
   , rpIsOutsidePlan = True
   , rpIsLocal       = False
-  , rpDepsCount     = 0
   , rpOrigin        = OriginHackage
   }
 
@@ -149,7 +146,6 @@ resolvePackageWith env hclient plan name = do
         { rpPkgId        = puId pu
         , rpIsOutsidePlan = False
         , rpIsLocal       = puIsLocal pu
-        , rpDepsCount     = length (puDeps pu)
         , rpOrigin        = puOrigin pu
         })
     Nothing -> do
@@ -161,7 +157,6 @@ resolvePackageWith env hclient plan name = do
             { rpPkgId        = pid
             , rpIsOutsidePlan = True
             , rpIsLocal       = False
-            , rpDepsCount     = 0
             , rpOrigin        = OriginHackage
             })
         [] -> do
@@ -174,7 +169,6 @@ resolvePackageWith env hclient plan name = do
                 { rpPkgId         = PackageId name ver
                 , rpIsOutsidePlan = True
                 , rpIsLocal       = False
-                , rpDepsCount     = 0
                 , rpOrigin        = OriginHackage
                 })
               Nothing  -> pure (Left

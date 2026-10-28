@@ -80,7 +80,6 @@ runPackageLocalCommand =
                         "mylib"
                         (pkgVersion (rpPkgId rp))
                         (rpIsLocal rp)
-                        (rpDepsCount rp)
                         (rpOrigin rp)
                         modules
                 pure (Aeson.encode (encodeSuccessEnvelope oc))

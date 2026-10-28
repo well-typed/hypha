@@ -139,7 +139,6 @@ resolverFor table = PackageResolver
         { rpPkgId         = pid
         , rpIsOutsidePlan = False
         , rpIsLocal       = True
-        , rpDepsCount     = 0
         , rpOrigin        = OriginLocal dir
         }
       Nothing -> Left (NotFound (NotFoundPackageInPlan name))

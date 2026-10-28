@@ -52,7 +52,6 @@ stubResolver = PackageResolver
                { rpPkgId         = depPkg
                , rpIsOutsidePlan = False
                , rpIsLocal       = True
-               , rpDepsCount     = 0
                , rpOrigin        = OriginLocal "test/fixtures/reexport-dep"
                }
         else Left (NotFound (NotFoundPackageInPlan name))
