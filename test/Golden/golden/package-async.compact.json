@@ -1,1 +1,1 @@
-{"actions":{"module_index_hint":"hypha module async/<Module>","reverse_deps":"hypha deps async --reverse","version_history":"hypha versions async"},"result":{"deps_count":0,"exposed_modules":[],"is_local":false,"name":"async","origin":{"kind":"distribution"},"version":"2.2.5"}}
+{"actions":{"module_index_hint":"hypha module async/<Module>","reverse_deps":"hypha deps async --reverse","version_history":"hypha versions async"},"result":{"exposed_modules":[],"is_local":false,"name":"async","origin":{"kind":"distribution"},"version":"2.2.5"}}
