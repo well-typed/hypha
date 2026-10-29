@@ -8,6 +8,15 @@
   <em>A Haskell-aware code/doc browser tuned for AI agents and humans alike.</em>
 </p>
 
+> [!WARNING]
+> **hypha is an early experimental beta.** It was born as an experiment in
+> AI-assisted development, and as such it has been written with a "utilitarian"
+> mindset: coming up with something that works and is useful at the expense of
+> the fact it might not be fully polished, it might have bugs
+> (and many more waiting to be discovered), and there is no promise that it will
+> be maintained or supported in the future. If something that should work
+> doesn't, please [file an issue](https://github.com/well-typed/hypha/issues)!
+
 ---
 
 AI agents burn tokens fetching Hackage HTML and re-grepping the source tree
