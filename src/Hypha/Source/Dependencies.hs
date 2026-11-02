@@ -52,7 +52,7 @@ module Hypha.Source.Dependencies
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as Text
@@ -65,7 +65,6 @@ import Hypha.Project.Components qualified as Comp
 import Hypha.Search.Index (ModuleSource (..), Visibility (..))
 import Hypha.Search.Indexer qualified as Indexer
 import Hypha.Source.Extensions (LanguageSettings, defaultLanguageSettings)
-import Hypha.Source.Locate (findModuleFileIn)
 import Hypha.Source.Origins (ModuleOwnerOracle (..), OriginError)
 import Hypha.Source.Reach
   ( OutsideModule (..), OutsideReach (..), ReachGap (..) )
@@ -331,28 +330,24 @@ modulesUnder ctx dep dir = Comp.findCabalFile dir >>= \case
         , [GapNoModuleList dep dir]
         )
 
+    -- 'Indexer.locateModuleRefs' drops a ref whose file is absent (a
+    -- generated module, a CPP-selected platform variant).  That is not
+    -- reportable here: nothing asked for it, and the chain only ever
+    -- looks up names it read out of an import list.
     fromComponent ci = do
-      let key = componentKeyOf (pkgName dep) (Comp.ciKind ci)
-      located <- mapM (locate ci key) (Indexer.stanzaModules ci)
-      pure (Map.fromList (catMaybes located))
-
-    -- A stanza can name a module whose file is absent (a generated
-    -- module, a CPP-selected platform variant).  That is not reportable:
-    -- nothing asked for it, and the chain only ever looks up names it
-    -- read out of an import list.
-    locate ci key (name, vis) = do
-      mFile <- findModuleFileIn (Comp.ciHsSourceDirs ci) name
-      pure $ do
-        file <- mFile
-        pure
-          ( ModulePath name
+      located <- Indexer.locateModuleRefs (Comp.ciHsSourceDirs ci)
+                   (Indexer.stanzaModules ci)
+      pure $ Map.fromList
+        [ ( Comp.expectedModuleName ref
           , OutsideEntry
-              { oeComponent  = key
+              { oeComponent  = componentKeyOf (pkgName dep) (Comp.ciKind ci)
               , oeFile       = file
               , oeVisibility = vis
               , oeLanguage   = Comp.ciLanguageSettings ci
               }
           )
+        | (ref, vis, file) <- located
+        ]
 
 -- | Every package the given one can reach through the plan, nearest
 -- first, plus the packages the plan had no unit for.

@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP                #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
@@ -12,6 +13,8 @@
 module Hypha.Project.Components
   ( ComponentInfo (..)
   , ComponentKind (..)
+  , ModuleRef (..)
+  , expectedModuleName
   , renderComponentKind
   , parseLibComponents
   , findCabalFile
@@ -23,6 +26,7 @@ import Control.Exception.Safe (IOException, displayException, try)
 import Data.ByteString qualified as BS
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate)
+import Data.Maybe (listToMaybe)
 import Data.Text qualified as T
 import Data.Text qualified as Text
 import Data.Text (Text)
@@ -32,6 +36,7 @@ import Distribution.Pretty (pretty)
 import Distribution.System (Platform (..))
 import Distribution.Types.Condition (Condition (..))
 import Distribution.Types.ConfVar (ConfVar (..))
+import Distribution.Types.Executable qualified as PDE
 import Distribution.Types.UnqualComponentName qualified as UC
 import Distribution.Utils.Path qualified as UP
 import Language.Haskell.Extension qualified as Cabal
@@ -40,6 +45,7 @@ import Hypha.Project.BuildContext
   ( BuildContext (..), hostBuildContext, withIncludeDirs )
 import Hypha.Source.Extensions
   ( LanguageSettings (..), UnknownExtension (..), extensionFromFlagName )
+import Hypha.Types.SymbolPath (ModulePath (..), mainModulePath)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.IO (hPutStrLn, stderr)
 import System.FilePath ((</>), takeExtension)
@@ -64,6 +70,35 @@ renderComponentKind k = case k of
   SubLib n -> ":" <> n
   Exe    n -> ":exe:" <> n
 
+-- | How a cabal stanza names one of its modules.
+--
+-- @exposed-modules@ and @other-modules@ name a module by its dotted name,
+-- which is resolved to a file under one of the @hs-source-dirs@.  An
+-- executable's @main-is@ names a /file/, and that file need not be named
+-- after a module at all: @main-is: regen-ngrams.hs@ is legal and
+-- @regen-ngrams@ is not a module name.  Collapsing the two into one
+-- 'Text' is what left every executable's main module out of its
+-- component, so its page answered @module Main is not part of this
+-- component@ and its symbols were never indexed.
+data ModuleRef
+  = ByName !ModulePath
+    -- ^ Dotted, resolved against each @hs-source-dir@ in turn.
+  | ByPath !FilePath
+    -- ^ @main-is@, relative to an @hs-source-dir@.
+  deriving stock (Show, Eq, Ord)
+
+-- | The module name a ref is expected to carry.
+--
+-- Expected, not authoritative: the parse tree decides what a module is
+-- called, and a disagreement is reported rather than assumed away.  A
+-- @main-is@ file is expected to declare 'mainModulePath', which is both
+-- GHC's default for an entry point and what a header-less script parses
+-- as; a @-main-is@ rename shows up as the mismatch it is.
+expectedModuleName :: ModuleRef -> ModulePath
+expectedModuleName r = case r of
+  ByName m -> m
+  ByPath _ -> mainModulePath
+
 -- | One library or executable component of a package.
 data ComponentInfo = ComponentInfo
   { ciKind         :: !ComponentKind
@@ -77,6 +112,13 @@ data ComponentInfo = ComponentInfo
     -- public surface.  The indexer needs them (their symbols are still
     -- searchable and still define re-exports) and search ranks them
     -- below the exposed ones.
+  , ciMainIs :: !(Maybe FilePath)
+    -- ^ An executable's @main-is@, relative to one of the
+    -- @hs-source-dirs@; 'Nothing' for a library.  A path rather than a
+    -- module name because that is what cabal accepts, and it lives here
+    -- rather than being derived from the stanza's module lists because
+    -- @BuildInfo@ does not carry it -- which is how it came to be
+    -- dropped for every executable in the first place.
   , ciLanguageSettings :: !LanguageSettings
     -- ^ @default-language@ + @default-extensions@, resolved to the form
     -- "Hypha.Source.Parser" wants.  Without these, a module that relies
@@ -122,21 +164,33 @@ parseLibComponents cabalPath pkgRoot ctx = do
         report "is not a cabal file we can parse"
         pure []
       Just gpd ->
-        let mainComp =
-              [ toComponent MainLib (flattenCondTree ct)
+        let libComponent kind ct =
+              let lib = flattenCondTree ct
+              in toComponent kind Nothing (PD.exposedModules lib) (PD.libBuildInfo lib)
+            mainComp =
+              [ libComponent MainLib ct
               | ct <- maybe [] (:[]) (PD.condLibrary gpd)
               ]
             subComps =
-              [ toComponent (SubLib (Text.pack (UC.unUnqualComponentName n))) (flattenCondTree ct)
+              [ libComponent (SubLib (Text.pack (UC.unUnqualComponentName n))) ct
               | (n, ct) <- PD.condSubLibraries gpd
               ]
-            exeComps =
-              [ toComponent (Exe (Text.pack (UC.unUnqualComponentName n)))
-                  (PD.emptyLibrary { PD.libBuildInfo = PD.buildInfo (flattenCondTree ct) })
+            -- Kept as a triple so the ambiguity report below can name the
+            -- component it is about and the candidates it rejected.
+            exeStanzas =
+              [ (kind, nodes, mainIsCandidates nodes)
               | (n, ct) <- PD.condExecutables gpd
+              , let kind  = Exe (Text.pack (UC.unUnqualComponentName n))
+                    nodes = applicableNodes ct
+              ]
+            exeComps =
+              [ toComponent kind (listToMaybe cands) []
+                  (mconcat (map PD.buildInfo nodes))
+              | (kind, nodes, cands) <- exeStanzas
               ]
             comps    = mainComp ++ subComps ++ exeComps
         in do mapM_ reportUnknownExtensions comps
+              mapM_ reportAmbiguousMainIs exeStanzas
               pure comps
   where
     -- Neither failure is silent: a caller told only "no components"
@@ -158,14 +212,26 @@ parseLibComponents cabalPath pkgRoot ctx = do
           <> "); modules of " <> T.unpack (describeKind (ciKind ci))
           <> " are parsed without them"
 
+    -- An executable whose applicable branches name different main-is
+    -- files.  Only an undecidable condition can produce this -- a
+    -- @flag()@ or an @impl()@ we do not resolve -- and the first is
+    -- taken, so which one it was has to be said out loud.
+    reportAmbiguousMainIs (kind, _, cands) = case cands of
+      (chosen : rest@(_ : _)) -> hPutStrLn stderr $
+        "hypha: " <> cabalPath <> " names more than one main-is for "
+          <> T.unpack (describeKind kind) <> " (" <> intercalate ", " cands
+          <> "), because a flag() or impl() condition decides between them"
+          <> "; using " <> chosen <> " and ignoring "
+          <> intercalate ", " rest
+      _ -> pure ()
+
     describeKind k = case k of
       MainLib  -> "its library"
       SubLib n -> "its sub-library " <> n
       Exe    n -> "its executable " <> n
 
-    toComponent kind lib =
-      let bi   = PD.libBuildInfo lib
-          raw  = nubOrd (map UP.getSymbolicPath (PD.hsSourceDirs bi))
+    toComponent kind mMainIs exposed bi =
+      let raw  = nubOrd (map UP.getSymbolicPath (PD.hsSourceDirs bi))
           dirs = if null raw
                    then [pkgRoot]
                    else map (pkgRoot </>) raw
@@ -173,8 +239,9 @@ parseLibComponents cabalPath pkgRoot ctx = do
       in ComponentInfo {
            ciKind         = kind
          , ciHsSourceDirs = dirs
-         , ciExposedModules = nubOrd (map renderModule (PD.exposedModules lib))
+         , ciExposedModules = nubOrd (map renderModule exposed)
          , ciOtherModules   = nubOrd (map renderModule (PD.otherModules bi))
+         , ciMainIs         = mMainIs
          , ciLanguageSettings = LanguageSettings
              { lsLanguage   = ghcLanguageOf =<< PD.defaultLanguage bi
              , lsDefaultOn  = on
@@ -221,17 +288,32 @@ parseLibComponents cabalPath pkgRoot ctx = do
     -- over compilers we are not asked about.  Under-reading a module list
     -- costs an absent symbol; over-reading one costs a file that
     -- 'loadModuleSources' drops when it is not on disk.
-    flattenCondTree :: Monoid a => PD.CondTree ConfVar c a -> a
-    flattenCondTree ct =
-      mconcat (PD.condTreeData ct : concatMap branch (PD.condTreeComponents ct))
+    applicableNodes :: PD.CondTree ConfVar c a -> [a]
+    applicableNodes ct =
+      PD.condTreeData ct : concatMap branch (PD.condTreeComponents ct)
       where
         branch b = case evalCondition (bcPlatform ctx) (PD.condBranchCondition b) of
-          Just True  -> [ flattenCondTree (PD.condBranchIfTrue b) ]
-          Just False -> map flattenCondTree
+          Just True  -> applicableNodes (PD.condBranchIfTrue b)
+          Just False -> concatMap applicableNodes
                           (maybe [] (: []) (PD.condBranchIfFalse b))
           Nothing    ->
-            flattenCondTree (PD.condBranchIfTrue b)
-              : map flattenCondTree (maybe [] (: []) (PD.condBranchIfFalse b))
+            applicableNodes (PD.condBranchIfTrue b)
+              <> concatMap applicableNodes
+                   (maybe [] (: []) (PD.condBranchIfFalse b))
+
+    flattenCondTree :: Monoid a => PD.CondTree ConfVar c a -> a
+    flattenCondTree = mconcat . applicableNodes
+
+    -- | Every @main-is@ the applicable branches name, deduplicated and in
+    -- tree order.
+    --
+    -- Read off each node rather than taken from @mconcat@ of the
+    -- 'PD.Executable's: cabal's own 'Semigroup' for that type calls
+    -- 'error' when two of them disagree on @main-is@, and an undecidable
+    -- @flag()@ or @impl()@ leaves us unioning branches that legitimately
+    -- do.  Reading the field keeps a disagreement a value we can report.
+    mainIsCandidates nodes =
+      nubOrd [ p | e <- nodes, let p = mainIsOf e, not (null p) ]
 
     -- cabal models an extension as (name, enabled), and the name it
     -- carries can itself be negated (@NoImplicitPrelude@), so the two
@@ -261,6 +343,21 @@ parseLibComponents cabalPath pkgRoot ctx = do
       Cabal.EnableExtension  k  -> (T.pack (show k), True)
       Cabal.DisableExtension k  -> (T.pack (show k), False)
       Cabal.UnknownExtension nm -> (T.pack nm, True)
+
+-- | An executable's @main-is@, as a path relative to one of its
+-- @hs-source-dirs@.
+--
+-- CPP because the field's type is not stable across the @Cabal-syntax@
+-- versions this package supports: a bare 'FilePath' up to 3.12 (GHC
+-- 9.6, 9.10), a @RelativePath Source File@ from 3.14 (GHC 9.12).  There
+-- is no accessor common to both, and the alternative -- dropping the
+-- field -- is the bug this exists to fix.
+mainIsOf :: PD.Executable -> FilePath
+#if MIN_VERSION_Cabal_syntax(3,14,0)
+mainIsOf = UP.getSymbolicPath . PDE.modulePath
+#else
+mainIsOf = PDE.modulePath
+#endif
 
 -- | Decide a cabal condition as far as the plan's platform allows.
 --

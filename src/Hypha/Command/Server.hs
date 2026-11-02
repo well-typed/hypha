@@ -333,7 +333,13 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
         let cn   = parseComponentName pkgT
         ePid <- resolvePkg resolver (cnPackage cn)
         case ePid of
-          Left _   -> pure Nothing
+          Left err -> do
+            -- The page says "not found" either way; without this line the
+            -- reason it was not found is lost.
+            hPutStrLn stderr $
+              "hypha server: cannot resolve " <> Text.unpack pkgT
+                <> " for its package page: " <> show err
+            pure Nothing
           Right rp -> do
             let pid    = rpPkgId rp
                 ver    = unVersion (pkgVersion pid)
@@ -342,8 +348,14 @@ buildServerConfig cacheRoot mRoot plan env resolver = do
             case mDirs of
               Nothing        -> pure (Just (ver, [], origin))
               Just (_, dirs) -> do
-                mods <- Indexer.enumModulesIn dirs
-                pure (Just (ver, mods, origin))
+                -- The component's own module list, not a walk of its
+                -- source dirs.  A walk offers a link for every @.hs@ file
+                -- under them, including the ones cabal builds for no
+                -- component, and a module page can only answer for the
+                -- ones a stanza names -- so every such link led to
+                -- "module … is not part of this component".
+                mods <- Indexer.componentModuleNames plan pid (cnKind cn) dirs
+                pure (Just (ver, map unModulePath mods, origin))
     , App.scModuleDoc = moduleDocFor cacheRoot plan env resolver cache
     }
 

@@ -44,7 +44,8 @@ import Hypha.Search.Index (ModuleSource (..))
 import Hypha.Source.Extensions qualified as Extensions
 import Hypha.Source.Parser (Decl)
 import Hypha.Source.Parser qualified as Parser
-import Hypha.Types.SymbolPath (ModulePath (..), SymbolName (..))
+import Hypha.Types.SymbolPath
+  ( ModulePath (..), SymbolName (..), mainModulePath )
 
 -- | Everything one parse of a module tells us.
 data ModuleInterface = ModuleInterface
@@ -172,7 +173,7 @@ parseSources ls = mapM (parseSource ls)
 -- what GHC assumes, and what a bare script under a source dir is.
 moduleNameOf :: HsModule GhcPs -> ModulePath
 moduleNameOf m = case hsmodName m of
-  Nothing -> ModulePath "Main"
+  Nothing -> mainModulePath
   Just ln -> ModulePath (Text.pack (moduleNameString (unLoc ln)))
 
 exportsOf :: HsModule GhcPs -> Maybe [ExportItem]

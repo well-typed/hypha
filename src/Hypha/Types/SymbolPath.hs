@@ -3,6 +3,7 @@
 module Hypha.Types.SymbolPath
   ( SymbolPath (..)
   , ModulePath (..)
+  , mainModulePath
   , SymbolName (..)
   , Signature (..)
   , ParseError (..)
@@ -19,6 +20,16 @@ import Hypha.Types.PackageId
 
 newtype ModulePath = ModulePath { unModulePath :: Text }
   deriving stock (Show, Eq, Ord)
+
+-- | The module an executable's entry point is called unless it says
+-- otherwise: GHC's default, and what a source file with no
+-- @module … where@ header parses as.
+--
+-- One definition, because two places need it and they must agree: the
+-- parser names a header-less module this, and a stanza's @main-is@ is
+-- /expected/ to declare it.  A second literal would be a second answer.
+mainModulePath :: ModulePath
+mainModulePath = ModulePath "Main"
 
 newtype SymbolName = SymbolName { unSymbolName :: Text }
   deriving stock (Show, Eq, Ord)
